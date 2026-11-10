@@ -356,7 +356,7 @@ impl ManagedSourceFrame {
         Ok(())
     }
 
-    pub(in crate::analysis::managed) fn canonical_coverage(
+    pub(in crate::analysis) fn canonical_coverage(
         &self,
         input: &mut GraphReplayInputV1,
         charge: &mut dyn FnMut(usize) -> Result<()>,

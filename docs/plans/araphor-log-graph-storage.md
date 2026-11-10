@@ -159,6 +159,11 @@ Native capture now uses the actual Arrow page and shared sealing contract.
 Attempts, live claims, terminal outcomes, failure status, and interrupted
 frontier settlement use one native Data transaction per transition. Read the
 [attempt qualification](../research/results/araphor-native-attempts-2026-11-09.md).
+Shared output, checkpoint, domain, and receipt validation passes the unchanged
+incident on the DuckDB production path. Read the
+[shared validation qualification](../research/results/araphor-shared-publication-2026-11-09.md).
+Result: **Done for the shared validation change**. Native successful publication
+and matched performance improvement remain **Not done**.
 Result: **Done for native capture and terminal attempts**. Prior-result restore,
 results/checkpoints, atomic consumed progress, production provider binding,
 original-log routing, and indexed source-header maintenance remain **Not done**.

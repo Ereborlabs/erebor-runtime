@@ -18,12 +18,11 @@ pub struct ManagedSourceHistory {
 pub struct ManagedDerivedSource {
     pub(super) scope: Arc<SourceScope>,
     pub(super) proof: Arc<OnceLock<Arc<PackageResultRefV1>>>,
-    pub(in crate::analysis::managed) records: Vec<(DiscoveryRecordIdV1, StorePositionV1)>,
-    pub(in crate::analysis::managed) contexts: Vec<AnalysisContextVersionV1>,
-    pub(in crate::analysis::managed) references:
-        BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
-    pub(in crate::analysis::managed) proofs: Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
-    pub(in crate::analysis::managed) history: Option<Arc<ManagedSourceHistory>>,
+    pub(in crate::analysis) records: Vec<(DiscoveryRecordIdV1, StorePositionV1)>,
+    pub(in crate::analysis) contexts: Vec<AnalysisContextVersionV1>,
+    pub(in crate::analysis) references: BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
+    pub(in crate::analysis) proofs: Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+    pub(in crate::analysis) history: Option<Arc<ManagedSourceHistory>>,
     _lease: Arc<dyn std::any::Any + Send + Sync>,
 }
 
@@ -397,7 +396,7 @@ impl ManagedSourceFrame {
         Ok(())
     }
 
-    pub(in crate::analysis::managed) fn call_derived(
+    pub(in crate::analysis) fn call_derived(
         &self,
         calls: &BTreeSet<u64>,
     ) -> Result<Vec<Arc<ManagedDerivedSource>>> {

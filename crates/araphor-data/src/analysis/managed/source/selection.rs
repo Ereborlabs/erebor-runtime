@@ -223,7 +223,7 @@ impl ManagedSourceFrame {
         Ok(())
     }
 
-    pub(in crate::analysis::managed) fn freeze_evidence(
+    pub(in crate::analysis) fn freeze_evidence(
         &self,
         capture: &super::super::model::Capture,
         expiry: u64,

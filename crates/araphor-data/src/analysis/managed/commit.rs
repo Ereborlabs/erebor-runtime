@@ -1,25 +1,15 @@
 use super::codec::ManagedCodec;
 use std::collections::BTreeMap;
 
-use araphor_analysis_sdk as sdk;
-use duckdb::{Connection, Transaction, params};
+use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
 use super::super::context::VerifiedPackages;
 use super::super::{AnalysisStore, PackageResultRefV1};
-use super::PreparedManagedCommit;
 use super::model::*;
 use super::source::SourceEvidence;
-use crate::{
-    AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result, ResultContext,
-};
-
-pub(super) struct Packet {
-    call: u64,
-    id: String,
-    record: Record,
-    checkpoint: Vec<u8>,
-}
+use super::{packet::Packet, PreparedManagedCommit};
+use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
 impl AnalysisStore {
     pub fn register_managed_attempt(
@@ -236,36 +226,64 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.after");
         self.revision.send_replace(revision);
-        for reference in prepared.derived.saved.values().filter(|reference| reference.commit_revision == revision) {
-            self.inputs.metadata(revision, super::super::inputs::InputChange::Context(&reference.key));
+        for reference in prepared
+            .derived
+            .saved
+            .values()
+            .filter(|reference| reference.commit_revision == revision)
+        {
+            self.inputs.metadata(
+                revision,
+                super::super::inputs::InputChange::Context(&reference.key),
+            );
         }
         if graph_changed {
-            self.inputs.metadata(revision, super::super::inputs::InputChange::Publication {
-                tenant, result: &receipt.selected.result_id, owners: &self.managed_results,
-            });
+            self.inputs.metadata(
+                revision,
+                super::super::inputs::InputChange::Publication {
+                    tenant,
+                    result: &receipt.selected.result_id,
+                    owners: &self.managed_results,
+                },
+            );
         }
         if let Some(graph) = &receipt.graph {
             let source = match &input.attempt.instance().spec.destination {
                 ManagedDestination::Graph { source, .. } => Some(source),
                 _ => None,
             };
-            self.inputs.metadata(revision, super::super::inputs::InputChange::Graph {
-                tenant, result: &graph.result_id, source, witnesses: &prepared.evidence.witnesses,
-            });
+            self.inputs.metadata(
+                revision,
+                super::super::inputs::InputChange::Graph {
+                    tenant,
+                    result: &graph.result_id,
+                    source,
+                    witnesses: &prepared.evidence.witnesses,
+                },
+            );
         }
         match &input.attempt.instance().spec.destination {
-            ManagedDestination::Graph { source, .. } => self.inputs.metadata(revision,
+            ManagedDestination::Graph { source, .. } => self.inputs.metadata(
+                revision,
                 super::super::inputs::InputChange::Processor(&crate::ProcessorScopeV1 {
-                    identity: source.clone(), processor_id: crate::GRAPH_PROCESSOR.into(),
+                    identity: source.clone(),
+                    processor_id: crate::GRAPH_PROCESSOR.into(),
                     method_version: u64::from(crate::GRAPH_SCHEMA_VERSION),
-                })),
+                }),
+            ),
             ManagedDestination::DiscoveryProfile { source, call, .. } => {
                 if let Some(result) = receipt.results.get(call) {
-                    self.inputs.metadata(revision, super::super::inputs::InputChange::Profile {
-                        scope: &crate::ProcessorScopeV1 { identity: source.clone(), processor_id: "discovery".into(),
-                            method_version: u64::from(crate::DISCOVERY_SCHEMA_VERSION) },
-                        result: &result.result_id,
-                    });
+                    self.inputs.metadata(
+                        revision,
+                        super::super::inputs::InputChange::Profile {
+                            scope: &crate::ProcessorScopeV1 {
+                                identity: source.clone(),
+                                processor_id: "discovery".into(),
+                                method_version: u64::from(crate::DISCOVERY_SCHEMA_VERSION),
+                            },
+                            result: &result.result_id,
+                        },
+                    );
                 }
             }
             _ => {}
@@ -382,8 +400,9 @@ impl AnalysisStore {
             super::SourcePublication::check_parent(transaction, input, source)?;
         }
         let ready = std::time::Instant::now();
-        let (mut packets, mut step, mut receipt) = Self::bind_packets(
-            input,
+        let (mut packets, mut step, mut receipt) = ManagedReceipt::bind(
+            input.attempt,
+            input.completed,
             std::mem::take(&mut prepared.packets),
             prepared
                 .step
@@ -740,195 +759,37 @@ impl AnalysisStore {
         for returned in input.returns {
             let declaration = &spec.manifest.calls[&returned.call];
             let descriptor = Self::managed_contract(reader, spec.tenant, declaration)?;
-            let evaluation = returned.evaluation;
-            if evaluation.export != declaration.export
-                || evaluation.context.id != attempt.request.id
-                || evaluation.context.time_utc_ns != attempt.request.time_utc_ns as i64
-                || evaluation.context.seed != attempt.request.seed
-            {
-                return Err(Code::Invalid.error("managed evaluation request"));
-            }
-            let checked = descriptor
-                .check_evaluation(evaluation)
-                .context(crate::AnalysisContractSnafu)?;
-            let reset = checked
-                .model()
-                .change_inputs
-                .as_ref()
-                .is_some_and(|changes| changes.is_reset(evaluation).unwrap_or(false));
-            let expected = input
-                .attempt
-                .3
-                .get(&returned.call)
-                .map(|prior| {
-                    prior.state(
-                        checked.model(),
-                        &evaluation.inputs,
-                        evaluation.parameters.as_ref(),
-                        attempt.request.rebuild || reset,
-                    )
-                })
-                .transpose()?
-                .unwrap_or_default();
-            let same =
-                match (&expected.0, &evaluation.checkpoint) {
-                    (None, None) => true,
-                    (Some(expected), Some(actual)) => {
-                        expected.version == actual.version
-                            && expected.datasets.len() == actual.datasets.len()
-                            && expected.datasets.iter().zip(&actual.datasets).all(
-                                |(left, right)| {
-                                    left.name == right.name && left.batches == right.batches
-                                },
-                            )
-                    }
-                    _ => false,
-                };
-            if !same
-                || expected.1.len() != evaluation.previous_outputs.len()
-                || !expected
-                    .1
-                    .iter()
-                    .zip(&evaluation.previous_outputs)
-                    .all(|(left, right)| left.name == right.name && left.batches == right.batches)
-            {
-                return Err(Code::Conflict.error("managed captured checkpoint"));
-            }
-            let mut context = ResultContext::new(
-                &attempt.request.id,
-                attempt.request.time_utc_ns,
-                &evaluation.inputs,
-            );
-            context.context = evaluation.context.clone();
-            context.target = declaration.target.clone();
-            context.artifact = declaration.artifact.clone();
-            let dependencies = attempt.capture.dependencies.clone();
-            let changes = Self::prepare_changes(input, returned, checked.model())?;
-            let call_evidence = input
-                .attempt
-                .5
-                .as_ref()
-                .map(|frame| {
-                    frame.call_evidence(
-                        &spec.manifest.input_calls(returned.call)?,
-                        &attempt.capture,
-                        evidence,
-                    )
-                })
-                .transpose()?;
-            let call_evidence = call_evidence.as_ref().unwrap_or(evidence);
-            let record = Record {
-                instance: spec.id.clone(),
-                call: returned.call,
-                attempt: attempt.request.id.clone(),
-                context,
-                changes,
-                dependencies,
-                witnesses: call_evidence.witnesses.clone(),
-                contexts: call_evidence.contexts.clone(),
-                derived: Vec::new(),
-                origins: Vec::new(),
-                proofs: Vec::new(),
-                graph_proof: None,
-            };
+            let packet = Packet::prepare(
+                input.attempt,
+                returned.call,
+                returned.evaluation,
+                returned.output,
+                returned.changes,
+                evidence,
+                &descriptor,
+            )?;
+            let model = descriptor
+                .exports
+                .iter()
+                .find(|model| model.name == declaration.export)
+                .ok_or_else(|| Code::Missing.error("managed returned model"))?;
             Self::check_change_record(
                 reader,
                 spec.tenant,
-                &record,
+                &packet.record,
                 declaration,
-                checked.model(),
+                model,
                 attempt,
             )?;
-            checked
-                .validate_output(returned.output)
-                .context(crate::AnalysisContractSnafu)?;
-            let checkpoint = returned
-                .output
-                .checkpoint
-                .as_ref()
-                .map(|state| {
-                    sdk::wire::Checkpoint::encode(state, checked.model())
-                        .context(crate::AnalysisContractSnafu)
-                })
-                .transpose()?;
-            packets.push(Packet {
-                call: returned.call,
-                id: String::new(),
-                record,
-                checkpoint: ManagedCodec::encode(&checkpoint)
-                    .context(crate::ManagedEncodingSnafu)?,
-            });
+            packets.push(packet);
         }
-        Self::check_selected(input.selected, input.selected_schema)?;
-        let dependencies = attempt.capture.dependencies.clone();
-        let step = Step {
-            instance: spec.id.clone(),
-            attempt: attempt.request.id.clone(),
-            rows: input.selected.rows(),
-            dependencies,
-            witnesses: evidence.witnesses.clone(),
-            contexts: evidence.contexts.clone(),
-            derived: Vec::new(),
-            origins: Vec::new(),
-            proofs: Vec::new(),
-            source: None,
-        };
+        let step = Step::prepare(
+            input.attempt,
+            evidence,
+            input.selected,
+            input.selected_schema,
+        )?;
         Ok((packets, step))
-    }
-
-    fn bind_packets(
-        input: &ManagedCommit<'_>,
-        mut packets: Vec<Packet>,
-        mut step: Step,
-        revision: u64,
-    ) -> (Vec<Packet>, Step, ManagedReceipt) {
-        let ids = packets
-            .iter()
-            .map(|packet| {
-                (
-                    packet.call,
-                    PackageResultRefV1 {
-                        result_id: format!("managed-{revision}-call-{}", packet.call),
-                        commit_revision: revision,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        for packet in &mut packets {
-            packet.id = ids[&packet.call].result_id.clone();
-            packet.record.dependencies.extend(
-                input.attempt.1.spec.manifest.calls[&packet.call]
-                    .dependencies
-                    .iter()
-                    .filter_map(|call| ids.get(call).cloned()),
-            );
-            packet
-                .record
-                .dependencies
-                .sort_by(|left, right| left.result_id.cmp(&right.result_id));
-            packet.record.dependencies.dedup();
-        }
-        step.dependencies.extend(ids.values().cloned());
-        step.dependencies
-            .sort_by(|left, right| left.result_id.cmp(&right.result_id));
-        step.dependencies.dedup();
-        let receipt = ManagedReceipt {
-            frontier: input.attempt.request().frontier.as_ref().map(|frontier| {
-                let mut frontier = frontier.clone();
-                frontier.pending = !input.completed;
-                frontier
-            }),
-            instance: input.attempt.1.spec.id.clone(),
-            attempt: input.attempt.request().id.clone(),
-            commit_revision: revision,
-            selected: PackageResultRefV1 {
-                result_id: format!("managed-{revision}-selected"),
-                commit_revision: revision,
-            },
-            results: ids,
-            graph: None,
-        };
-        (packets, step, receipt)
     }
 
     fn insert_managed(

@@ -28,30 +28,36 @@ pub enum ManagedSourceRead {
     Changes(ManagedSourceRef),
 }
 
-pub(super) struct SourceEvidence {
+pub(in crate::analysis) struct SourceEvidence {
     pub witnesses: Vec<crate::AnalysisWitnessV1>,
     pub contexts: Vec<crate::AnalysisContextRefV1>,
 }
 
 impl SourceEvidence {
-    pub(super) fn metadata_bytes<'a>(
-        witnesses: impl Iterator<Item=&'a crate::AnalysisWitnessV1>,
-        contexts: impl Iterator<Item=&'a crate::AnalysisContextRefV1>,
+    pub(in crate::analysis) fn metadata_bytes<'a>(
+        witnesses: impl Iterator<Item = &'a crate::AnalysisWitnessV1>,
+        contexts: impl Iterator<Item = &'a crate::AnalysisContextRefV1>,
     ) -> Result<usize> {
-        let mut bytes=0usize;
+        let mut bytes = 0usize;
         for value in witnesses {
-            let node=match &value.identity {
-                AnalysisStreamIdentityV1::Evidence(source)=>&source.node_id,
-                AnalysisStreamIdentityV1::Diagnostic(source)=>&source.node_id,
+            let node = match &value.identity {
+                AnalysisStreamIdentityV1::Evidence(source) => &source.node_id,
+                AnalysisStreamIdentityV1::Diagnostic(source) => &source.node_id,
             };
-            bytes=bytes.checked_add(12 * (std::mem::size_of::<crate::AnalysisWitnessV1>()
-                +std::mem::size_of::<AnalysisStreamIdentityV1>()))
+            bytes = bytes
+                .checked_add(
+                    12 * (std::mem::size_of::<crate::AnalysisWitnessV1>()
+                        + std::mem::size_of::<AnalysisStreamIdentityV1>()),
+                )
                 .and_then(|bytes| bytes.checked_add(node.capacity().checked_mul(4)?))
                 .ok_or_else(|| Code::Limit.error("managed evidence memory"))?;
         }
         for value in contexts {
-            bytes=bytes.checked_add(12 * (std::mem::size_of::<crate::AnalysisContextRefV1>()
-                +std::mem::size_of::<crate::AnalysisContextKeyV1>()))
+            bytes = bytes
+                .checked_add(
+                    12 * (std::mem::size_of::<crate::AnalysisContextRefV1>()
+                        + std::mem::size_of::<crate::AnalysisContextKeyV1>()),
+                )
                 .and_then(|bytes| bytes.checked_add(value.key.allocated_bytes().checked_mul(4)?))
                 .ok_or_else(|| Code::Limit.error("managed context memory"))?;
         }
@@ -158,10 +164,10 @@ mod check;
 mod coverage;
 mod derived;
 pub use derived::{ManagedDerivedSource, ManagedSourceHistory};
-pub(in crate::analysis::managed) mod import;
+pub(in crate::analysis) mod import;
+mod input;
 mod reader;
 mod selection;
-mod input;
 pub use input::ManagedInputSelection;
 pub(in crate::analysis) mod publication;
 

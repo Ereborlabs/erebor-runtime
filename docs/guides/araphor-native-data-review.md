@@ -514,3 +514,30 @@ The [raw tests](../../crates/araphor-data/tests/native_raw/freshness.rs) check
 coverage-first binding recovery with and without a later metadata commit.
 Read the [qualification](../research/results/araphor-native-attempts-2026-11-09.md)
 for commands and remaining limits. Production still uses DuckDB.
+
+## Shared package publication validation
+
+Read [packet.rs](../../crates/araphor-data/src/analysis/managed/packet.rs),
+[prepare.rs](../../crates/araphor-data/src/analysis/managed/prepare.rs), and
+[selected.rs](../../crates/araphor-data/src/analysis/managed/selected.rs) for the
+existing SDK output, checkpoint, and selected-result checks. The shared functions
+receive actual managed attempts, outputs, and memory budgets.
+
+Read [source/derived.rs](../../crates/araphor-data/src/analysis/managed/source/derived.rs)
+and [source/selection.rs](../../crates/araphor-data/src/analysis/managed/source/selection.rs)
+for per-call and selected attribution. The backend supplies exact saved-fact
+reads and retains the existing context import owner.
+
+Read [graph/domain.rs](../../crates/araphor-data/src/analysis/managed/graph/domain.rs)
+and [graph/domain/contexts.rs](../../crates/araphor-data/src/analysis/managed/graph/domain/contexts.rs)
+for canonical evidence and context checks. The caller supplies the expected
+attempt tenant and actual captured basis. The generic Graph engine receives no
+package policy.
+
+Read [execution.rs](../../crates/araphor-data/src/analysis/managed/execution.rs)
+for retained output construction. The caller promotes this cache only after the
+durable commit. [commit.rs](../../crates/araphor-data/src/analysis/managed/commit.rs)
+retains the production transaction. This extraction does not qualify native
+successful publication. Read the
+[qualification](../research/results/araphor-shared-publication-2026-11-09.md)
+for the passing unchanged incident and its measurement limits.

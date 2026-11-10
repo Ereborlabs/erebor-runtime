@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_graph::{GraphStore, LayerRequest, PreparedLayers, WriterCut};
-use duckdb::{Connection, Transaction, params};
+use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
 use super::ManagedGraphJournal;
@@ -281,8 +281,15 @@ impl AnalysisStore {
             }
             let disclosure_at = std::time::Instant::now();
             work[0] += disclosure_at.duration_since(reads_at);
-            let contexts =
-                super::domain::ContextInputs::capture(self, journal, evidence, derived, memory)?;
+            let contexts = super::domain::ContextInputs::capture(
+                &self.root,
+                &journal.call.attempt,
+                journal.call.call,
+                &journal.prepared.contexts,
+                evidence,
+                derived,
+                memory,
+            )?;
             let mut floor = contexts.restricted();
             floor |= derived
                 .values(call)

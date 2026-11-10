@@ -1,11 +1,11 @@
-use duckdb::{Connection, params};
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::budget::PreparedMemory;
-use super::commit::Packet;
 use super::graph::PreparedGraph;
 use super::model::{Attempt, ManagedCommit, Step};
-use super::source::{SourceEvidence, import::PreparedDerived, publication::PreparedSource};
+use super::packet::Packet;
+use super::source::{import::PreparedDerived, publication::PreparedSource, SourceEvidence};
 use crate::analysis::context::VerifiedPackages;
 use crate::{AnalysisStore, PackageErrorCodeV1 as Code, Result};
 
@@ -148,61 +148,14 @@ impl AnalysisStore {
         evidence: &SourceEvidence,
         memory: &mut PreparedMemory<'_>,
     ) -> Result<()> {
-        let spec = &input.attempt.1.spec;
-        let mut bytes = spec
-            .allocation_bytes()
-            .and_then(|bytes| bytes.checked_mul(8))
-            .ok_or_else(|| Code::Limit.error("managed packet memory"))?;
-        let shared =
-            SourceEvidence::metadata_bytes(evidence.witnesses.iter(), evidence.contexts.iter())?;
-        bytes = input
-            .returns
-            .len()
-            .checked_add(4)
-            .and_then(|count| shared.checked_mul(count))
-            .and_then(|shared| bytes.checked_add(shared))
-            .ok_or_else(|| Code::Limit.error("managed packet memory"))?;
-        for returned in input.returns {
-            let evaluation = returned.evaluation;
-            let mut extra = evaluation.context.id.capacity();
-            for value in &evaluation.inputs {
-                extra = extra
-                    .checked_add(value.revision.owner.capacity())
-                    .and_then(|bytes| bytes.checked_add(value.revision.id.capacity()))
-                    .and_then(|bytes| {
-                        bytes.checked_add(
-                            value
-                                .revision
-                                .window
-                                .as_ref()
-                                .map_or(0, |window| window.source.capacity()),
-                        )
-                    })
-                    .and_then(|bytes| bytes.checked_add(value.coverage.metadata_bytes()))
-                    .ok_or_else(|| Code::Limit.error("managed packet memory"))?;
-            }
-            if let Some(state) = &returned.output.checkpoint {
-                for data in &state.datasets {
-                    extra = extra
-                        .checked_add(
-                            data.batches
-                                .iter()
-                                .try_fold(data.name.capacity(), |bytes, batch| {
-                                    bytes.checked_add(batch.get_array_memory_size())
-                                })
-                                .unwrap_or(usize::MAX),
-                        )
-                        .ok_or_else(|| Code::Limit.error("managed checkpoint memory"))?;
-                }
-            }
-            bytes = bytes
-                .checked_add(
-                    extra
-                        .checked_mul(8)
-                        .ok_or_else(|| Code::Limit.error("managed packet memory"))?,
-                )
-                .ok_or_else(|| Code::Limit.error("managed packet memory"))?;
-        }
-        memory.charge(bytes)
+        Packet::charge(
+            input.attempt,
+            input
+                .returns
+                .iter()
+                .map(|returned| (returned.evaluation, returned.output)),
+            evidence,
+            memory,
+        )
     }
 }

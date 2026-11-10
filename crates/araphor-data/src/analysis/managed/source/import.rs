@@ -2,7 +2,7 @@ use super::*;
 use crate::analysis::context::VerifiedPackages;
 use crate::{AnalysisContextRefV1, ManagedCommit};
 
-pub(in crate::analysis::managed) struct PreparedDerived {
+pub(in crate::analysis) struct PreparedDerived {
     sources: BTreeMap<u64, Vec<Arc<ManagedDerivedSource>>>,
     selected: PreparedImport,
     imports: BTreeMap<u64, PreparedImport>,
@@ -10,13 +10,12 @@ pub(in crate::analysis::managed) struct PreparedDerived {
     step: Option<super::super::model::SourceStep>,
     versions: BTreeMap<crate::AnalysisContextKeyV1, Vec<u8>>,
     records: BTreeMap<crate::DiscoveryRecordIdV1, (Vec<u8>, Vec<u8>)>,
-    pub(in crate::analysis::managed) facts: Vec<crate::analysis::context::PreparedFact>,
-    pub(in crate::analysis::managed) saved:
-        BTreeMap<crate::AnalysisContextKeyV1, AnalysisContextRefV1>,
+    pub(in crate::analysis) facts: Vec<crate::analysis::context::PreparedFact>,
+    pub(in crate::analysis) saved: BTreeMap<crate::AnalysisContextKeyV1, AnalysisContextRefV1>,
 }
 
 impl PreparedDerived {
-    pub(in crate::analysis::managed) fn values(
+    pub(in crate::analysis) fn values(
         &self,
         call: u64,
     ) -> impl Iterator<Item = &crate::AnalysisContextVersionV1> {
@@ -27,7 +26,7 @@ impl PreparedDerived {
             .flat_map(|source| &source.contexts)
     }
 
-    pub(in crate::analysis::managed) fn contexts(&self, call: u64) -> Vec<AnalysisContextRefV1> {
+    pub(in crate::analysis) fn contexts(&self, call: u64) -> Vec<AnalysisContextRefV1> {
         self.values(call)
             .filter_map(|value| self.saved.get(&value.key).cloned())
             .collect()
@@ -35,13 +34,13 @@ impl PreparedDerived {
 }
 
 #[derive(Default)]
-pub(in crate::analysis::managed) struct ImportedSource {
-    pub(in crate::analysis::managed) calls: BTreeMap<u64, Vec<AnalysisContextRefV1>>,
-    pub(in crate::analysis::managed) origins: BTreeMap<u64, Vec<PackageResultRefV1>>,
+pub(in crate::analysis) struct ImportedSource {
+    pub(in crate::analysis) calls: BTreeMap<u64, Vec<AnalysisContextRefV1>>,
+    pub(in crate::analysis) origins: BTreeMap<u64, Vec<PackageResultRefV1>>,
     resolved: BTreeMap<u64, Vec<AnalysisContextRefV1>>,
     selected: SourceImport,
     union: SourceImport,
-    pub(in crate::analysis::managed) proofs:
+    pub(in crate::analysis) proofs:
         BTreeMap<u64, Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>>,
 }
 
@@ -168,7 +167,7 @@ impl PreparedImport {
 }
 
 impl ImportedSource {
-    pub(in crate::analysis::managed) fn source_step(
+    pub(in crate::analysis) fn source_step(
         &self,
         prepared: &mut PreparedDerived,
     ) -> Result<Option<super::super::model::SourceStep>> {
@@ -181,7 +180,7 @@ impl ImportedSource {
         Ok(Some(step))
     }
 
-    pub(in crate::analysis::managed) fn pin(
+    pub(in crate::analysis) fn pin(
         &self,
         connection: &Connection,
         receipt: &crate::ManagedReceipt,
@@ -302,21 +301,21 @@ impl ImportedSource {
         }
         Ok(())
     }
-    pub(in crate::analysis::managed) fn selected_proofs(
+    pub(in crate::analysis) fn selected_proofs(
         &self,
     ) -> Result<Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>> {
         Ok(self.union.proofs.clone())
     }
-    pub(in crate::analysis::managed) fn references(&self) -> Vec<AnalysisContextRefV1> {
+    pub(in crate::analysis) fn references(&self) -> Vec<AnalysisContextRefV1> {
         self.union.refs.clone()
     }
-    pub(in crate::analysis::managed) fn history(&self) -> Vec<PackageResultRefV1> {
+    pub(in crate::analysis) fn history(&self) -> Vec<PackageResultRefV1> {
         self.union.origins.clone()
     }
 }
 
 impl AnalysisStore {
-    pub(in crate::analysis::managed) fn source_origins(
+    pub(in crate::analysis) fn source_origins(
         connection: &Connection,
         result: &str,
     ) -> Result<Vec<PackageResultRefV1>> {
@@ -325,7 +324,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu { operation:"read derived origin pins" })
     }
 
-    pub(in crate::analysis::managed) fn join_contexts(
+    pub(in crate::analysis) fn join_contexts(
         before: &[AnalysisContextRefV1],
         after: &[AnalysisContextRefV1],
     ) -> Result<Vec<AnalysisContextRefV1>> {
@@ -341,7 +340,7 @@ impl AnalysisStore {
         Ok(values.into_values().collect())
     }
 
-    pub(in crate::analysis::managed) fn prepare_derived(
+    pub(in crate::analysis) fn prepare_derived(
         &self,
         connection: &Connection,
         input: &ManagedCommit<'_>,
@@ -349,7 +348,46 @@ impl AnalysisStore {
         verified: &mut VerifiedPackages,
         memory: &mut super::super::budget::PreparedMemory<'_>,
     ) -> Result<PreparedDerived> {
-        let Some(frame) = &input.attempt.5 else {
+        PreparedDerived::prepare(
+            input.attempt,
+            input
+                .returns
+                .iter()
+                .map(|returned| (returned.call, returned.retained.is_some())),
+            revision,
+            memory,
+            |facts, revision, _| self.inspect_fact_rows(connection, facts, revision, verified),
+        )
+    }
+
+    pub(in crate::analysis) fn import_derived(
+        &self,
+        connection: &duckdb::Transaction<'_>,
+        prepared: &mut PreparedDerived,
+        revision: u64,
+        verified: &mut VerifiedPackages,
+        cached: bool,
+    ) -> Result<ImportedSource> {
+        let references =
+            self.import_fact_rows(connection, &prepared.facts, revision, verified, cached)?;
+        prepared.bind(&references)
+    }
+}
+
+impl PreparedDerived {
+    pub(in crate::analysis) fn prepare(
+        attempt: &crate::ManagedAttempt,
+        returns: impl ExactSizeIterator<Item = (u64, bool)>,
+        revision: u64,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
+        mut inspect: impl FnMut(
+            &[crate::analysis::context::PreparedFact],
+            u64,
+            &mut super::super::budget::PreparedMemory<'_>,
+        )
+            -> Result<BTreeMap<crate::AnalysisContextKeyV1, AnalysisContextRefV1>>,
+    ) -> Result<Self> {
+        let Some(frame) = &attempt.5 else {
             return Ok(PreparedDerived {
                 sources: BTreeMap::new(),
                 selected: PreparedImport::default(),
@@ -363,24 +401,23 @@ impl AnalysisStore {
             });
         };
         let mut calls = BTreeSet::new();
-        calls.extend(input.attempt.1.spec.manifest.calls.keys().copied());
+        calls.extend(attempt.1.spec.manifest.calls.keys().copied());
         frame.charge_contexts(&calls, &mut |bytes| memory.charge(bytes))?;
         memory.charge(
-            input
-                .returns
+            returns
                 .len()
                 .checked_add(1)
                 .and_then(|count| count.checked_mul(24 * std::mem::size_of::<PreparedImport>()))
                 .ok_or_else(|| Code::Limit.error("derived attribution memory"))?,
         )?;
-        let manifest = &input.attempt.1.spec.manifest;
+        let manifest = &attempt.1.spec.manifest;
         let mut sources = BTreeMap::new();
-        for returned in input.returns {
-            if returned.retained.is_some() {
+        for (call, retained) in returns {
+            if retained {
                 continue;
             }
             let mut calls = BTreeSet::new();
-            let mut pending = vec![returned.call];
+            let mut pending = vec![call];
             while let Some(call) = pending.pop() {
                 if calls.insert(call) {
                     pending.extend(&manifest.calls[&call].dependencies);
@@ -388,7 +425,7 @@ impl AnalysisStore {
             }
             let values = frame.call_derived(&calls)?;
             if !values.is_empty() {
-                sources.insert(returned.call, values);
+                sources.insert(call, values);
             }
         }
         let selected = frame
@@ -433,7 +470,7 @@ impl AnalysisStore {
                 &mut |bytes| memory.reserve(bytes),
             )?);
         }
-        let saved = self.inspect_fact_rows(connection, &facts, revision, verified)?;
+        let saved = inspect(&facts, revision, memory)?;
         for source in sources.values().flatten().chain(&selected) {
             for (key, reference) in &source.references {
                 if saved.get(key) != Some(reference) {
@@ -615,23 +652,17 @@ impl AnalysisStore {
         })
     }
 
-    pub(in crate::analysis::managed) fn import_derived(
-        &self,
-        connection: &duckdb::Transaction<'_>,
-        prepared: &mut PreparedDerived,
-        revision: u64,
-        verified: &mut VerifiedPackages,
-        cached: bool,
+    pub(in crate::analysis) fn bind(
+        &mut self,
+        references: &BTreeMap<crate::AnalysisContextKeyV1, AnalysisContextRefV1>,
     ) -> Result<ImportedSource> {
-        let references =
-            self.import_fact_rows(connection, &prepared.facts, revision, verified, cached)?;
         let mut imported = ImportedSource {
-            selected: std::mem::take(&mut prepared.selected).bind(&references, &prepared.facts)?,
-            union: std::mem::take(&mut prepared.union).bind(&references, &prepared.facts)?,
+            selected: std::mem::take(&mut self.selected).bind(&references, &self.facts)?,
+            union: std::mem::take(&mut self.union).bind(&references, &self.facts)?,
             ..Default::default()
         };
-        for (call, value) in std::mem::take(&mut prepared.imports) {
-            let value = value.bind(&references, &prepared.facts)?;
+        for (call, value) in std::mem::take(&mut self.imports) {
+            let value = value.bind(&references, &self.facts)?;
             imported.calls.insert(call, value.refs);
             imported.proofs.insert(call, value.proofs);
             imported.resolved.insert(call, value.resolved);

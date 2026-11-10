@@ -37,7 +37,7 @@ pub struct ManagedManifest {
 }
 
 impl ManagedManifest {
-    pub(super) fn input_calls(&self, call: u64) -> Result<BTreeSet<u64>> {
+    pub(in crate::analysis) fn input_calls(&self, call: u64) -> Result<BTreeSet<u64>> {
         let mut calls = BTreeSet::new();
         let mut pending = vec![call];
         while let Some(call) = pending.pop() {
@@ -897,7 +897,7 @@ pub struct ManagedCommit<'a> {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct Record {
+pub(in crate::analysis) struct Record {
     pub instance: String,
     pub call: u64,
     pub attempt: String,
@@ -917,13 +917,13 @@ pub(super) struct Record {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct GraphProof {
+pub(in crate::analysis) struct GraphProof {
     pub coverage: Vec<crate::GraphCoverageKeyV1>,
     pub sources: Vec<GraphProofSource>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct GraphProofSource {
+pub(in crate::analysis) struct GraphProofSource {
     pub source: crate::EvidenceIntakeIdentityV1,
     pub cpu: u32,
     pub report: u64,
@@ -969,12 +969,12 @@ impl GraphProof {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct RecordChanges {
+pub(in crate::analysis) struct RecordChanges {
     pub base: Option<PackageResultRefV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct Step {
+pub(in crate::analysis) struct Step {
     pub instance: String,
     pub attempt: String,
     pub rows: u64,
@@ -992,7 +992,7 @@ pub(super) struct Step {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct SourceStep {
+pub(in crate::analysis) struct SourceStep {
     pub expired: bool,
     pub coverage: Vec<crate::GraphCoverageKeyV1>,
     pub first: u64,

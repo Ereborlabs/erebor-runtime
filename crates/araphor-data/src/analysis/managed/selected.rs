@@ -209,8 +209,33 @@ impl AnalysisStore {
         )?;
         Ok((attempt, spec))
     }
+}
 
-    pub(super) fn check_selected(data: &sdk::Dataset, schema: &sdk::Schema) -> Result<()> {
+impl Step {
+    pub(in crate::analysis) fn prepare(
+        attempt: &super::ManagedAttempt,
+        evidence: &super::source::SourceEvidence,
+        data: &sdk::Dataset,
+        schema: &sdk::Schema,
+    ) -> Result<Self> {
+        if schema != &attempt.1.spec.manifest.selected_schema {
+            return Err(Code::Invalid.error("managed selected schema"));
+        }
+        Self::check_selected(data, schema)?;
+        Ok(Self {
+            instance: attempt.1.spec.id.clone(),
+            attempt: attempt.0.request.id.clone(),
+            rows: data.rows(),
+            dependencies: attempt.0.capture.dependencies.clone(),
+            witnesses: evidence.witnesses.clone(),
+            contexts: evidence.contexts.clone(),
+            derived: Vec::new(),
+            origins: Vec::new(),
+            proofs: Vec::new(),
+            source: None,
+        })
+    }
+    fn check_selected(data: &sdk::Dataset, schema: &sdk::Schema) -> Result<()> {
         let mut rows = 0_u64;
         for batch in &data.batches {
             rows = rows

@@ -13,7 +13,7 @@ pub struct ManagedExecution {
 }
 
 #[derive(Debug)]
-pub(super) struct Committed {
+pub(in crate::analysis) struct Committed {
     meta: AnalysisStoreMetaV1,
     instance: ManagedInstance,
     calls: BTreeMap<u64, Arc<ManagedPrior>>,
@@ -52,7 +52,7 @@ impl ManagedExecution {
     pub fn clear(&self) {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = None;
     }
-    pub(super) fn calls(
+    pub(in crate::analysis) fn calls(
         &self,
         request: &ManagedRead,
         meta: &AnalysisStoreMetaV1,
@@ -94,7 +94,7 @@ impl ManagedExecution {
             .and_then(|state| state.graph.clone())
     }
 
-    pub(super) fn promote(&self, state: Committed) {
+    pub(in crate::analysis) fn promote(&self, state: Committed) {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = Some(state);
     }
 
@@ -145,7 +145,7 @@ impl ManagedExecution {
 }
 
 impl ManagedPrior {
-    pub(super) fn allocated_bytes(&self) -> usize {
+    pub(in crate::analysis) fn allocated_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             .saturating_add(self.result.capacity())
             .saturating_add(self.source.result.result_id.capacity())
@@ -234,46 +234,78 @@ impl AnalysisStore {
         packages: VerifiedPackages,
         input_proof: Option<Arc<crate::analysis::graph_rows::store::InputProof>>,
     ) -> Option<(Arc<ManagedExecution>, Committed)> {
-        let owner = input.attempt.4.as_ref()?;
-        let mut calls = input.attempt.3.clone();
-        let instance = input.attempt.instance();
-        for returned in input.returns {
-            let declaration = &instance.spec.manifest.calls[&returned.call];
-            let mut evaluation = returned.evaluation.clone();
+        ManagedExecution::retain(
+            input.attempt,
+            input.returns.iter().map(|returned| {
+                (
+                    returned.call,
+                    returned.evaluation,
+                    returned.output,
+                    returned.changes,
+                )
+            }),
+            receipt,
+            packages,
+            input_proof,
+        )
+    }
+}
+
+impl ManagedExecution {
+    pub(in crate::analysis) fn retain<'a>(
+        attempt: &ManagedAttempt,
+        returns: impl Iterator<
+            Item = (
+                u64,
+                &'a sdk::Evaluation,
+                &'a sdk::Output,
+                Option<&'a ManagedChanges>,
+            ),
+        >,
+        receipt: &ManagedReceipt,
+        packages: VerifiedPackages,
+        input_proof: Option<Arc<crate::analysis::graph_rows::store::InputProof>>,
+    ) -> Option<(Arc<Self>, Committed)> {
+        let owner = attempt.4.as_ref()?;
+        let mut calls = attempt.3.clone();
+        let instance = attempt.instance();
+        for (call, returned_evaluation, output, changes) in returns {
+            let declaration = &instance.spec.manifest.calls[&call];
+            let mut evaluation = returned_evaluation.clone();
             evaluation.checkpoint = None;
             evaluation.previous_outputs.clear();
             let mut context = ResultContext::new(
                 &evaluation.context.id,
-                input.attempt.request().time_utc_ns,
+                attempt.request().time_utc_ns,
                 &evaluation.inputs,
             );
             context.context = evaluation.context.clone();
             context.target = declaration.target.clone();
             context.artifact = declaration.artifact.clone();
-            let reference = &receipt.results[&returned.call];
+            let reference = &receipt.results[&call];
             let parameters = evaluation.parameters.as_ref().map(|batch| sdk::Dataset {
                 name: "parameters".into(),
                 batches: vec![batch.clone()],
             });
             calls.insert(
-                returned.call,
+                call,
                 Arc::new(ManagedPrior {
                     revision: reference.commit_revision,
                     result: reference.result_id.clone(),
                     source: super::ManagedSourceRef {
                         result: receipt.selected.clone(),
                         position: crate::StorePositionV1 {
-                            commit_revision: input.attempt.captured_revision(),
+                            commit_revision: attempt.captured_revision(),
                             ordinal: u32::MAX,
                         },
                     },
                     context,
                     parameters,
-                    checkpoint: returned.output.checkpoint.clone(),
+                    checkpoint: output.checkpoint.clone(),
                     retained: Some(Arc::new(RetainedCall {
                         evaluation,
-                        output: returned.output.clone(),
-                        changes: returned.changes.cloned(),
+                        output: output.clone(),
+                        changes: changes.cloned(),
                     })),
                 }),
             );
@@ -288,7 +320,7 @@ impl AnalysisStore {
         let packages = packages.retain(instance.spec.tenant, &active);
         let mut instance = instance.clone();
         instance.progress = receipt.commit_revision;
-        let capture = &input.attempt.0.capture;
+        let capture = &attempt.0.capture;
         let graph = match &receipt.graph {
             Some(graph) => input_proof.map(|proof| {
                 Arc::new(RetainedGraphProof {
@@ -296,7 +328,7 @@ impl AnalysisStore {
                     source: super::ManagedSourceRef {
                         result: receipt.selected.clone(),
                         position: crate::StorePositionV1 {
-                            commit_revision: input.attempt.captured_revision(),
+                            commit_revision: attempt.captured_revision(),
                             ordinal: u32::MAX,
                         },
                     },
@@ -309,7 +341,7 @@ impl AnalysisStore {
                 .unwrap_or_else(|error| error.into_inner())
                 .as_ref()
                 .filter(|state| {
-                    state.instance == *input.attempt.instance()
+                    state.instance == *attempt.instance()
                         && state.meta.store_uuid == capture.store
                         && state.meta.schema_version == capture.schema
                         && state.meta.recovery_epoch == capture.recovery

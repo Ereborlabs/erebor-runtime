@@ -4,7 +4,7 @@ use super::*;
 use crate::AnalysisContextRefV1;
 
 impl ManagedSourceFrame {
-    pub(in crate::analysis::managed) fn call_evidence(
+    pub(in crate::analysis) fn call_evidence(
         &self,
         calls: &BTreeSet<u64>,
         capture: &super::super::model::Capture,
@@ -64,7 +64,7 @@ impl ManagedSourceFrame {
         })
     }
 
-    pub(in crate::analysis::managed) fn call_contexts(
+    pub(in crate::analysis) fn call_contexts(
         &self,
         calls: &BTreeSet<u64>,
     ) -> Result<Vec<AnalysisContextRefV1>> {
@@ -92,7 +92,7 @@ impl ManagedSourceFrame {
         Ok(contexts.into_values().collect())
     }
 
-    pub(in crate::analysis::managed) fn canonical_contexts(
+    pub(in crate::analysis) fn canonical_contexts(
         &self,
         calls: &BTreeSet<u64>,
         root: &std::path::Path,
@@ -174,7 +174,7 @@ impl ManagedSourceFrame {
         Ok(result)
     }
 
-    pub(in crate::analysis::managed) fn canonical_events(
+    pub(in crate::analysis) fn canonical_events(
         &self,
         requested: &BTreeSet<crate::DiscoveryRecordIdV1>,
         calls: &BTreeSet<u64>,
@@ -255,7 +255,7 @@ impl ManagedSourceFrame {
         Ok(result)
     }
 
-    pub(in crate::analysis::managed) fn charge_contexts(
+    pub(in crate::analysis) fn charge_contexts(
         &self,
         calls: &BTreeSet<u64>,
         charge: &mut dyn FnMut(usize) -> Result<()>,

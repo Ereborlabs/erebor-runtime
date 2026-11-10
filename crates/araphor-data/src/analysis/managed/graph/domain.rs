@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_analysis_types::{DomainRelations, FindingMember, values as algorithm};
+use araphor_analysis_types::{values as algorithm, DomainRelations, FindingMember};
 use araphor_graph::Staged;
 use duckdb::Connection;
 use sdk::arrow_array::{Array, BinaryArray, StructArray, UInt8Array};
@@ -17,10 +17,11 @@ use crate::{
 
 mod basis;
 mod contexts;
-pub(super) use contexts::ContextInputs;
+pub(in crate::analysis) use basis::Basis;
+pub(in crate::analysis) use contexts::ContextInputs;
 
 #[derive(Default)]
-struct DomainCommands {
+pub(in crate::analysis) struct DomainCommands {
     subjects: Vec<algorithm::SubjectChange>,
     edges: Vec<algorithm::RelationshipChange>,
     findings: Vec<FindingMember>,
@@ -182,15 +183,15 @@ impl DomainInput {
     }
 }
 
-struct DomainScratch<'a> {
-    budget: &'a dyn super::ManagedBudget,
-    memory: &'a super::super::budget::PreparedMemory<'a>,
-    bytes: usize,
-    leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
+pub(in crate::analysis) struct DomainScratch<'a> {
+    pub(in crate::analysis) budget: &'a dyn super::ManagedBudget,
+    pub(in crate::analysis) memory: &'a super::super::budget::PreparedMemory<'a>,
+    pub(in crate::analysis) bytes: usize,
+    pub(in crate::analysis) leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl DomainScratch<'_> {
-    fn charge(&mut self, bytes: usize) -> Result<()> {
+    pub(in crate::analysis) fn charge(&mut self, bytes: usize) -> Result<()> {
         self.budget.check()?;
         if bytes == 0 {
             return Ok(());
@@ -218,15 +219,21 @@ impl DomainScratch<'_> {
 }
 
 impl DomainCommands {
-    fn read(
-        journal: &ManagedGraphJournal,
+    pub(in crate::analysis) fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    pub(in crate::analysis) fn read(
+        journal: &araphor_graph::Journal,
+        spec: &sdk::GraphSpec,
+        relations: &BTreeMap<String, u64>,
+        basis: &Basis,
         package: &sdk::Package,
         model: &sdk::Model,
         scratch: &mut DomainScratch<'_>,
     ) -> Result<Self> {
-        let basis = basis::Basis::read(journal, scratch)?;
         let mut commands = Self::default();
-        for staged in journal.work.journal.batches() {
+        for staged in journal.batches() {
             scratch.charge(0)?;
             let Staged::Edits {
                 relation, batch, ..
@@ -234,15 +241,13 @@ impl DomainCommands {
             else {
                 continue;
             };
-            let declaration = journal
-                .call
-                .spec
+            let declaration = spec
                 .relations
                 .iter()
-                .find(|value| journal.call.relations[&value.name] == *relation)
+                .find(|value| relations[&value.name] == *relation)
                 .ok_or_else(|| Code::Invalid.error("domain Graph relation"))?;
             let subjects = DomainRelations::subjects(declaration);
-            let edges = DomainRelations::relationships(declaration, &journal.call.spec);
+            let edges = DomainRelations::relationships(declaration, spec);
             let findings = DomainRelations::findings(declaration);
             if !subjects && !edges && !findings {
                 continue;
@@ -297,13 +302,11 @@ impl DomainCommands {
                     } else {
                         FindingMember::port().name
                     },
-                    batches: vec![
-                        sdk::RecordBatch::try_new(
-                            Arc::new(declaration.properties.clone()),
-                            values.columns().to_vec(),
-                        )
-                        .context(crate::PackageArrowSnafu)?,
-                    ],
+                    batches: vec![sdk::RecordBatch::try_new(
+                        Arc::new(declaration.properties.clone()),
+                        values.columns().to_vec(),
+                    )
+                    .context(crate::PackageArrowSnafu)?],
                 };
                 if subjects {
                     let decoded = algorithm::SubjectChange::decode(&data)
@@ -539,11 +542,11 @@ impl DomainCommands {
     }
 }
 
-pub(super) struct DomainPreparation {
-    commands: DomainCommands,
-    contexts: ContextInputs,
-    bytes: usize,
-    leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
+pub(in crate::analysis) struct DomainPreparation {
+    pub(in crate::analysis) commands: DomainCommands,
+    pub(in crate::analysis) contexts: ContextInputs,
+    pub(in crate::analysis) bytes: usize,
+    pub(in crate::analysis) leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl AnalysisStore {
@@ -561,7 +564,16 @@ impl AnalysisStore {
             bytes: 0,
             leases: Vec::new(),
         };
-        let commands = DomainCommands::read(journal, package, model, &mut scratch)?;
+        let basis = Basis::read(journal, &mut scratch)?;
+        let commands = DomainCommands::read(
+            &journal.work.journal,
+            &journal.call.spec,
+            &journal.call.relations,
+            &basis,
+            package,
+            model,
+            &mut scratch,
+        )?;
         if commands.records.is_empty() {
             return Ok(None);
         }
@@ -584,133 +596,24 @@ impl AnalysisStore {
         restricted: bool,
         memory: &mut super::super::budget::PreparedMemory<'_>,
     ) -> Result<Option<super::super::model::GraphProof>> {
-        let mut scratch = DomainScratch {
-            budget: journal.budget.as_ref(),
-            memory,
-            bytes: prepared.bytes,
-            leases: prepared.leases,
-        };
-        let commands = prepared.commands;
-        let contexts = prepared.contexts;
         let frame = journal
             .call
             .attempt
             .5
             .as_ref()
             .ok_or_else(|| Code::Denied.error("domain Graph canonical source"))?;
-        let calls = journal.call.input_calls();
-        let records = frame.canonical_events(&commands.records, &calls, &mut |bytes| {
-            scratch.charge(bytes)
-        })?;
-        frame.charge_contexts(&calls, &mut |bytes| scratch.charge(bytes))?;
-        let handles = frame.call_derived(&calls)?;
-        let known = handles
-            .iter()
-            .flat_map(|handle| &handle.contexts)
-            .map(|context| &context.key)
-            .collect::<BTreeSet<_>>();
-        let saved = contexts
-            .values
-            .values()
-            .filter(|(value, _)| !known.contains(&value.key))
-            .collect::<Vec<_>>();
-        let mut facts = self.domain_facts(connection, &commands.records, &saved, &mut scratch)?;
-        let mut keys = BTreeSet::new();
-        for value in derived.values(journal.call.call) {
-            scratch.charge(0)?;
-            if !keys.insert(&value.key) {
-                continue;
-            }
-            scratch.charge(
-                value
-                    .body
-                    .len()
-                    .checked_mul(8)
-                    .and_then(|bytes| bytes.checked_add(4 * std::mem::size_of::<GraphFactV1>()))
-                    .ok_or_else(|| Code::Limit.error("canonical Graph fact memory"))?,
-            )?;
-            let fact = GraphFactV1::try_from(value)?;
-            if commands.records.contains(&fact.record_id) {
-                facts.push((value.clone(), fact));
-            }
-        }
-        facts.sort_unstable_by(|left, right| left.0.key.cmp(&right.0.key));
-        let sources = commands
-            .records
-            .iter()
-            .map(|id| id.stream.clone())
-            .collect::<BTreeSet<_>>();
-        let mut joined = DomainInput::default();
-        let mut proof_sources = Vec::new();
-        for source in sources {
-            scratch.charge(0)?;
-            let mut input = GraphReplayInputV1 {
-                source: source.clone(),
-                records: Vec::new(),
-                input_positions: Vec::new(),
-                coverage: Vec::new(),
-                coverage_keys: Vec::new(),
-                missing_ranges: Vec::new(),
-                facts: facts
-                    .iter()
-                    .filter(|value| value.1.record_id.stream == source)
-                    .map(|value| value.0.clone())
-                    .collect(),
-            };
-            for (id, (record, position)) in &records {
-                if id.stream == source {
-                    input.records.push(record.clone());
-                    input.input_positions.push((id.clone(), *position));
-                }
-            }
-            frame.canonical_coverage(&mut input, &mut |bytes| scratch.charge(bytes))?;
-            let cpu = input
-                .records
-                .first()
-                .ok_or_else(|| Code::Invalid.error("Graph proof source records"))?
-                .id
-                .cpu_id;
-            let (report, missing) = frame.source_metadata(&source)?;
-            scratch.charge(
-                (std::mem::size_of::<super::super::model::GraphProofSource>()
-                    + source.node_id.len()
-                    + missing.len() * std::mem::size_of::<(u64, u64)>())
-                .checked_mul(4)
-                .ok_or_else(|| Code::Limit.error("Graph proof source memory"))?,
-            )?;
-            let mut missing = missing.to_vec();
-            missing.sort_unstable();
-            missing.dedup();
-            proof_sources.push(super::super::model::GraphProofSource {
-                source,
-                cpu,
-                report,
-                missing,
-            });
-            joined.append(input, &mut scratch)?;
-        }
-        joined.finish(journal.call.attempt.instance().spec.tenant, &mut scratch)?;
-        commands.validate(&joined, package, model, restricted, &mut scratch)?;
-        let proof = super::super::model::GraphProof {
-            coverage: std::mem::take(&mut joined.revision.coverage),
-            sources: proof_sources,
-        };
-        let lease = memory.reserve(
-            proof
-                .allocation_bytes()
-                .and_then(|bytes| bytes.checked_mul(4))
-                .ok_or_else(|| Code::Limit.error("Graph canonical proof memory"))?,
-        )?;
-        drop(joined);
-        drop(records);
-        drop(facts);
-        drop(commands);
-        drop(known);
-        drop(handles);
-        drop(saved);
-        drop(scratch);
-        memory.hold(lease);
-        Ok(Some(proof))
+        prepared.validate(
+            journal.call.attempt.instance().spec.tenant,
+            frame,
+            &journal.call.input_calls(),
+            package,
+            model,
+            derived.values(journal.call.call),
+            restricted,
+            journal.budget.as_ref(),
+            memory,
+            |records, contexts, scratch| self.domain_facts(connection, records, contexts, scratch),
+        )
     }
 
     fn domain_facts(
@@ -819,5 +722,145 @@ impl AnalysisStore {
         }
         facts.sort_unstable_by(|left, right| left.0.key.cmp(&right.0.key));
         Ok(facts)
+    }
+}
+
+impl DomainPreparation {
+    pub(in crate::analysis) fn validate<'a>(
+        self,
+        tenant: [u8; 16],
+        frame: &crate::ManagedSourceFrame,
+        calls: &BTreeSet<u64>,
+        package: &sdk::Package,
+        model: &sdk::Model,
+        derived: impl IntoIterator<Item = &'a crate::AnalysisContextVersionV1>,
+        restricted: bool,
+        budget: &dyn super::ManagedBudget,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
+        mut eligible: impl FnMut(
+            &BTreeSet<DiscoveryRecordIdV1>,
+            &[&(crate::AnalysisContextVersionV1, AnalysisContextRefV1)],
+            &mut DomainScratch<'_>,
+        ) -> Result<Vec<(crate::AnalysisContextVersionV1, GraphFactV1)>>,
+    ) -> Result<Option<super::super::model::GraphProof>> {
+        let mut scratch = DomainScratch {
+            budget,
+            memory,
+            bytes: self.bytes,
+            leases: self.leases,
+        };
+        let commands = self.commands;
+        let contexts = self.contexts;
+        let records =
+            frame.canonical_events(&commands.records, calls, &mut |bytes| scratch.charge(bytes))?;
+        frame.charge_contexts(calls, &mut |bytes| scratch.charge(bytes))?;
+        let handles = frame.call_derived(calls)?;
+        let known = handles
+            .iter()
+            .flat_map(|handle| &handle.contexts)
+            .map(|context| &context.key)
+            .collect::<BTreeSet<_>>();
+        let saved = contexts
+            .values
+            .values()
+            .filter(|(value, _)| !known.contains(&value.key))
+            .collect::<Vec<_>>();
+        let mut facts = eligible(&commands.records, &saved, &mut scratch)?;
+        let mut keys = BTreeSet::new();
+        for value in derived {
+            scratch.charge(0)?;
+            if !keys.insert(&value.key) {
+                continue;
+            }
+            scratch.charge(
+                value
+                    .body
+                    .len()
+                    .checked_mul(8)
+                    .and_then(|bytes| bytes.checked_add(4 * std::mem::size_of::<GraphFactV1>()))
+                    .ok_or_else(|| Code::Limit.error("canonical Graph fact memory"))?,
+            )?;
+            let fact = GraphFactV1::try_from(value)?;
+            if commands.records.contains(&fact.record_id) {
+                facts.push((value.clone(), fact));
+            }
+        }
+        facts.sort_unstable_by(|left, right| left.0.key.cmp(&right.0.key));
+        let sources = commands
+            .records
+            .iter()
+            .map(|id| id.stream.clone())
+            .collect::<BTreeSet<_>>();
+        let mut joined = DomainInput::default();
+        let mut proof_sources = Vec::new();
+        for source in sources {
+            scratch.charge(0)?;
+            let mut input = GraphReplayInputV1 {
+                source: source.clone(),
+                records: Vec::new(),
+                input_positions: Vec::new(),
+                coverage: Vec::new(),
+                coverage_keys: Vec::new(),
+                missing_ranges: Vec::new(),
+                facts: facts
+                    .iter()
+                    .filter(|value| value.1.record_id.stream == source)
+                    .map(|value| value.0.clone())
+                    .collect(),
+            };
+            for (id, (record, position)) in &records {
+                if id.stream == source {
+                    input.records.push(record.clone());
+                    input.input_positions.push((id.clone(), *position));
+                }
+            }
+            frame.canonical_coverage(&mut input, &mut |bytes| scratch.charge(bytes))?;
+            let cpu = input
+                .records
+                .first()
+                .ok_or_else(|| Code::Invalid.error("Graph proof source records"))?
+                .id
+                .cpu_id;
+            let (report, missing) = frame.source_metadata(&source)?;
+            scratch.charge(
+                (std::mem::size_of::<super::super::model::GraphProofSource>()
+                    + source.node_id.len()
+                    + missing.len() * std::mem::size_of::<(u64, u64)>())
+                .checked_mul(4)
+                .ok_or_else(|| Code::Limit.error("Graph proof source memory"))?,
+            )?;
+            let mut missing = missing.to_vec();
+            missing.sort_unstable();
+            missing.dedup();
+            proof_sources.push(super::super::model::GraphProofSource {
+                source,
+                cpu,
+                report,
+                missing,
+            });
+            joined.append(input, &mut scratch)?;
+        }
+        joined.finish(tenant, &mut scratch)?;
+        commands.validate(&joined, package, model, restricted, &mut scratch)?;
+        let proof = super::super::model::GraphProof {
+            coverage: std::mem::take(&mut joined.revision.coverage),
+            sources: proof_sources,
+        };
+        let lease = memory.reserve(
+            proof
+                .allocation_bytes()
+                .and_then(|bytes| bytes.checked_mul(4))
+                .ok_or_else(|| Code::Limit.error("Graph canonical proof memory"))?,
+        )?;
+        drop(joined);
+        drop(records);
+        drop(facts);
+        drop(commands);
+        drop(known);
+        drop(handles);
+        drop(saved);
+        drop(scratch);
+        memory.hold(lease);
+        Ok(Some(proof))
     }
 }

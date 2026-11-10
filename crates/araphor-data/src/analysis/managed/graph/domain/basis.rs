@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 type Identity = (u64, Vec<u8>, Vec<u8>);
 
 #[derive(Default)]
-pub(super) struct Basis {
+pub(in crate::analysis) struct Basis {
     subjects: BTreeMap<Identity, Vec<algorithm::SubjectChange>>,
     edges: BTreeMap<Identity, Vec<algorithm::RelationshipChange>>,
     findings: BTreeMap<Identity, Vec<FindingMember>>,
@@ -69,59 +69,76 @@ impl Basis {
                 )) {
                     continue;
                 }
-                let native = row.property_batch()?;
-                scratch.charge(
-                    native
-                        .get_array_memory_size()
-                        .checked_mul(16)
-                        .ok_or_else(|| Code::Limit.error("domain Graph retained memory"))?,
+                basis.append(
+                    (relation, row.owner_key.as_ref(), row.key.as_ref()),
+                    declaration,
+                    &journal.call.spec,
+                    row.property_batch()?,
+                    scratch,
                 )?;
-                let port = if subjects {
-                    algorithm::SubjectChange::port()
-                } else if edges {
-                    algorithm::RelationshipChange::port()
-                } else {
-                    FindingMember::port()
-                };
-                let data = sdk::Dataset {
-                    name: port.name,
-                    batches: vec![
-                        sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                            .context(crate::AnalysisContractSnafu)?,
-                    ],
-                };
-                let identity = (relation, row.owner_key.to_vec(), row.key.to_vec());
-                if subjects {
-                    basis.subjects.entry(identity).or_default().extend(
-                        algorithm::SubjectChange::decode(&data)
-                            .context(crate::AnalysisContractSnafu)?,
-                    );
-                } else if edges {
-                    for value in algorithm::RelationshipChange::decode(&data)
-                        .context(crate::AnalysisContractSnafu)?
-                    {
-                        let expired = value.retained_expiry();
-                        basis.edges.entry(identity.clone()).or_default().push(value);
-                        let key = DomainRelations::key(&expired.key)
-                            .context(crate::AnalysisContractSnafu)?;
-                        basis
-                            .edges
-                            .entry((relation, row.owner_key.to_vec(), key))
-                            .or_default()
-                            .push(expired);
-                    }
-                } else {
-                    for value in
-                        FindingMember::decode(&data).context(crate::AnalysisContractSnafu)?
-                    {
-                        let values = basis.findings.entry(identity.clone()).or_default();
-                        values.push(value.retained_expiry());
-                        values.push(value);
-                    }
-                }
             }
         }
         Ok(basis)
+    }
+
+    pub(in crate::analysis) fn append(
+        &mut self,
+        identity: (u64, &[u8], &[u8]),
+        declaration: &sdk::GraphRelation,
+        spec: &sdk::GraphSpec,
+        native: sdk::RecordBatch,
+        scratch: &mut DomainScratch<'_>,
+    ) -> Result<()> {
+        let subjects = DomainRelations::subjects(declaration);
+        let edges = DomainRelations::relationships(declaration, spec);
+        let findings = DomainRelations::findings(declaration);
+        if !subjects && !edges && !findings {
+            return Ok(());
+        }
+        scratch.charge(
+            native
+                .get_array_memory_size()
+                .checked_mul(16)
+                .ok_or_else(|| Code::Limit.error("domain Graph retained memory"))?,
+        )?;
+        let port = if subjects {
+            algorithm::SubjectChange::port()
+        } else if edges {
+            algorithm::RelationshipChange::port()
+        } else {
+            FindingMember::port()
+        };
+        let data = sdk::Dataset {
+            name: port.name,
+            batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                .context(crate::AnalysisContractSnafu)?],
+        };
+        let identity = (identity.0, identity.1.to_vec(), identity.2.to_vec());
+        if subjects {
+            self.subjects.entry(identity).or_default().extend(
+                algorithm::SubjectChange::decode(&data).context(crate::AnalysisContractSnafu)?,
+            );
+        } else if edges {
+            for value in algorithm::RelationshipChange::decode(&data)
+                .context(crate::AnalysisContractSnafu)?
+            {
+                let expired = value.retained_expiry();
+                self.edges.entry(identity.clone()).or_default().push(value);
+                let key =
+                    DomainRelations::key(&expired.key).context(crate::AnalysisContractSnafu)?;
+                self.edges
+                    .entry((identity.0, identity.1.clone(), key))
+                    .or_default()
+                    .push(expired);
+            }
+        } else {
+            for value in FindingMember::decode(&data).context(crate::AnalysisContractSnafu)? {
+                let values = self.findings.entry(identity.clone()).or_default();
+                values.push(value.retained_expiry());
+                values.push(value);
+            }
+        }
+        Ok(())
     }
 
     fn identity(relation: u64, batch: &sdk::RecordBatch, row: usize) -> Result<Identity> {

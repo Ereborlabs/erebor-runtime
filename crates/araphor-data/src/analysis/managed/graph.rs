@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{OptionalExt as _, Transaction, params};
+use duckdb::{params, OptionalExt as _, Transaction};
 use snafu::ResultExt as _;
 
 use super::codec::ManagedCodec;
@@ -26,7 +26,7 @@ mod admission;
 mod authority;
 mod commit;
 pub(in crate::analysis::managed) use commit::PreparedGraph;
-mod domain;
+pub(in crate::analysis) mod domain;
 pub(in crate::analysis) mod projection;
 mod proof;
 mod provenance;
@@ -42,7 +42,8 @@ impl AnalysisStore {
         connection: &Transaction<'_>,
         spec: &ManagedSpec,
     ) -> Result<()> {
-        let admission = spec.graph_declarations(|call| Self::managed_contract(connection, spec.tenant, call))?;
+        let admission =
+            spec.graph_declarations(|call| Self::managed_contract(connection, spec.tenant, call))?;
         let declarations = admission.relations;
         let calls = admission.calls;
         if calls.is_empty() {

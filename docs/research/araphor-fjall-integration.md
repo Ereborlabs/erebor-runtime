@@ -51,6 +51,10 @@ Native managed capture now seals actual Arrow inputs. Native attempts preserve
 live claims, pending indexes, terminal outcomes, failure status, and interrupted
 frontier settlement. Read the
 [attempt qualification](results/araphor-native-attempts-2026-11-09.md).
+Shared publication validation now passes the unchanged incident. Read the
+[shared validation qualification](results/araphor-shared-publication-2026-11-09.md).
+This checks the DuckDB production path. Native successful publication remains
+**Not done**; no matched performance gain is established.
 Result publication, prior-result restore, production providers, original-log
 routing, and indexed source-header maintenance remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
