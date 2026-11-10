@@ -16,6 +16,7 @@ mod context;
 mod discovery;
 mod graph;
 mod graph_state;
+mod notification;
 mod source;
 
 impl NativeStore {
@@ -154,6 +155,7 @@ impl NativeStore {
                     | "context_versions"
                     | "context"
                     | "notification_routes"
+                    | "notifications"
                     | "compiled_policies"
                     | "targets"
                     | "catalog"
@@ -171,7 +173,6 @@ impl NativeStore {
             || !projected.traces.is_empty()
             || !projected.profiles().is_empty()
             || projected.graph_traversal().is_some()
-            || !projected.notification_keys().is_empty()
         {
             return Err(Code::Unsupported.error("native selection owner"));
         }
@@ -182,6 +183,9 @@ impl NativeStore {
             }
             .fail();
         }
+        let unscoped = selection.sources.is_all()
+            && selection.nodes.is_empty()
+            && selection.binding_ids.is_empty();
         let mut selected = projected;
         let mut output = AnalysisExtractionV1::new(view.meta(), limits);
         output.graph_enabled = true;
@@ -271,6 +275,16 @@ impl NativeStore {
             view,
             &selected,
             scope,
+            &read,
+            &mut output,
+            &mut capture,
+            control,
+        )?;
+        self.extract_notifications(
+            view,
+            &selected,
+            scope,
+            unscoped,
             &read,
             &mut output,
             &mut capture,

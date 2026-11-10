@@ -243,6 +243,106 @@ impl NotificationSink for Sink {
     }
 }
 
+struct FixedClock {
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl araphor_query::follow::Clock for FixedClock {
+    fn now_ns(&self) -> araphor_query::Result<u64> {
+        Ok(*self.changes.borrow())
+    }
+
+    fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+}
+
+#[tokio::test]
+async fn native_notification_sql_delivery() -> TestResult {
+    use araphor_discovery_definition::{Definition, Program, Source};
+    use araphor_query::execution::{Engine, Limits};
+    use futures_util::StreamExt as _;
+
+    let fixture = Fixture::new()?;
+    let router = fixture.router()?;
+    Fixture::configure(&router)?;
+    let subject = Fixture::submit(&router)?;
+    let engine = Engine::new(fixture.store.clone(), Limits::default())?;
+    let session = engine.session(
+        AnalysisSelectionV1::tenant(TENANT),
+        &AnalysisReadControl::default(),
+        100,
+    )?;
+    let definition = Definition {
+        name: "native-notifications".into(),
+        description: String::new(),
+        labels: Default::default(),
+        program: Program::Sql {
+            source: Source::Inline {
+                inline: NotificationRouter::SQL.into(),
+            },
+        },
+    };
+    let prepared = session.prepare_definition(&definition, None).await?;
+    let plan = Arc::new(prepared.plan().clone());
+    let clock = Arc::new(FixedClock {
+        changes: tokio::sync::watch::channel(100).0,
+    });
+    let mut subscription = araphor_query::follow::Subscription::new(
+        session,
+        plan.clone(),
+        prepared.sources().clone(),
+        b"native-notifications",
+        None,
+        clock,
+        false,
+    )?;
+    assert!(Arc::strong_count(&plan) > 1);
+    let update = subscription
+        .next()
+        .await
+        .ok_or("native notification update")??;
+    assert!(update.exhausted);
+    assert!(!update.limited);
+    assert!(update.calls.is_empty());
+    assert_eq!(update.evaluated_utc_ns, 100);
+    assert_eq!(
+        update
+            .batches
+            .as_ref()
+            .ok_or("native rows")?
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        1
+    );
+    let sink = Sink::new(fixture.store.clone());
+    let output = router.consume(&update, &sink)?;
+    assert!(output.routed.is_empty());
+    assert_eq!(output.delivered.len(), 1);
+    assert_eq!(output.delivered[0].0, subject.key);
+    assert_eq!(
+        *output.delivered[0]
+            .1
+            .as_ref()
+            .map_err(|error| error.to_string())?,
+        1
+    );
+    let calls = sink.calls.lock().map_err(|_| "sink lock")?;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].key, subject.key);
+    assert_eq!(calls[0].unconfirmed_concern, subject.unconfirmed_concern);
+    drop(calls);
+    let state = Fixture::state(&fixture.store, subject.key)?;
+    assert_eq!(state.attempts.len(), 1);
+    assert!(state.attempts[0]
+        .result
+        .as_ref()
+        .is_some_and(NotificationSinkResultV1::accepted));
+    subscription.cancel_and_join().await?;
+    Ok(())
+}
+
 #[test]
 fn native_router_operations() -> TestResult {
     let fixture = Fixture::new()?;

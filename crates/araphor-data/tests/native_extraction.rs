@@ -539,7 +539,30 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             &AnalysisReadControl::default()
         )
         .is_err());
-    let unsupported = BTreeMap::from([("notifications".to_owned(), None)]);
+    let notifications = BTreeMap::from([("notifications".to_owned(), None)]);
+    assert!(matches!(
+        pair.native.read_tables(
+            &selection,
+            read(&notifications, AnalysisReadModeV1::Metadata),
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default()
+        ),
+        Err(Error::AnalysisUnavailable {
+            relation: "notifications",
+            ..
+        })
+    ));
+    pair.native.enable_notification_owner()?;
+    assert!(pair
+        .native
+        .read_tables(
+            &selection,
+            read(&notifications, AnalysisReadModeV1::Metadata),
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default()
+        )
+        .is_ok());
+    let unsupported = BTreeMap::from([("traces".to_owned(), None)]);
     assert!(matches!(
         pair.native.read_tables(
             &selection,

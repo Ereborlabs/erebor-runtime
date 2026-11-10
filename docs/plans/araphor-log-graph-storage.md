@@ -337,6 +337,18 @@ completion and batches, capacity, retention, backup, production cutover,
 DuckDB removal, and both incident targets remain **Not done**. Production
 still uses DuckDB. No native production speedup is measured.
 
+The native notification provider now supplies Arrow rows from one captured
+view. Current reads use context heads; exact requests use immutable versions.
+Finding scalar reads cache publication authority per result. The actual
+notification SQL runs through native DataFusion and a finite Subscription to
+the Router and its Pending-before-effect boundary. Read the
+[notification provider qualification](../research/results/araphor-native-notification-tables-2026-11-10.md).
+Result: **Done for optional native notification snapshot reads and finite SQL
+delivery**. Affected-key reads, durable notification completion, write batches,
+native Host notification admission, capacity, retention, backup, production
+cutover, DuckDB removal, and both incident targets remain **Not done**.
+Production still uses DuckDB. No native production speedup is measured.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

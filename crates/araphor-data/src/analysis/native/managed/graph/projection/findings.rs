@@ -40,6 +40,7 @@ pub(in crate::analysis) struct FindingRead<'a> {
     selected: BTreeMap<String, (u64, String, String)>,
     findings: BTreeMap<(String, String), Arc<Vec<FindingRow>>>,
     source_revisions: BTreeMap<String, Arc<GraphRevisionV1>>,
+    scalar_owners: BTreeMap<String, Option<Arc<notification::ScalarOwner>>>,
     qualified: BTreeSet<u64>,
     verified: RefCell<crate::analysis::context::VerifiedPackages>,
 }
@@ -62,6 +63,7 @@ impl<'a> FindingRead<'a> {
             selected: BTreeMap::new(),
             findings: BTreeMap::new(),
             source_revisions: BTreeMap::new(),
+            scalar_owners: BTreeMap::new(),
             qualified: BTreeSet::new(),
             verified: RefCell::new(crate::analysis::context::VerifiedPackages::default()),
         }

@@ -4,6 +4,24 @@ use super::super::super::super::{graph::GraphPublication, results::StoredResult}
 use super::*;
 use crate::analysis::native::managed::source::SourceRead;
 
+mod scalar;
+
+pub(super) struct ScalarOwner {
+    revision: u64,
+    scope: ScalarScope,
+}
+
+enum ScalarScope {
+    Source(crate::EvidenceIntakeIdentityV1),
+    Definition(crate::PackageGrantV1),
+}
+
+pub(in crate::analysis) struct FindingScalar {
+    pub(in crate::analysis) revision: u64,
+    pub(in crate::analysis) value: Option<u64>,
+    pub(in crate::analysis) allowed: bool,
+}
+
 impl FindingRead<'_> {
     pub(in crate::analysis) fn heads(
         &self,

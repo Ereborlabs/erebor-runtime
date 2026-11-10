@@ -250,7 +250,7 @@ impl Capture<'_> {
             .filter(|ids| !ids.is_empty())
     }
 
-    pub(in crate::analysis::extraction) fn record_finding(
+    pub(in crate::analysis) fn record_finding(
         &mut self,
         result: &str,
         finding: &str,

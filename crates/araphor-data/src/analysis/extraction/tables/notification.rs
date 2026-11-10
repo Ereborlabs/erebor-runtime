@@ -94,7 +94,7 @@ impl Capture<'_> {
     }
 
     table_row! {
-        pub(in crate::analysis::extraction) fn notification(
+        pub(in crate::analysis) fn notification(
             &mut self,
             obligation: &NotificationObligationV1,
             finding_available: bool,

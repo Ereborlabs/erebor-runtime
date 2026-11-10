@@ -9,6 +9,9 @@ use araphor_data::{
     NOTIFICATION_STATE_OWNER,
 };
 
+#[path = "notifications/tables.rs"]
+mod tables;
+
 fn route(revision: u64) -> ApprovedNotificationRouteV1 {
     ApprovedNotificationRouteV1 {
         policy: NotificationPolicyV1 {

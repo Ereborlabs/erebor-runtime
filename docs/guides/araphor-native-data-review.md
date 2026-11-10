@@ -1425,10 +1425,11 @@ boundary changes in this extension.
 
 Read the [qualification record](../research/results/araphor-native-router-2026-11-10.md)
 for the frozen source and 17 passing cases in four suites. The four new cases
-qualify concern delivery, not actual finding routing. Native Host notification
-binding, Source readers and revisions, durable notification consumption,
-notification write batches, capacity, retention, backup, cutover, DuckDB
-removal, and both incident targets remain **Not done**.
+qualify concern delivery, not actual finding routing. At this Router
+qualification, native Host notification binding, Source readers and revisions,
+durable notification consumption, notification write batches, capacity,
+retention, backup, cutover, DuckDB removal, and both incident targets were
+**Not done**. The Source extension below supplies its later qualified result.
 
 ## Native Source finding reads and revisions
 
@@ -1479,3 +1480,48 @@ for the frozen source and checks. Native notification subscription completion,
 write batches, configured capacity, retention, backup, production cutover,
 DuckDB removal, and both incident targets remain **Not done**. No kernel or ABI
 boundary changes in this extension.
+
+## Native notification snapshot provider
+
+This extension follows `6b13e9a82`. It supplies native `notifications` Arrow
+rows to the existing SQL plan. Production still uses DuckDB.
+
+Read the owners in this order:
+
+1. [native extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs) admits the notification table and keeps the original unscoped flag.
+2. [notification provider](../../crates/araphor-data/src/analysis/native/extraction/notification.rs) reads current heads or exact immutable obligation versions at one Data view.
+3. [scalar owner reads](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification/scalar.rs) cache publication authority and resolve canonical finding tokens.
+4. [shared Arrow builder](../../crates/araphor-data/src/analysis/extraction/tables/notification.rs) supplies notification columns and timer behavior.
+5. [provider tests](../../crates/araphor-data/tests/native_managed/domain/notifications/tables.rs) exercise Source and Definition data, history, routes, time, and scope.
+6. [public SQL test](../../crates/araphor-analysis/tests/native_notification.rs) connects the actual SQL plan, native subscription output, Router, and sink.
+
+A caller reads a notification snapshot
+  -> Data fixes the native and raw view
+  -> The provider reads the captured current head or exact requested revision
+  -> FindingRead checks the actual Source or Definition owner
+  -> Canonical value and current result identities remain separate
+  -> The provider reads each exact saved route revision
+  -> The existing Arrow builder computes retry, overdue, and next-change values
+
+A finite notification subscription executes
+  -> DataFusion runs the existing notification SQL
+  -> The Update contains the actual obligation key
+  -> Router.consume prepares the existing delivery state
+  -> Data saves Pending before the sink effect
+  -> Data saves the outcome after the effect
+
+The provider reads current obligation heads without scanning their version
+history. Its per-result scalar cache holds compact authority metadata. It does
+not hold whole Source revisions or duplicate Graph bodies. Empty finding sets
+return before current Graph head enumeration. Decode allocations remain charged.
+
+The public SQL test proves finite execution and delivery. Its plan `Arc` check
+proves that the Subscription holds the supplied plan. It does not prove later
+notification wake reuse or durable completion. The provider keeps existing
+whole-package and filtered-selection checks. No kernel or ABI boundary changes.
+
+Read the [qualification record](../research/results/araphor-native-notification-tables-2026-11-10.md)
+for the exact source and checks. Affected-key notification reads, durable CDC
+completion, batched writes, native Host notification admission, capacity,
+retention, backup, cutover, DuckDB removal, and both incident targets remain
+**Not done**.
