@@ -135,6 +135,8 @@ values have `sequence < cut`. The engine owns conversion from batch sequences.
 | `BranchSnapshot` | `revision()`, `cursor() -> Result<Option<Cursor>>`, `get(key)`, `prefix(prefix)`, `range(bounds)`, `iter()` |
 | `Branch` | `retain_history(range) -> RetentionId` |
 | `SingleWriterTxDatabase` | `history()` lists policies and branch IDs; `release_history(id)` works after a branch name is deleted. |
+| `SingleWriterTxDatabase` | `checkpoint(destination)` exports retained native trees, branch metadata, history policies, and original journal prefixes to a new directory under one protected cut. |
+| `Database` | `is_poisoned()` reports uncertain source writes or manifest publication. It does not reset the engine. |
 | `Branch` | `write_tx()` with read-your-writes, point/range reads, `insert`, `remove`, `rollback`, and `commit -> Option<Commit>` |
 | Branch write transaction | `commit_stamped(keys) -> Option<Commit>` saves the exact native revision at caller keys in the same batch. Fjall `cceaa84` adds this API for the approved Data migration. |
 | Existing batch and single-writer transaction | `commit_receipt() -> Option<Commit>`; existing `commit() -> ()` remains |
@@ -172,6 +174,15 @@ Branch trees stay private and support puts and strong deletes. Raw `clear`,
 weak deletes, ingestion, FIFO deletion, and rewrite filters are not exposed
 through branch handles. Existing raw APIs and their durability stay unchanged.
 Branch commits and receipt APIs require `SyncAll`. Logical reset is excluded.
+
+The production backup integration adds `checkpoint` in Fjall `bc41b3b` and
+the pinned tree export in `lsm-tree` `a7ca88c8`. The focused checkpoint test checks
+history, branches, sealed-journal resume after reopen, and later compaction.
+Fjall `b88af08` and `lsm-tree` `0f70395a` distinguish an early file-write error
+from a replaced manifest whose durable sync failed. The latter error stops
+source writes and CDC. A destination-copy error does not poison the source.
+Focused checks cover early rewrite failure and source write/CDC poison behavior.
+They do not simulate a storage device failure after manifest replacement.
 
 Before a history, branch, or CDC-retention promise, persist an incompatible
 database version marker atomically and durably. Old or feature-unaware openers

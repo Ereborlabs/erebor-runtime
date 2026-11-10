@@ -1,5 +1,49 @@
 # Replace DuckDB with versioned Fjall
 
+## Intended end state
+
+Data owns one versioned Fjall database and its commit boundary. Its live branch
+contains table state, Graph records, package state, results, evidence references,
+notification state, and consumed input positions. Raw event payloads remain in
+the existing append-only segments. There is no second event payload archive.
+
+One published Data view binds an exact native snapshot to an exact raw prefix.
+Native DataFusion plans read that view and the required changes. Package
+definitions start subscriptions. A package decides whether to use Graph and
+which Graph changes to stage. Data commits those changes with package state
+and input progress. Packages cannot commit the transaction.
+
+Data reads original committed logs to select subscription wakes. An unrelated
+transaction cannot cause a package source wake. A failed step cannot acknowledge
+its input. Retained historical reads and branches survive compaction and reopen.
+Graph semantics remain in Araphor Graph; engine branches contain no package
+or Graph knowledge.
+
+The performance goals remain notification creation below 100 milliseconds and
+the requested 100-fold improvement. Neither result follows from engine selection.
+Use the same incident workload and measurement boundaries to prove them.
+
+## Current replacement work, 2026-11-10
+
+Result: **Not done**. The production cutover is an uncommitted draft.
+The current source uses the native Data owner through the public storage API.
+The draft removes the SQL Data owner, SQL Graph backend, and caller backend
+switches. The complete default build and unchanged incident are not qualified.
+
+| Owner | Current work and completion proof |
+| --- | --- |
+| Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
+| Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
+| Subscription and execution | Complete retained Source providers. Keep saved positions in the original logs and native DataFusion plans. Require restart and unchanged incident proof through the public owner. |
+| Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
+| Performance | Use the saved successful control and a matched native build. Neither latency target is proved. |
+
+Complete connected replacements before repeating their passing checks. Read the
+[current execution priority](#current-execution-priority-2026-11-10) for the
+implementation order. The records below describe earlier source states; they
+do not qualify this draft.
+
+## Previous qualification records
 Research date: 2026-11-09. Result: **Research complete; production migration not done**.
 This record proposes the production integration of the completed engine forks.
 The optional native Graph participant and its existing package PoC caller are
@@ -254,29 +298,6 @@ with this record. Earlier measurements do not describe a completed migration.
 Source: Runtime `d30dceaba`, Fjall `a04286570637`, and `lsm-tree` `2e1b5df34ffc`.
 Both engine checkouts use `feat/versioned-storage`. Unrelated working changes
 are outside this research.
-
-## Intended end state
-
-Data owns one versioned Fjall database and its commit boundary. Its live branch
-contains table state, Graph records, package state, results, evidence references,
-notification state, and consumed input positions. Raw event payloads remain in
-the existing append-only segments. There is no second event payload archive.
-
-One published Data view binds an exact native snapshot to an exact raw prefix.
-Native DataFusion plans read that view and the required changes. Package
-definitions start subscriptions. A package decides whether to use Graph and
-which Graph changes to stage. Data commits those changes with package state
-and input progress. Packages cannot commit the transaction.
-
-Data reads original committed logs to select subscription wakes. An unrelated
-transaction cannot cause a package source wake. A failed step cannot acknowledge
-its input. Retained historical reads and branches survive compaction and reopen.
-Graph semantics remain in Araphor Graph; engine branches contain no package
-or Graph knowledge.
-
-The performance goals remain notification creation below 100 milliseconds and
-the requested 100-fold improvement. Neither result follows from engine selection.
-Use the same incident workload and measurement boundaries to prove them.
 
 ## Measured starting point
 
@@ -548,14 +569,42 @@ evidence that Fjall supplies a Materialize execution engine. See
 
 ## Delivery, recovery, and removal order
 
-The current router decodes a batch but still saves individual state transitions
-through context commits. Replace that storage procedure with batch preparation
-and a durable outbox. Preserve each required pending-before-effect boundary.
+### Current execution priority, 2026-11-10
+
+The user directs production retirement before more separate component
+qualification. Continue with one connected production cutover:
+
+1. Make the public Data store and managed transaction types resolve to the native
+   owner. Keep Control, Observability, Query, and Analysis on those same types.
+   Remove backend choices at callers. Compiler errors identify the remaining
+   required APIs; temporary errors in the cutover draft are not a task blocker.
+2. Complete those real owners in the same draft: configured admission, trace
+   storage, retention and deletion recovery, backup, package collection, and
+   Source reads. Preserve their existing contracts. Do not add methods that
+   ignore supplied limits or return success without the required work.
+3. Remove the replaced SQL owner, projections, connection pools, schema code,
+   dependencies, and obsolete fixtures. Preserve equivalent failure assertions
+   and the exact incident. No permanent SQL fallback or second archive remains.
+4. Run the unchanged production incident through the replacement. Replace any
+   stage that repeatedly reads unchanged history with native change inputs and
+   indexed state. Then measure the matched successful builds and both latency
+   targets at the existing boundaries.
+
+Use focused checks at a completed replacement boundary. Repeat a passing suite
+only when a subsequent change, failure, or unresolved concern requires it.
+Commit verified replacements. Full CI remains excluded during iteration.
+The complete production replacement and performance proof remain **Not done**.
+
+### Historical implementation order, 2026-11-09
+
+This order records the earlier source state. The current priority above replaces
+it. At that earlier state, the router decoded a batch but saved individual state
+transitions through context commits. Batch preparation and the durable outbox
+replace that storage procedure. Preserve each required pending-before-effect boundary.
 Do not promise exactly-once external delivery; an effect and a local commit are
 not one transaction. Keep current attempt identity and retry behavior.
 
-Implementation should proceed in this order, with reviewer agreement before
-each code change:
+The original order was:
 
 1. Add and qualify exact cut stamping. Keep engine APIs generic. This API is
    complete at Fjall `cceaa84`; no production migration is complete yet.

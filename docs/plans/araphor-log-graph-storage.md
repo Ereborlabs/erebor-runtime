@@ -5,6 +5,14 @@ maps this design to the completed engine forks and current production source.
 Its native history and original-journal CDC supersede the stock-Fjall limits
 below. Production replacement and incident timing proof remain not done.
 
+## Current replacement work, 2026-11-10
+
+The [integration worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
+owns the current production cutover. The public native owner and SQL removal
+are in an uncommitted draft. Storage lifecycle parity, default E2E qualification,
+and both incident latency targets remain **Not done**. The following records
+retain the proof for their stated source versions.
+
 ## Production integration status, 2026-11-09
 
 The active user goal approves the complete production migration described in

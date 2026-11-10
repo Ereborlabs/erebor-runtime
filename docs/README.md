@@ -8,6 +8,10 @@ tree contains only named, no-clobber copies selected during triage.
 
 - [Plans](plans/README.md) contains recovered master plans, phase trees, and
   explicitly named recovery indexes.
+- [DuckDB retirement](research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
+  owns the current native storage worklist. Production routing and SQL removal
+  are draft changes. Complete storage parity and incident timing proof remain
+  **Not done**.
 - [Research](research/README.md) contains market, interview, compliance, and
   generated-research documents.
 - [Recovery notes](plans/recovery/README.md) explain the evidence, duplicate policy,
@@ -27,8 +31,8 @@ tree contains only named, no-clobber copies selected during triage.
   gives the current saved-state reuse flow, commit checks, and remaining input
   work.
 - [Native Data transaction review](guides/araphor-native-data-review.md) gives
-  the optional native metadata owner, exact cut publication, context storage,
-  package PoC caller, and remaining production migration.
+  the qualified native metadata owner, exact cut publication, context storage,
+  and package PoC caller. Its qualification precedes the current production draft.
 - [Fjall versioned storage review](guides/fjall-versioned-storage-review.md)
   gives the native history, branch, journal, recovery, and collection source
   route. The approved engine scope is complete. The user accepted the current
