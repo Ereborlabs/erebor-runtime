@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-09",
+  "source_parent": "d0f2ae7c71c80546be9c439564d36c9d89fcfb26",
+  "qualification": "Native Graph snapshot validation and read-only layer/journal iterators",
+  "test": {
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "araphor-graph",
+      "--features",
+      "native-store",
+      "--lib",
+      "native::tests",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml",
+      "--",
+      "--nocapture"
+    ],
+    "source_files": {
+      "crates/araphor-graph/src/journal.rs": "1a54b6c3146759e90a518f6f490b3b4f83ecccb4149c23f121cc45d506d9e4a5",
+      "crates/araphor-graph/src/native/mod.rs": "32dc41f4fd921f515774a01f7af312ffdc4e1b538498884ca48d006d222a3fa8",
+      "crates/araphor-graph/src/native/record.rs": "63577eb7a7cf0a289eef12fda8773248a08fd643c8f839cea02f7f6f18cc9117",
+      "crates/araphor-graph/src/native/validation.rs": "b85e7d376a7ea10d8de81b10aa6a5bb9542ce0a4ee2eace4858ae78c3741d448",
+      "crates/araphor-graph/src/native/tests.rs": "0f67731db82212c6932bd93e91a6a2e0922b7a7a2aaad26f5371afc8e9226b19",
+      "crates/araphor-graph/src/native/tests/validation.rs": "5750fb11bb2195083d1d9cb43c0330630b259de6b1b2c6d5ed7d7f787d820776"
+    },
+    "exit_code": 0,
+    "elapsed_s": 13.579266544955317,
+    "source_unchanged": true,
+    "log": "output/araphor-fjall-migration-20261109/native-graph-validation-tests-2.log"
+  },
+  "passed": 12,
+  "corruption_cases": 27,
+  "production_backend": "DuckDB",
+  "incident_rerun": false,
+  "performance_gain_established": false,
+  "reports": {
+    "output/araphor-fjall-migration-20261109/native-graph-validation-tests-2.json": "d9cbd626763158d030f143618859dea92c54bc28cbf2bccbf45044d12aa49039",
+    "output/araphor-fjall-migration-20261109/native-graph-validation-tests-2.log": "d50aa7b180bc27a4eb16790eba4bab6745b66b8acced117627d097d422943f97"
+  },
+  "limits": [
+    "Snapshot validation does not validate every retained historical member version.",
+    "Data historical receipts, atomic package publication and production activation remain unfinished.",
+    "No incident timing or full workspace CI run for this optional-path change."
+  ]
+}

@@ -541,3 +541,22 @@ retains the production transaction. This extraction does not qualify native
 successful publication. Read the
 [qualification](../research/results/araphor-shared-publication-2026-11-09.md)
 for the passing unchanged incident and its measurement limits.
+
+## Native Graph snapshot validation
+
+[Graph::validate](../../crates/araphor-graph/src/native/validation.rs) checks one
+snapshot through native Graph codecs and indexes. Its property pass groups row
+requirements by chunk and decodes each Arrow chunk once. Temporary chunk memory
+is released before the next chunk. Native commit cuts remain separate from
+logical revisions.
+
+[Graph::layers](../../crates/araphor-graph/src/native/mod.rs) exposes the existing
+layer records through a fallible iterator. The iterator and validator use the
+same identity decoder. The public
+[Journal iterators](../../crates/araphor-graph/src/journal.rs) expose existing
+edited identities, final rows, and cleared owners without a storage write.
+
+Read the [tests](../../crates/araphor-graph/src/native/tests/validation.rs) and
+[qualification](../research/results/araphor-native-graph-validation-2026-11-09.md)
+for the exact check scope. Data historical receipts, successful publication,
+production activation, and incident latency remain **Not done**.

@@ -55,6 +55,32 @@ pub(super) struct Head {
     pub(super) revision: u64,
 }
 
+impl Head {
+    pub(super) fn layer(key: &[u8], value: &[u8]) -> Result<(u64, Self)> {
+        if key.len() != 16 || !key.starts_with(&Key::record(b'l', &[])) {
+            return InvalidSnafu {
+                field: "native Graph layer key",
+            }
+            .fail();
+        }
+        let id = Key::number(&key[8..])?;
+        let (writer, head): (u64, Self) = Key::decode(value)?;
+        if id == 0
+            || writer == 0
+            || head.layer != id
+            || head.revision == 0
+            || head.parent == Some(0)
+            || head.parent == Some(id)
+        {
+            return InvalidSnafu {
+                field: "native Graph layer identity",
+            }
+            .fail();
+        }
+        Ok((writer, head))
+    }
+}
+
 pub(super) struct Properties;
 
 impl Properties {
@@ -204,15 +230,15 @@ impl Key {
 }
 
 #[derive(PartialEq, Serialize, Deserialize)]
-struct Fragment {
-    kind: u8,
-    scope: u64,
-    parent: u64,
-    bytes: Vec<u8>,
+pub(super) struct Fragment {
+    pub(super) kind: u8,
+    pub(super) scope: u64,
+    pub(super) parent: u64,
+    pub(super) bytes: Vec<u8>,
 }
 
 impl Fragment {
-    fn check(&self, kind: u8, scope: u64, parent: u64, bytes: &[u8]) -> Result<()> {
+    pub(super) fn check(&self, kind: u8, scope: u64, parent: u64, bytes: &[u8]) -> Result<()> {
         if self.kind != kind || self.scope != scope || self.parent != parent || self.bytes != bytes
         {
             return InvalidSnafu {
@@ -227,9 +253,9 @@ impl Fragment {
 pub(super) struct Dictionary;
 
 impl Dictionary {
-    const WIDTH: usize = u16::MAX as usize - 25;
+    pub(super) const WIDTH: usize = u16::MAX as usize - 25;
 
-    fn key(kind: u8, scope: u64, parent: u64, bytes: &[u8]) -> Vec<u8> {
+    pub(super) fn key(kind: u8, scope: u64, parent: u64, bytes: &[u8]) -> Vec<u8> {
         let mut key = b"\0graph/D".to_vec();
         key.push(kind);
         key.extend_from_slice(&scope.to_be_bytes());

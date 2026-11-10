@@ -7,6 +7,9 @@ use std::sync::Arc;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+#[path = "tests/validation.rs"]
+mod validation;
+
 struct Fixture {
     graph: Graph,
     db: fjall::SingleWriterTxDatabase,
@@ -96,7 +99,7 @@ impl Fixture {
             Arc::new(BinaryArray::from_iter_values(keys.iter().copied())),
             Arc::new(UInt8Array::from_iter_values(keys.iter().map(|_| operation))),
         ];
-        if relation == 13 {
+        if self.shapes[&relation].kind == EntityKind::Edge {
             for key in [b"source".as_slice(), b"target", b"label"] {
                 columns.push(Arc::new(BinaryArray::from_iter_values(
                     keys.iter().map(|_| key),

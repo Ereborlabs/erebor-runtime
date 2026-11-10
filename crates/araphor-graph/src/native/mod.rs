@@ -1,6 +1,7 @@
 mod installation;
 mod prepare;
 mod record;
+mod validation;
 mod view;
 mod write;
 
@@ -32,6 +33,19 @@ pub struct Declaration {
 }
 
 impl Graph {
+    /// Return stored layers as writer, layer, parent, and logical revision.
+    pub fn layers(
+        snapshot: &BranchSnapshot,
+    ) -> impl Iterator<Item = Result<(u64, u64, Option<u64>, u64)>> + '_ {
+        snapshot.prefix(Key::record(b'l', &[])).map(|entry| {
+            let (key, value) = entry.context(NativeSnafu {
+                operation: "read native Graph layers",
+            })?;
+            let (writer, head) = record::Head::layer(&key, &value)?;
+            Ok((writer, head.layer, head.parent, head.revision))
+        })
+    }
+
     pub fn new(id: u64) -> Result<Self> {
         if id == 0 {
             return InvalidSnafu {

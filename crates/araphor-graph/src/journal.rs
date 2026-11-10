@@ -471,8 +471,9 @@ impl Journal {
         self.writer
     }
 
+    /// Return edited identities and their expected base presence, when checked.
     #[cfg(any(feature = "store", feature = "native-store"))]
-    pub(crate) fn touched_keys(&self) -> impl Iterator<Item = (u64, &[u8], &[u8], Option<bool>)> {
+    pub fn touched_keys(&self) -> impl Iterator<Item = (u64, &[u8], &[u8], Option<bool>)> {
         self.edits.iter().map(|(identity, edit)| {
             (
                 identity.relation,
@@ -483,16 +484,18 @@ impl Journal {
         })
     }
 
+    /// Return each surviving row as a relation, borrowed batch, and row index.
     #[cfg(any(feature = "store", feature = "native-store"))]
-    pub(crate) fn final_rows(&self) -> impl Iterator<Item = (u64, &Arc<RecordBatch>, usize)> {
+    pub fn final_rows(&self) -> impl Iterator<Item = (u64, &Arc<RecordBatch>, usize)> {
         self.edits.iter().filter_map(|(identity, edit)| {
             (edit.sequence > self.barrier(&identity.owner) && edit.action != Write::Remove)
                 .then_some((identity.relation, &edit.batch, edit.row))
         })
     }
 
+    /// Return cleared owners. `None` means that the whole writer was cleared.
     #[cfg(any(feature = "store", feature = "native-store"))]
-    pub(crate) fn clear_owners(&self) -> impl Iterator<Item = Option<&[u8]>> {
+    pub fn clear_owners(&self) -> impl Iterator<Item = Option<&[u8]>> {
         (self.cleared != 0).then_some(None).into_iter().chain(
             self.owners
                 .iter()
