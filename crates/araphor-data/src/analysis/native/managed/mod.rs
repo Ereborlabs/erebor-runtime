@@ -132,7 +132,19 @@ impl VersionRecord {
         head: u64,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Self> {
-        let bytes = Records::payload(&Self::key(id, generation), get)?
+        Self::read_charged(id, tenant, name, generation, head, get, &mut |_| Ok(()))
+    }
+
+    fn read_charged(
+        id: u64,
+        tenant: [u8; 16],
+        name: &str,
+        generation: u64,
+        head: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Self> {
+        let bytes = Records::charged_payload(&Self::key(id, generation), get, charge)?
             .ok_or_else(|| Code::Missing.error("managed version"))?;
         let row: Self = Records::decode(&bytes)?;
         row.check(tenant, name, generation, head)

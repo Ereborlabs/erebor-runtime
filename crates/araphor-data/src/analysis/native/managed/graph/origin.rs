@@ -11,7 +11,7 @@ use crate::analysis::{
 use crate::{PackageErrorCodeV1 as Code, PackageGrantV1, Result};
 
 #[derive(Deserialize, PartialEq, Serialize)]
-pub(in crate::analysis::native::managed) struct GraphOrigin {
+pub(in crate::analysis::native) struct GraphOrigin {
     pub graph: u64,
     pub writer: u64,
     pub layer: u64,
@@ -48,14 +48,25 @@ impl GraphOrigin {
 }
 
 impl DataView {
-    pub(in crate::analysis::native::managed) fn graph_origin(
+    pub(in crate::analysis::native) fn graph_origin(
         &self,
         writer: u64,
         revision: u64,
     ) -> Result<GraphOrigin> {
-        let bytes = Records::payload(&GraphOrigin::key(writer, revision), |key| {
-            Records::read(key, &self.snapshot)
-        })?
+        self.graph_origin_charged(writer, revision, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn graph_origin_charged(
+        &self,
+        writer: u64,
+        revision: u64,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<GraphOrigin> {
+        let bytes = Records::charged_payload(
+            &GraphOrigin::key(writer, revision),
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?
         .ok_or_else(|| Code::Missing.error("managed Graph origin"))?;
         let origin: GraphOrigin = Records::decode(&bytes)?;
         origin.check(writer, revision, self.metadata_revision)?;

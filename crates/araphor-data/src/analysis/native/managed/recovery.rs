@@ -10,7 +10,7 @@ use crate::{
 };
 
 impl DataView {
-    pub(in crate::analysis::native) fn validate_managed(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_managed(&mut self) -> Result<()> {
         let control = AnalysisReadControl::default();
         let mut owners = BTreeSet::new();
         let mut graphs = BTreeMap::new();
@@ -126,6 +126,9 @@ impl DataView {
                     }
                     .build()
                 })?;
+            if graphs.contains_key(&id) {
+                self.graphs.insert_mut((row.tenant, id), ());
+            }
             if instance.progress != 0 {
                 self.managed_source_at(&instance, &control)?
                     .ok_or_else(|| {

@@ -71,6 +71,13 @@ freshness after later appends and reopen. Seventy-three focused Data tests pass.
 Read the [result-read qualification](results/araphor-native-result-reads-2026-11-09.md).
 Production provider binding, cutover, and both performance targets remain
 **Not done**.
+Native finding and manifest tables now use saved publication cuts, visible
+producer authority, and stable canonical tokens. A shared tenant index avoids
+foreign publication reads without a durable format change. Seventy-four focused
+Data cases pass. Read the
+[finding-read qualification](results/araphor-native-finding-reads-2026-11-09.md).
+Production provider binding, original-log routing, notifications, cutover, and
+both performance targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

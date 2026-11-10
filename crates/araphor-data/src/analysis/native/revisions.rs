@@ -8,17 +8,6 @@ impl NativeStore {
     fn relation_key(name: &str) -> Vec<u8> {
         [b"\0data/relation/".as_slice(), name.as_bytes()].concat()
     }
-
-    pub(super) fn relation_revision(snapshot: &fjall::BranchSnapshot, name: &str) -> Result<u64> {
-        snapshot
-            .get(Self::relation_key(name))
-            .context(NativeStorageSnafu {
-                operation: "read relation revision",
-            })?
-            .map(|bytes| Self::number(&bytes))
-            .transpose()
-            .map(|revision| revision.unwrap_or(0))
-    }
 }
 
 impl DataWrite<'_> {

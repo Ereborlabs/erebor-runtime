@@ -43,8 +43,15 @@ impl NativeStore {
         }
         self.check_captured_progress(&reference.0.capture)?;
         let view = self.read_at(selected.commit_revision)?;
-        let (mut page, mut state) =
-            self.read_tables_with(&view, selection, read, limits, control, owners, |output| {
+        let (mut page, mut state) = self.read_tables_with(
+            &view,
+            selection,
+            &scope,
+            read,
+            limits,
+            control,
+            owners,
+            |output| {
                 output.meta = selected;
                 let mut state = ManagedCapture::from(reference);
                 if read.now == reference.request().time_utc_ns {
@@ -99,7 +106,8 @@ impl NativeStore {
                 }
                 state.bytes = output.input_bytes;
                 Ok(state)
-            })?;
+            },
+        )?;
         state.seal_source(&mut page, control)?;
         Ok(ManagedPage { page, state })
     }
@@ -131,10 +139,16 @@ impl NativeStore {
         read.check_scope(selection, &scope)?;
         read.check_managed_changes(selection)?;
         let view = self.view()?;
-        let (mut page, mut state) =
-            self.read_tables_with(&view, selection, read, limits, control, owners, |output| {
-                view.capture_managed(managed, &read, selection, output, owners, control)
-            })?;
+        let (mut page, mut state) = self.read_tables_with(
+            &view,
+            selection,
+            &scope,
+            read,
+            limits,
+            control,
+            owners,
+            |output| view.capture_managed(managed, &read, selection, output, owners, control),
+        )?;
         state.seal(selection, &page.extraction);
         state.seal_source(&mut page, control)?;
         Ok(ManagedPage { page, state })

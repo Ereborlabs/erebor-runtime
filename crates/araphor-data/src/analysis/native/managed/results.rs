@@ -138,7 +138,7 @@ impl DataView {
         .ok_or_else(|| Code::Missing.error("managed result"))?;
         let (instance, attempt) = result.owner();
         let owner = self
-            .managed_attempt(tenant, instance, attempt, control)?
+            .managed_attempt_charged(tenant, instance, attempt, control, charge)?
             .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
         result.check(&owner.0, &owner.1.spec)?;
         control.check()?;

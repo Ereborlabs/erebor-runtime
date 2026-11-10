@@ -61,6 +61,7 @@ pub struct DataView {
     schema_version: u32,
     recovery_epoch: u64,
     raw: RawIndex,
+    graphs: rpds::RedBlackTreeMapSync<([u8; 16], u64), ()>,
 }
 
 pub struct DataWrite<'a> {
@@ -68,6 +69,7 @@ pub struct DataWrite<'a> {
     revision: u64,
     transaction: BranchWriteTransaction<'a>,
     raw: RawIndex,
+    graphs: rpds::RedBlackTreeMapSync<([u8; 16], u64), ()>,
     metadata_revision: u64,
     dirty: bool,
     verified: super::context::VerifiedPackages,
@@ -284,6 +286,7 @@ impl NativeStore {
             schema_version: schema as u32,
             recovery_epoch,
             raw: RawIndex::default(),
+            graphs: Default::default(),
         })
     }
 
@@ -388,6 +391,7 @@ impl NativeStore {
         }
         view.revision = revision;
         view.raw = current.raw.clone();
+        view.graphs = current.graphs.clone();
         Ok(view)
     }
 
@@ -426,6 +430,7 @@ impl NativeStore {
             revision,
             transaction,
             raw: view.raw.clone(),
+            graphs: view.graphs.clone(),
             metadata_revision: view.metadata_revision,
             dirty: false,
             verified: super::context::VerifiedPackages::default(),
@@ -504,6 +509,7 @@ impl<'a> DataWrite<'a> {
                 .fail();
             }
             view.raw = self.raw;
+            view.graphs = self.graphs;
             self.store
                 .raw
                 .lock()

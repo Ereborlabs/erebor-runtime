@@ -256,6 +256,7 @@ impl NativeStore {
             schema_version: view.schema_version,
             recovery_epoch: view.recovery_epoch,
             raw: raw.index.clone(),
+            graphs: view.graphs.clone(),
         };
         let mut published = self.published.write().map_err(|_| {
             self.ready

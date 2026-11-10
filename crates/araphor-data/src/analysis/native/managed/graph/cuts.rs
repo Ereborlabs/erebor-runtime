@@ -21,13 +21,13 @@ pub struct GraphPublication {
 
 impl GraphPublication {
     pub(super) const PREFIX: &'static [u8] = b"\0data/graph/publication/";
-    pub(super) const HEAD: &'static [u8] = b"\0data/graph/head/";
+    pub(in crate::analysis::native) const HEAD: &'static [u8] = b"\0data/graph/head/";
 
     pub(super) fn key(prefix: &[u8], id: u64) -> Vec<u8> {
         [prefix, &id.to_be_bytes()].concat()
     }
 
-    pub(super) fn read(
+    pub(in crate::analysis::native) fn read(
         id: u64,
         head: u64,
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
@@ -69,27 +69,53 @@ impl DataView {
         reference: &PackageResultRefV1,
         control: &AnalysisReadControl,
     ) -> Result<Option<GraphPublication>> {
-        let (id, result, owner) =
-            self.result_owner(tenant, &reference.result_id, control, &mut |_| Ok(()))?;
-        if reference.commit_revision != result.revision
-            || !matches!(result.body, ResultBody::Selected(_))
+        self.managed_graph_publication_charged(tenant, reference, control, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn managed_graph_publication_charged(
+        &self,
+        tenant: [u8; 16],
+        reference: &PackageResultRefV1,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<GraphPublication>> {
+        let (publication, owner) =
+            self.managed_graph_owner(tenant, &reference.result_id, control, charge)?;
+        if owner
+            .receipt()
+            .is_none_or(|receipt| receipt.selected != *reference)
         {
+            return Err(Code::Invalid.error("managed Graph selected reference"));
+        }
+        Ok(publication)
+    }
+
+    pub(in crate::analysis::native) fn managed_graph_owner(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<(Option<GraphPublication>, crate::ManagedAttempt)> {
+        let (id, result, owner) = self.result_owner(tenant, name, control, charge)?;
+        if !matches!(result.body, ResultBody::Selected(_)) {
             return Err(Code::Invalid.error("managed Graph selected reference"));
         }
         let publication = GraphPublication::read(
             id,
             self.metadata_revision,
             |key| Records::read(key, &self.snapshot),
-            &mut |_| Ok(()),
+            charge,
         )?;
         if publication.as_ref().is_some_and(|publication| {
             publication.tenant != tenant
-                || publication.reference != *reference
+                || publication.reference.result_id != name
+                || publication.reference.commit_revision != result.revision
                 || publication.instance != owner.instance().spec.id
         }) {
             return Err(Code::Invalid.error("managed Graph publication owner"));
         }
-        Ok(publication)
+        Ok((publication, owner))
     }
 }
 

@@ -536,7 +536,7 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             &AnalysisReadControl::default()
         )
         .is_err());
-    let unsupported = BTreeMap::from([("findings".to_owned(), None)]);
+    let unsupported = BTreeMap::from([("notifications".to_owned(), None)]);
     assert!(matches!(
         pair.native.read_tables(
             &selection,

@@ -13,7 +13,7 @@ use snafu::ResultExt as _;
 use super::ManagedGraphJournal;
 use crate::analysis::{
     managed::PreparedMemory,
-    native::{DataWrite, ManagedCommit, NativeStore},
+    native::{DataView, DataWrite, ManagedCommit, NativeStore},
 };
 use crate::{ManagedReceipt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result};
 
@@ -138,6 +138,36 @@ impl Index {
 }
 
 use super::super::Records;
+
+impl DataView {
+    pub(in crate::analysis::native) fn graph_finding_value(
+        &self,
+        graph: u64,
+        member: &Member,
+    ) -> Result<u64> {
+        let id = Records::find(
+            &Index::member(
+                graph,
+                member.writer,
+                member.relation,
+                &member.owner,
+                &member.key,
+            )?,
+            |key| Records::read(key, &self.snapshot),
+        )?
+        .ok_or_else(|| Code::Missing.error("Graph finding member identity"))?;
+        let property = Records::find(
+            &rmp_serde::to_vec(&("graph-property", id, member.revision))
+                .context(crate::ManagedEncodingSnafu)?,
+            |key| Records::read(key, &self.snapshot),
+        )?
+        .ok_or_else(|| Code::Missing.error("Graph finding property identity"))?;
+        Records::read(&Index::key(Index::CANONICAL, &[property]), &self.snapshot)?
+            .map(|bytes| NativeStore::number(&bytes))
+            .transpose()?
+            .ok_or_else(|| Code::Missing.error("Graph finding canonical value"))
+    }
+}
 
 struct Value {
     batch: sdk::RecordBatch,

@@ -29,12 +29,23 @@ impl Attempts {
         tenant: [u8; 16],
         instance: &str,
         name: &str,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+    ) -> Result<Option<(u64, Attempt)>> {
+        Self::read_charged(tenant, instance, name, get, &mut |_| Ok(()))
+    }
+
+    fn read_charged(
+        tenant: [u8; 16],
+        instance: &str,
+        name: &str,
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Option<(u64, Attempt)>> {
         let Some(id) = Records::find(&Self::identity(tenant, instance, name)?, &mut get)? else {
             return Ok(None);
         };
-        let Some(bytes) = Records::payload(&Records::key(b'a', id), &mut get)? else {
+        let Some(bytes) = Records::charged_payload(&Records::key(b'a', id), &mut get, charge)?
+        else {
             return Ok(None);
         };
         let attempt: Attempt = Records::decode(&bytes)?;
@@ -85,15 +96,43 @@ impl DataView {
         id: &str,
         control: &AnalysisReadControl,
     ) -> Result<Option<ManagedAttempt>> {
+        self.managed_attempt_charged(tenant, instance, id, control, &mut |_| Ok(()))
+    }
+
+    pub(super) fn managed_attempt_charged(
+        &self,
+        tenant: [u8; 16],
+        instance: &str,
+        id: &str,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<ManagedAttempt>> {
         control.check()?;
-        let Some((_, attempt)) = Attempts::read(tenant, instance, id, |key| {
-            Records::read(key, &self.snapshot)
-        })?
+        let Some((_, attempt)) = Attempts::read_charged(
+            tenant,
+            instance,
+            id,
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?
         else {
             return Ok(None);
         };
+        let owner = Records::find(&InstanceRecord::identity(tenant, instance)?, |key| {
+            Records::read(key, &self.snapshot)
+        })?
+        .ok_or_else(|| Code::Missing.error("managed version"))?;
         let instance = ManagedInstance {
-            spec: self.managed_version(tenant, instance, attempt.capture.generation, control)?,
+            spec: super::VersionRecord::read_charged(
+                owner,
+                tenant,
+                instance,
+                attempt.capture.generation,
+                self.metadata_revision,
+                |key| Records::read(key, &self.snapshot),
+                charge,
+            )?
+            .spec,
             grant: attempt.capture.grant.clone(),
             generation: attempt.capture.generation,
             progress: attempt.capture.progress,

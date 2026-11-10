@@ -133,7 +133,7 @@ macro_rules! graph_row {
 }
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn native_finding(
+    pub(in crate::analysis) fn native_finding(
         &mut self,
         result: &str,
         revision: u64,
@@ -175,7 +175,7 @@ impl Capture<'_> {
         Ok(true)
     }
 
-    pub(in crate::analysis::extraction) fn definition_manifest(
+    pub(in crate::analysis) fn definition_manifest(
         &mut self,
         tenant: [u8; 16],
         result: &str,

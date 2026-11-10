@@ -12,6 +12,7 @@ use crate::{
 };
 
 mod context;
+mod graph;
 mod source;
 
 impl NativeStore {
@@ -35,14 +36,47 @@ impl NativeStore {
         control: &AnalysisReadControl,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_with(view, selection, read, limits, control, owners, |_| Ok(()))
-            .map(|(page, ())| page)
+        self.read_tables_with(
+            view,
+            selection,
+            selection,
+            read,
+            limits,
+            control,
+            owners,
+            |_| Ok(()),
+        )
+        .map(|(page, ())| page)
+    }
+
+    pub fn read_tables_filtered(
+        &self,
+        selection: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        owners: Option<&BTreeSet<String>>,
+    ) -> Result<AnalysisPositionPageV1> {
+        read.check_scope(selection, scope)?;
+        self.read_tables_with(
+            self.view()?.as_ref(),
+            selection,
+            scope,
+            read,
+            limits,
+            control,
+            owners,
+            |_| Ok(()),
+        )
+        .map(|(page, ())| page)
     }
 
     pub(in crate::analysis::native) fn read_tables_with<T>(
         &self,
         view: &DataView,
         selection: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
         read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
@@ -71,6 +105,8 @@ impl NativeStore {
                     | "targets"
                     | "catalog"
                     | "trace_recipes"
+                    | "findings"
+                    | "graph_manifest"
             ) {
                 return Err(Code::Unsupported.error("native table owner"));
             }
@@ -79,7 +115,6 @@ impl NativeStore {
         if !projected.results.is_empty()
             || !projected.traces.is_empty()
             || !projected.profiles().is_empty()
-            || !projected.graphs().is_empty()
             || projected.graph_traversal().is_some()
             || !projected.notification_keys().is_empty()
         {
@@ -102,6 +137,7 @@ impl NativeStore {
         }
         let prepared = prepare(&mut output)?;
         self.select_sources(view, &mut selected, &mut output, control)?;
+        self.select_graphs(view, &mut selected, &mut output, control)?;
         limits.check_keys(&selected)?;
         let mode = match read.mode {
             AnalysisReadModeV1::Complete if !read.reads_raw() => AnalysisReadModeV1::Metadata,
@@ -167,6 +203,15 @@ impl NativeStore {
             &read,
             owners,
             &mut capture,
+        )?;
+        self.extract_graphs(
+            view,
+            &selected,
+            scope,
+            &read,
+            &mut output,
+            &mut capture,
+            control,
         )?;
         let through = if matches!(mode, AnalysisReadModeV1::Changes(_)) {
             end

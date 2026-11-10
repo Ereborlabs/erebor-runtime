@@ -644,3 +644,28 @@ freshness heads do not replace original-log subscription positions.
 Read the [qualification](../research/results/araphor-native-result-reads-2026-11-09.md)
 for the 73 passing focused cases and the exact scope. Production provider
 binding, cutover, and incident speedup remain **Not done**.
+
+## Native finding and manifest tables
+
+[extraction/graph.rs](../../crates/araphor-data/src/analysis/native/extraction/graph.rs)
+resolves the selected publication and each saved writer cut. It uses native
+owned-member scans. It does not scan retained property history or use current
+membership indexes for a historical publication. Each opening producer supplies
+scope and restriction. The canonical token supplies only value identity.
+
+The tenant-to-Graph routing index shares a persistent root with
+[DataView](../../crates/araphor-data/src/analysis/native/mod.rs). Data stages it
+with admission and publishes it after commit. Raw-only publication carries the
+same root. Recovery builds it during the existing validated ownership scan.
+Historical reads can use the current candidate index because the captured
+snapshot supplies the actual head. Foreign publication bodies are not loaded.
+
+Charged readers pass the same extraction budget through result, attempt,
+retained-version, mapping, publication, and origin records before decoding.
+The existing `native_finding` and `definition_manifest` builders retain their
+Arrow shapes and accounting. Full authority scope stays separate from projected
+selection; the existing scope check is unchanged.
+
+Read the [qualification](../research/results/araphor-native-finding-reads-2026-11-09.md)
+for the 74 passing focused cases. Production provider binding, original-log
+routing, notification batches, cutover, and incident speedup remain **Not done**.

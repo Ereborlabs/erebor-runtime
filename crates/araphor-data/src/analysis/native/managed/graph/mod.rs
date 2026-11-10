@@ -48,7 +48,15 @@ impl ManagedGraph {
         id: u64,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Option<Self>> {
-        let Some(bytes) = Records::payload(&Records::key(b'G', id), get)? else {
+        Self::read_charged(id, get, &mut |_| Ok(()))
+    }
+
+    fn read_charged(
+        id: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<Self>> {
+        let Some(bytes) = Records::charged_payload(&Records::key(b'G', id), get, charge)? else {
             return Ok(None);
         };
         let row: Self = Records::decode(&bytes)?;
@@ -200,6 +208,7 @@ impl DataWrite<'_> {
             Records::key(b'G', id),
             Records::encode(&graph)?,
         );
+        self.graphs.insert_mut((spec.tenant, id), ());
         self.dirty = true;
         Ok(())
     }
@@ -244,6 +253,16 @@ impl DataView {
         name: &str,
         control: &AnalysisReadControl,
     ) -> Result<Option<ManagedGraph>> {
+        self.managed_graph_charged(tenant, name, control, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn managed_graph_charged(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<ManagedGraph>> {
         control.check()?;
         let Some(id) = Records::find(&InstanceRecord::identity(tenant, name)?, |key| {
             Records::read(key, &self.snapshot)
@@ -251,7 +270,8 @@ impl DataView {
         else {
             return Ok(None);
         };
-        let graph = ManagedGraph::read(id, |key| Records::read(key, &self.snapshot))?;
+        let graph =
+            ManagedGraph::read_charged(id, |key| Records::read(key, &self.snapshot), charge)?;
         control.check()?;
         Ok(graph)
     }
