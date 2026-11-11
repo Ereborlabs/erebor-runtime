@@ -8,6 +8,8 @@ use sdk::arrow_array::{StringArray, UInt64Array};
 
 #[path = "storage/calls.rs"]
 mod calls;
+#[path = "storage/terminal.rs"]
+mod terminal;
 
 struct StorageFixture {
     instance: ManagedInstance,

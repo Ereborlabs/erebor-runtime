@@ -1,9 +1,13 @@
 use snafu::ResultExt as _;
+use std::collections::{BTreeMap, VecDeque};
 
 use super::super::{DataWrite, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Failure, FailureOrigin};
-use crate :: { AnalysisConflictSnafu , AnalysisReadControl , ManagedAttempt , ManagedExit , ManagedTerminal , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
+use crate::{
+    AnalysisConflictSnafu, AnalysisReadControl, ManagedAttempt, ManagedExit, ManagedTerminal,
+    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
+};
 
 impl Attempts {
     pub(super) fn ended(owner: u64, revision: u64) -> Vec<u8> {
@@ -102,7 +106,7 @@ impl NativeStore {
     pub(in crate::analysis::native) fn recover_managed_startup(&self) -> Result<()> {
         let view = self.view()?;
         let control = AnalysisReadControl::default();
-        let mut pending = Vec::new();
+        let mut pending = BTreeMap::<u64, VecDeque<_>>::new();
         for row in view.snapshot.prefix(b"\0data/p") {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "read interrupted managed attempts",
@@ -126,17 +130,19 @@ impl NativeStore {
             if attempt.request.frontier.is_some()
                 && attempt.capture.generation == instance.generation
             {
-                pending.push((owner, id, attempt));
+                pending.entry(owner).or_default().push_back((id, attempt));
             }
         }
-        if pending.is_empty() {
-            return Ok(());
+        while !pending.is_empty() {
+            let mut tx = self.write_access()?;
+            for (owner, queue) in &mut pending {
+                if let Some((id, mut attempt)) = queue.pop_front() {
+                    tx.end_attempt(*owner, id, &mut attempt, ManagedExit::Cancelled, false)?;
+                }
+            }
+            tx.commit([])?;
+            pending.retain(|_, queue| !queue.is_empty());
         }
-        let mut tx = self.write_access()?;
-        for (owner, id, mut attempt) in pending {
-            tx.end_attempt(owner, id, &mut attempt, ManagedExit::Cancelled, false)?;
-        }
-        tx.commit([])?;
         Ok(())
     }
 }

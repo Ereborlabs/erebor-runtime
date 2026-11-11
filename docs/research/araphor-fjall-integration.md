@@ -74,11 +74,10 @@ fixture ports, finite-history collection, and complete qualification remain open
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Correct startup settlement of simultaneous promoted attempts for one owner.
-  The current single transaction can overwrite its terminal outcome index.
-  Keep one attempt per owner in each transaction and preserve batching across
-  different owners. Add the native candidate-promotion proof before removal
-  of the old terminal family. This correction is not implemented.
+- Complete the native port of the old terminal family. The same-owner startup
+  outcome correction and its candidate-promotion regression are implemented.
+  The other claim, failure, generation, corruption, and restore cases still
+  need their complete native replacement before removal of that family.
 - Resolve the remaining Query contracts. The current complete run has 25
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +87,25 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Startup now settles at most one eligible attempt per owner in each Data
+  transaction. It groups the existing pending scan by owner, preserves queue
+  order, and batches different owners together. The terminal writer and its
+  guards are unchanged. No key, index, or physical format changes.
+  The native candidate-promotion regression failed before this change: two
+  attempts shared one terminal revision and overwrote an outcome entry.
+  The corrected startup assigns successive revisions to those attempts.
+  The case checks exact unchanged attempt bytes outside the terminal field,
+  retained pre-startup attempt and outcome views, both checkpoints, successful
+  history, lifecycle, frontier, guarded terminal retries, and a second reopen.
+  The complete focused run passes 133 managed, 18 raw, six lifecycle, and eight
+  backup cases. The existing different-owner case still settles in one commit.
+  Read `native-promoted-startup-before.log`, `native-startup-waves-contracts.log`,
+  `native-startup-waves-final.log`, and `native-startup-waves-exact.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for same-owner startup settlement**. The complete terminal
+  fixture port, complete migration qualification, and incident performance
+  remain **Not done**. No new incident timing is measured.
 
 - Managed Query fixtures now use real native admission, commits, and durable
   receipts. They no longer fabricate an execution acknowledgement. Each offer

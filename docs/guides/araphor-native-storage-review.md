@@ -4,6 +4,17 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [startup settlement](../../crates/araphor-data/src/analysis/native/managed/terminal.rs)
+with the [candidate-promotion case](../../crates/araphor-data/tests/native_managed/storage/terminal.rs).
+The outcome index has one entry for each owner and terminal revision. Startup
+uses one attempt per owner in each transaction, with the original pending-scan
+order. Different owners share a transaction. Two promoted attempts for one
+owner get successive revisions. The existing terminal writer and eligibility
+checks remain. No format or index changes. The regression preserves exact
+immutable attempt bytes and the historical pending image. It also preserves
+successful results, checkpoints, lifecycle, and input frontier. A second reopen
+does not write another revision. The other old terminal cases remain open.
+
 Read [Graph conversion](../../crates/araphor-analysis/src/graph/native/commit.rs)
 with the [managed sink](../../crates/araphor-analysis/src/instance/sink.rs)
 and [native publication](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs).
