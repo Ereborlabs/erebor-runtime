@@ -21,7 +21,6 @@ use crate::{
 mod changes;
 mod destination;
 mod execution;
-mod guards;
 mod health;
 mod input;
 mod journal;

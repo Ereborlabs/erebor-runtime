@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-
-
 use super::*;
 use crate::{PackageBundle, PackageRefV1};
 
@@ -76,8 +74,6 @@ impl VerifiedPackages {
         Ok(())
     }
 
-    
-
     pub(in crate::analysis) fn seed(&self) -> Self {
         Self {
             roots: self.roots.clone(),
@@ -145,36 +141,86 @@ impl VerifiedPackages {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::AnalysisStore;
-    use crate::analysis::PackageRevisionV1;
-    use crate::PackageImplementationV1;
-    use crate::{PackageArtifactV1, PackageBundle, PackageBundleV1};
-    use araphor_analysis_builtins::{components, graph::Detector};
-    
+    use crate::analysis::{native::DataView, AnalysisStore, PackageRevisionV1};
+    use crate::{AnalysisReadControl, PackageArtifactV1, PackageBundleV1, PackageImplementationV1};
+    use araphor_analysis_builtins::{causal::Causal, components, graph::Detector};
 
-    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+    type Stored = (PackageRevisionV1, u64, u64);
+
+    fn artifact(descriptor: araphor_analysis_sdk::Package, component: &[u8]) -> PackageArtifactV1 {
+        let exports = descriptor
+            .exports
+            .iter()
+            .map(|model| model.name.clone())
+            .collect();
+        PackageArtifactV1 {
+            descriptor,
+            implementations: vec![PackageImplementationV1::Wasm {
+                exports,
+                artifact: component.to_vec(),
+            }],
+            fixtures: Vec::new(),
+        }
+    }
+
+    fn record(view: &DataView, package: &PackageRefV1) -> TestResult<(Vec<u8>, Stored)> {
+        for entry in view.snapshot().prefix(b"\0data/P") {
+            let (key, bytes) = entry?;
+            if key.len() != 15 {
+                continue;
+            }
+            assert_eq!(bytes[0], 0);
+            let row: Stored = rmp_serde::from_slice(&bytes[1..])?;
+            if row.0.tenant_id == [1; 16]
+                && row.0.package_id == package.package_id
+                && row.0.revision == package.revision
+            {
+                assert!(row.0.artifact.is_empty());
+                return Ok((key.to_vec(), row));
+            }
+        }
+        Err("package record absent".into())
+    }
+
+    fn replace(store: &AnalysisStore, key: &[u8], row: &Stored, body: Option<&[u8]>) -> TestResult {
+        let mut writer = store.write()?;
+        writer
+            .native()
+            .insert(key, [vec![0], rmp_serde::to_vec(row)?].concat());
+        if let Some(body) = body {
+            assert_eq!(row.2, body.len() as u64);
+            writer.native().insert(
+                [b"\0data/@package-body/".as_slice(), &key[7..]].concat(),
+                [vec![0], body.to_vec()].concat(),
+            );
+        }
+        writer.commit([])?;
+        Ok(())
+    }
 
     #[test]
     fn verified_package_rechecks_current_bytes_and_export_identity() -> TestResult {
-        for component in [components::PROCESS, components::CREDENTIALS] {
+        for (descriptor, component) in [
+            (Causal::descriptor(), components::CAUSAL),
+            (Detector::Credentials.descriptor(), components::CREDENTIALS),
+        ] {
             let directory = tempfile::tempdir()?;
-            let root = directory.path().join("store");
-            let store = AnalysisStore::open(&root)?;
-            let artifact = PackageArtifactV1 {
-                descriptor: Detector::Process.descriptor(),
-                implementations: vec![PackageImplementationV1::Wasm {
-                    exports: vec!["detect".into()],
-                    artifact: component.to_vec(),
-                }],
-                fixtures: Vec::new(),
-            };
+            let store = AnalysisStore::open(directory.path().join("store"))?;
+            let artifact = artifact(descriptor, component);
             let package = artifact.reference();
-            let output = artifact.descriptor.exports[0].outputs[0].name.clone();
+            let output = artifact
+                .descriptor
+                .exports
+                .iter()
+                .find(|model| model.name == "detect")
+                .and_then(|model| model.outputs.first())
+                .ok_or("detect output")?
+                .name
+                .clone();
             let identity = artifact.implementations[0]
                 .identity()?
                 .ok_or("Wasm identity")?;
@@ -191,27 +237,33 @@ mod tests {
                 &bundle, [1; 16], &package, "detect", &output,
             )?;
             store.commit_context(&context)?;
-            let mut writer = store.writer()?;
+            let control = AnalysisReadControl::default();
+            let held = store.view()?;
+            let check = |view: &DataView, verified: &mut VerifiedPackages| {
+                verified.check_context(&context, |tenant, package, revision| {
+                    view.package_revision(tenant, package, revision, &control)
+                })
+            };
             let mut on_demand = VerifiedPackages::default();
-            store.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut on_demand)?;
-            let retained = AnalysisStore::package_from(
-                writer.get_mut()?,
-                [1; 16],
-                &package.package_id,
-                &package.revision,
-            )?
-            .ok_or("verified package")?
-            .decode_artifact()?;
+            check(&held, &mut on_demand)?;
+            let original = held
+                .package_revision([1; 16], &package.package_id, &package.revision, &control)?
+                .ok_or("verified package")?;
+            let retained = original.decode_artifact()?;
             assert_eq!(
                 retained.implementation("detect")?.identity()?,
                 Some(identity)
             );
             let mut warm = VerifiedPackages::default();
-            store.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut warm)?;
+            check(&held, &mut warm)?;
+            assert_eq!(
+                held.context(&context.key)?
+                    .ok_or("verified package context")?
+                    .0,
+                context
+            );
             let mut verified = VerifiedPackages::default();
-            store
-                .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut verified)?
-                .ok_or("verified package context")?;
+            check(&held, &mut verified)?;
             assert!(verified.revisions.contains(&([1; 16], package.clone())));
             let retained_proof = verified.retain([1; 16], &BTreeSet::new());
             let active = BTreeSet::from([&package]);
@@ -222,9 +274,11 @@ mod tests {
             assert!(idle.seed().retain([2; 16], &active).roots.is_empty());
             let mut next = idle.seed();
             assert!(next.revisions.is_empty());
-            store
-                .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut next)?
-                .ok_or("warm package context")?;
+            assert_eq!(
+                held.context(&context.key)?.ok_or("warm package context")?.0,
+                context
+            );
+            check(&held, &mut next)?;
             let key = ([1; 16], package.clone());
             assert!(Arc::ptr_eq(&retained_proof.roots[&key], &next.roots[&key]));
             assert!(idle
@@ -232,82 +286,69 @@ mod tests {
                 .retain([1; 16], &BTreeSet::new())
                 .roots
                 .is_empty());
-            let original = AnalysisStore::package_from(
-                writer.get_mut()?,
-                [1; 16],
-                &package.package_id,
-                &package.revision,
-            )?
-            .ok_or("current package row")?;
-            for (field, changed, restored) in [
-                (
-                    "descriptor",
-                    duckdb::types::Value::Blob(b"changed".to_vec()),
-                    duckdb::types::Value::Blob(original.descriptor.clone()),
-                ),
-                (
-                    "dependencies",
-                    duckdb::types::Value::Text(serde_json::to_string(&vec![
-                        crate::analysis::PackageRevisionRefV1 {
-                            package_id: "missing".into(),
-                            revision: "r1".into(),
-                        },
-                    ])?),
-                    duckdb::types::Value::Text(serde_json::to_string(&original.dependencies)?),
-                ),
-            ] {
-                writer.get_mut()?.execute(
-                    &format!("UPDATE package_revisions SET {field} = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?"),
-                    params![changed, [1u8; 16].as_slice(), package.package_id, package.revision],
-                )?;
-                assert!(store
-                    .read_context_verified_from(
-                        writer.get_mut()?,
-                        &root,
-                        &context.key,
-                        &mut retained_proof.seed()
-                    )
-                    .is_err());
-                writer.get_mut()?.execute(
-                    &format!("UPDATE package_revisions SET {field} = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?"),
-                    params![restored, [1u8; 16].as_slice(), package.package_id, package.revision],
-                )?;
+            let (key, original_row) = record(&held, &package)?;
+            for field in ["descriptor", "dependencies"] {
+                let mut changed = original_row.clone();
+                if field == "descriptor" {
+                    changed.0.descriptor = b"changed".to_vec();
+                } else {
+                    changed.0.dependencies = vec![crate::analysis::PackageRevisionRefV1 {
+                        package_id: "missing".into(),
+                        revision: "r1".into(),
+                    }];
+                }
+                replace(&store, &key, &changed, None)?;
+                let current = store.view()?;
+                assert!(check(&current, &mut retained_proof.seed()).is_err());
+                assert!(current.context(&context.key).is_err());
+                check(&held, &mut retained_proof.seed())?;
+                assert_eq!(
+                    held.package_revision(
+                        [1; 16],
+                        &package.package_id,
+                        &package.revision,
+                        &control
+                    )?,
+                    Some(original.clone())
+                );
+                replace(&store, &key, &original_row, None)?;
+                let repaired = store.view()?;
+                check(&repaired, &mut retained_proof.seed())?;
+                assert_eq!(
+                    repaired
+                        .context(&context.key)?
+                        .ok_or("repaired package context")?
+                        .0,
+                    context
+                );
             }
             let mut ambiguous = retained;
             ambiguous
                 .implementations
                 .push(ambiguous.implementations[0].clone());
-            writer.get_mut()?.execute(
-                "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?",
-                params![ambiguous.encode()?, [1u8; 16].as_slice(), package.package_id, package.revision],
-            )?;
-            assert!(store
-                .read_context_verified_from(
-                    writer.get_mut()?,
-                    &root,
-                    &context.key,
-                    &mut retained_proof.seed()
-                )
-                .is_err());
-            assert!(store
-                .verify_package_revision(
-                    writer.get_mut()?,
-                    [1; 16],
-                    &package,
-                    &mut VerifiedPackages::default(),
-                )
-                .is_err());
-            writer.get_mut()?.execute(
-                "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?",
-                params![b"changed".as_slice(), [1u8; 16].as_slice(), package.package_id, package.revision],
-            )?;
-            let mut fresh = VerifiedPackages::default();
-            assert!(store
-                .verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut fresh)
-                .is_err());
-            assert!(store
-                .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut fresh)
-                .is_err());
+            for body in [ambiguous.encode()?, b"changed".to_vec()] {
+                let mut changed = original_row.clone();
+                changed.2 = body.len() as u64;
+                replace(&store, &key, &changed, Some(&body))?;
+                let current = store.view()?;
+                assert_eq!(
+                    current
+                        .package_revision(
+                            [1; 16],
+                            &package.package_id,
+                            &package.revision,
+                            &control
+                        )?
+                        .ok_or("changed package")?
+                        .artifact,
+                    body
+                );
+                assert!(check(&current, &mut retained_proof.seed()).is_err());
+                let mut fresh = VerifiedPackages::default();
+                assert!(check(&current, &mut fresh).is_err());
+                assert!(current.context(&context.key).is_err());
+                check(&held, &mut retained_proof.seed())?;
+            }
         }
         Ok(())
     }
@@ -317,27 +358,25 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let mut descriptor = Detector::Process.descriptor();
-        let mut offline = descriptor.exports[0].clone();
+        let mut artifact = artifact(Causal::descriptor(), components::CAUSAL);
+        let mut offline = artifact
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == "detect")
+            .ok_or("detect model")?
+            .clone();
+        let output = offline.outputs.first().ok_or("detect output")?.name.clone();
         offline.name = "offline".into();
-        descriptor.exports.push(offline);
-        let artifact = PackageArtifactV1 {
-            descriptor,
-            implementations: vec![
-                PackageImplementationV1::Wasm {
-                    exports: vec!["detect".into()],
-                    artifact: components::PROCESS.to_vec(),
-                },
-                PackageImplementationV1::Native {
-                    export: "offline".into(),
-                    artifact: vec![1],
-                    qualification: None,
-                },
-            ],
-            fixtures: Vec::new(),
-        };
+        artifact.descriptor.exports.push(offline);
+        artifact
+            .implementations
+            .push(PackageImplementationV1::Native {
+                export: "offline".into(),
+                artifact: vec![1],
+                qualification: None,
+            });
         let package = artifact.reference();
-        let output = artifact.descriptor.exports[0].outputs[0].name.clone();
         let bundle = PackageBundle::try_from(PackageBundleV1 {
             schema_version: 1,
             root: package.clone(),
@@ -350,21 +389,32 @@ mod tests {
         let context =
             AnalysisContextVersionV1::from_package(&bundle, [1; 16], &package, "detect", &output)?;
         store.commit_context(&context)?;
-        let mut writer = store.writer()?;
+        let control = AnalysisReadControl::default();
+        let view = store.view()?;
         let mut verified = VerifiedPackages::default();
-        store.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut verified)?;
-        store
-            .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut verified)?
-            .ok_or("mixed package context")?;
-        drop(writer);
+        verified.check_context(&context, |tenant, package, revision| {
+            view.package_revision(tenant, package, revision, &control)
+        })?;
+        assert_eq!(
+            view.context(&context.key)?
+                .ok_or("mixed package context")?
+                .0,
+            context
+        );
+        drop(view);
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
-        let mut writer = reopened.writer()?;
+        let view = reopened.view()?;
         let mut fresh = VerifiedPackages::default();
-        reopened.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut fresh)?;
-        reopened
-            .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut fresh)?
-            .ok_or("reopened mixed package context")?;
+        fresh.check_context(&context, |tenant, package, revision| {
+            view.package_revision(tenant, package, revision, &control)
+        })?;
+        assert_eq!(
+            view.context(&context.key)?
+                .ok_or("reopened mixed package context")?
+                .0,
+            context
+        );
         Ok(())
     }
 }

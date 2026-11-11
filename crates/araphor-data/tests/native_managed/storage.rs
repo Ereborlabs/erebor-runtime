@@ -10,6 +10,8 @@ use sdk::arrow_array::{StringArray, UInt64Array};
 mod calls;
 #[path = "storage/control.rs"]
 mod control;
+#[path = "storage/guards.rs"]
+mod guards;
 #[path = "storage/output.rs"]
 mod output;
 #[path = "storage/replay.rs"]

@@ -3,12 +3,18 @@ use super::*;
 #[test]
 fn managed_images_reject_forged_implementation_pin() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
-    store.read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &fixture.instance.spec))?;
-    let identity = crate::PackageImplementationV1::Wasm {
-        exports: vec!["detect".into()],
-        artifact: araphor_analysis_builtins::components::PROCESS.to_vec(),
+    let root = directory.path().join("store");
+    let store = NativeStore::open(&root)?;
+    let fixture = StorageFixture::new(&store, "counter", "Retain independent call state.".into())?;
+    let before = store.view()?;
+    let baseline = records(&before, b"")?;
+    assert_eq!(
+        store.admit_managed(&fixture.instance.spec, &fixture.instance.grant, || Ok(()))?,
+        fixture.instance
+    );
+    let identity = PackageImplementationV1::Wasm {
+        exports: vec!["index".into(), "detect".into()],
+        artifact: araphor_analysis_builtins::components::CAUSAL.to_vec(),
     }
     .identity()?
     .ok_or("Wasm identity absent")?;
@@ -24,28 +30,32 @@ fn managed_images_reject_forged_implementation_pin() -> TestResult {
         } else {
             call.target = "forged-target".into();
         }
-        let error = store
-            .read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &spec))
-            .err()
-            .ok_or("forged managed implementation accepted")?;
-        assert!(
-            format!("{error:?}").contains("managed implementation pin"),
-            "{error:?}"
-        );
+        assert!(matches!(
+            store.admit_managed(&spec, &fixture.instance.grant, || Ok(())),
+            Err(Error::Package {
+                code: Code::Invalid,
+                field: "managed implementation pin",
+                ..
+            })
+        ));
     }
     for field in ["body", "revision", "tenant"] {
         let mut spec = fixture.instance.spec.clone();
+        let mut grant = fixture.instance.grant.clone();
         match field {
             "body" => spec.definition.definition.description.push_str(" changed"),
             "revision" => spec.manifest.definition = store.meta()?.commit_revision + 1,
-            "tenant" => spec.tenant = [2; 16],
+            "tenant" => {
+                spec.tenant = [2; 16];
+                grant.selection.tenant_id = spec.tenant;
+            }
             _ => unreachable!(),
         }
         assert!(
             matches!(
-                store.read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &spec)),
-                Err(crate::Error::Package {
-                    code: crate::PackageErrorCodeV1::Missing,
+                store.admit_managed(&spec, &grant, || Ok(())),
+                Err(Error::Package {
+                    code: Code::Missing,
                     field: "managed definition pin",
                     ..
                 })
@@ -53,48 +63,75 @@ fn managed_images_reject_forged_implementation_pin() -> TestResult {
             "{field}"
         );
     }
+    let current = store.view()?;
+    assert_eq!(current.meta(), before.meta());
+    assert_eq!(current.snapshot().revision(), before.snapshot().revision());
+    assert_eq!(records(&current, b"")?, baseline);
+    let definitions = records(&current, b"\0data/D")?
+        .into_iter()
+        .filter(|(key, _)| key.len() == 23)
+        .collect::<Vec<_>>();
+    assert_eq!(definitions.len(), 1);
+    let (key, bytes) = &definitions[0];
+    let (tenant, body, revision): ([u8; 16], Vec<u8>, u64) =
+        rmp_serde::from_slice(bytes.strip_prefix(&[0]).ok_or("definition envelope")?)?;
+    assert_eq!(tenant, fixture.instance.spec.tenant);
+    assert_eq!(revision, fixture.instance.spec.manifest.definition);
+    assert_eq!(body, fixture.instance.spec.definition.encode()?);
+    let heads = records(&current, b"\0data/F")?;
+    drop(current);
+    drop(before);
     let mut changed = fixture.instance.spec.definition.clone();
     changed.definition.description.push_str(" changed");
-    {
-        let mut writer = store.writer()?;
-        assert_eq!(
-            writer.get_mut()?.execute(
-                "UPDATE discovery_definitions SET definition = ? WHERE commit_revision = ?",
-                params![changed.encode()?, fixture.instance.spec.manifest.definition],
-            )?,
-            1
-        );
-    }
+    let mut writer = store.write()?;
+    writer.native().insert(
+        key,
+        [
+            vec![0],
+            rmp_serde::to_vec(&(tenant, changed.encode()?, revision))?,
+        ]
+        .concat(),
+    );
+    writer.commit([])?;
+    assert_eq!(records(store.view()?.as_ref(), b"\0data/F")?, heads);
     assert!(matches!(
-        store.read_snapshot(|reader| {
-            AnalysisStore::check_managed_images(reader, &fixture.instance.spec)
-        }),
-        Err(crate::Error::Package {
-            code: crate::PackageErrorCodeV1::Missing,
+        store.admit_managed(&fixture.instance.spec, &fixture.instance.grant, || Ok(())),
+        Err(Error::Package {
+            code: Code::Missing,
             field: "managed definition pin",
             ..
         })
     ));
     drop(store);
-    assert!(AnalysisStore::open(directory.path().join("store")).is_err());
+    assert!(matches!(
+        NativeStore::open(&root),
+        Err(Error::Package {
+            code: Code::Missing,
+            field: "managed definition pin",
+            ..
+        })
+    ));
     Ok(())
 }
 
 #[derive(Debug, PartialEq)]
 struct GuardCut {
-    meta: crate::AnalysisStoreMetaV1,
+    meta: araphor_data::AnalysisStoreMetaV1,
     instance: ManagedInstance,
     prior: Vec<(u64, u64, String)>,
-    heads: Vec<(u64, u64, Option<String>)>,
-    attempts: Vec<(String, Vec<u8>, u64)>,
+    heads: BTreeMap<Vec<u8>, Vec<u8>>,
+    attempts: BTreeMap<Vec<u8>, Vec<u8>>,
     history: Vec<ManagedReceipt>,
-    states: Vec<(String, Vec<u8>, Vec<u8>)>,
+    states: BTreeMap<Vec<u8>, Vec<u8>>,
     counts: [u64; 8],
 }
 
 impl GuardCut {
-    fn read(store: &AnalysisStore, fixture: &Fixture) -> TestResult<Self> {
-        let captured = fixture.capture(store, false)?;
+    fn read(
+        store: &NativeStore,
+        fixture: &StorageFixture,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let captured = fixture.capture(store)?;
         let prior = [10, 11]
             .into_iter()
             .filter_map(|call| {
@@ -103,38 +140,30 @@ impl GuardCut {
                     .map(|prior| (call, prior.revision, prior.result.clone()))
             })
             .collect();
-        let (heads, attempts, states, counts) = store.read_snapshot(|reader| {
-            let mut statement = reader.prepare(
-                "SELECT call_id, state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? ORDER BY call_id",
-            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed guard heads" })?;
-            let rows = statement.query_map(params![[1u8; 16].as_slice(), fixture.instance.spec.id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            }).context(crate::AnalysisDatabaseSnafu { operation: "read managed guard heads" })?;
-            let heads = rows.collect::<duckdb::Result<Vec<_>>>()
-                .context(crate::AnalysisDatabaseSnafu { operation: "decode managed guard heads" })?;
-            let mut statement = reader.prepare(
-                "SELECT attempt_id, contract, completed FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? ORDER BY attempt_id",
-            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed guard attempts" })?;
-            let rows = statement.query_map(params![[1u8; 16].as_slice(), fixture.instance.spec.id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            }).context(crate::AnalysisDatabaseSnafu { operation: "read managed guard attempts" })?;
-            let attempts = rows.collect::<duckdb::Result<Vec<_>>>()
-                .context(crate::AnalysisDatabaseSnafu { operation: "decode managed guard attempts" })?;
-            let mut statement = reader.prepare(
-                "SELECT result_id, body, request_meta FROM analysis_results ORDER BY result_id",
-            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed guard payloads" })?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            }).context(crate::AnalysisDatabaseSnafu { operation: "read managed guard payloads" })?;
-            let states = rows.collect::<duckdb::Result<Vec<_>>>()
-                .context(crate::AnalysisDatabaseSnafu { operation: "decode managed guard payloads" })?;
-            let counts = reader.query_row(
-                "SELECT (SELECT count(*) FROM managed_versions), (SELECT count(*) FROM managed_instances), (SELECT count(*) FROM managed_calls), (SELECT count(*) FROM managed_attempts), (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges), (SELECT count(*) FROM evidence_refs), (SELECT count(*) FROM context_refs)",
-                [],
-                |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?]),
-            ).context(crate::AnalysisDatabaseSnafu { operation: "count managed guard rows" })?;
-            Ok((heads, attempts, states, counts))
-        })?;
+        let view = store.view()?;
+        let heads = records(&view, b"\0data/Q")?;
+        let attempts = records(&view, b"\0data/a")?;
+        let mut states = records(&view, b"\0data/X")?;
+        states.extend(records(&view, b"\0data/U")?);
+        let mut counts = [0; 8];
+        for (index, (prefix, suffix)) in [
+            (b"\0data/Z".as_slice(), 16),
+            (b"\0data/J".as_slice(), 8),
+            (b"\0data/Q".as_slice(), 16),
+            (b"\0data/a".as_slice(), 8),
+            (b"\0data/X".as_slice(), 8),
+            (b"\0data/ref/dependency/".as_slice(), 16),
+            (b"\0data/ref/raw/".as_slice(), 24),
+            (b"\0data/ref/context/".as_slice(), 16),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            counts[index] = records(&view, prefix)?
+                .keys()
+                .filter(|key| key.len() == prefix.len() + suffix)
+                .count() as u64;
+        }
         Ok(Self {
             meta: store.meta()?,
             instance: captured.instance().clone(),
@@ -156,27 +185,27 @@ impl GuardCut {
 fn capture_checks_store_identity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("source");
-    let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
-    let foreign = AnalysisStore::open(directory.path().join("foreign"))?;
-    let other = Fixture::admit(&foreign)?;
+    let store = NativeStore::open(&root)?;
+    let fixture = StorageFixture::new(&store, "counter", "Retain independent call state.".into())?;
+    let foreign = NativeStore::open(directory.path().join("foreign"))?;
+    let other = StorageFixture::new(&foreign, "counter", "Retain independent call state.".into())?;
     let mut receipts = Vec::new();
     for (store, fixture) in [(&store, &fixture), (&foreign, &other)] {
-        let captured = fixture.capture(store, false)?;
+        let captured = fixture.capture(store)?;
         let input = request("seed");
         let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
         receipts.push(fixture.publish(
             store,
             &attempt,
             &[
-                fixture.evaluation(&input, 10, Some(&captured))?,
-                fixture.evaluation(&input, 11, Some(&captured))?,
+                fixture.continued(&input, 10, Some(&captured))?,
+                fixture.continued(&input, 11, Some(&captured))?,
             ],
             &[fixture.output(12)?, fixture.output(13)?],
         )?);
     }
     assert_eq!(receipts[0], receipts[1]);
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let original = GuardCut::read(&store, &fixture)?;
     let separate = GuardCut::read(&foreign, &other)?;
     assert_ne!(original.meta.store_uuid, separate.meta.store_uuid);
@@ -193,7 +222,7 @@ fn capture_checks_store_identity() -> TestResult {
     let rejected = request("foreign-capture");
     assert!(matches!(
         foreign.register_managed_attempt(&captured, &rejected, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(Error::AnalysisConflict { .. })
     ));
     assert_eq!(GuardCut::read(&foreign, &other)?, separate);
     assert_eq!(GuardCut::read(&store, &fixture)?, original);
@@ -201,15 +230,15 @@ fn capture_checks_store_identity() -> TestResult {
     let input = request("pending");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [fixture.output(22)?, fixture.output(23)?];
     let pending = GuardCut::read(&store, &fixture)?;
     let backup = root.join("backups/identity");
     let manifest = store.backup(&backup)?;
     assert_eq!(GuardCut::read(&store, &fixture)?, pending);
-    let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
+    let restored = NativeStore::restore(&backup, &directory.path().join("restored"))?;
     let before = GuardCut::read(&restored, &fixture)?;
     assert_eq!(before.meta.store_uuid, pending.meta.store_uuid);
     assert_eq!(before.meta.schema_version, pending.meta.schema_version);
@@ -241,12 +270,12 @@ fn capture_checks_store_identity() -> TestResult {
             [1; 16],
             "counter",
             &rejected.id,
-            &AnalysisReadControl::default(),
+            &AnalysisReadControl::default()
         )?
         .is_none());
     assert!(matches!(
         restored.register_managed_attempt(&captured, &rejected, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(Error::AnalysisConflict { .. })
     ));
     assert_eq!(GuardCut::read(&restored, &fixture)?, before);
     let error = fixture
@@ -254,8 +283,8 @@ fn capture_checks_store_identity() -> TestResult {
         .err()
         .ok_or("source live attempt published after restore")?;
     assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
+        error.downcast_ref::<Error>(),
+        Some(Error::AnalysisConflict { .. })
     ));
     assert_eq!(GuardCut::read(&restored, &fixture)?, before);
     assert_eq!(GuardCut::read(&store, &fixture)?, pending);
@@ -263,15 +292,15 @@ fn capture_checks_store_identity() -> TestResult {
     assert_eq!(fixture.current(&store)?.progress, receipt.commit_revision);
     assert_eq!(GuardCut::read(&restored, &fixture)?, before);
 
-    let fresh = fixture.capture(&restored, false)?;
+    let fresh = fixture.capture(&restored)?;
     let input = request("after-restore");
     let attempt = restored.register_managed_attempt(&fresh, &input, || Ok(()))?;
     let receipt = fixture.publish(
         &restored,
         &attempt,
         &[
-            fixture.evaluation(&input, 10, Some(&fresh))?,
-            fixture.evaluation(&input, 11, Some(&fresh))?,
+            fixture.continued(&input, 10, Some(&fresh))?,
+            fixture.continued(&input, 11, Some(&fresh))?,
         ],
         &[fixture.output(32)?, fixture.output(33)?],
     )?;
@@ -283,7 +312,7 @@ fn capture_checks_store_identity() -> TestResult {
         restored.managed_history(
             &fixture.instance.grant.selection,
             "counter",
-            &AnalysisReadControl::default(),
+            &AnalysisReadControl::default()
         )?,
         vec![receipts.remove(0), receipt]
     );
@@ -292,7 +321,7 @@ fn capture_checks_store_identity() -> TestResult {
             [1; 16],
             "counter",
             "pending",
-            &AnalysisReadControl::default(),
+            &AnalysisReadControl::default()
         )?
         .ok_or("preserved restored pending attempt")?
         .receipt()

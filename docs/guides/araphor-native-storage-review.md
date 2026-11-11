@@ -4,6 +4,38 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native managed guards](../../crates/araphor-data/tests/native_managed/storage/guards.rs)
+with [managed admission](../../crates/araphor-data/src/analysis/native/managed/admission.rs),
+[saved image checks](../../crates/araphor-data/src/analysis/managed/contract.rs),
+and [package proof units](../../crates/araphor-data/src/analysis/context/provenance.rs).
+Public admission checks current definition and implementation pins before it
+accepts an existing instance. The pin case checks a complete branch inventory,
+native revision, and Data metadata across valid no-op and rejected admissions.
+Its description-only D fault keeps the key, embedded revision, and F heads.
+Both live admission and startup report `Missing / managed definition pin`.
+
+The identity case compares public instance, prior results, history, Q call heads,
+a attempts, X results, U checkpoints, and eight logical record counts. Its Q/a/X/U
+maps include all saved bytes. Independent store UUIDs differ. Attempt bytes are
+compared across backup and restore, not across independent stores. Restore keeps
+the ordinary pending attempt and changes the recovery epoch. Stale captures and
+source live handles fail without changing the compared managed state. Fresh
+captures can publish on the source and restored stores independently.
+
+The two private provenance units use native package point reads, actual P
+metadata and body faults, and matching builtin descriptors and components.
+They keep shared-root identity checks beside the private cache owner. Current
+context readers reject invalid package bytes; held views retain the original proof. Body length
+is correct during semantic fault checks. The mixed image retains an unrelated
+unqualified native export across reopen. These private units remain unqualified
+because the complete Data unit target still has 233 compile diagnostics.
+The connected integration run passes 22 context, 206 managed, and 31 package
+cases. The two native guard cases replace their complete SQL family. Read
+`native-guards-*` evidence under `output/araphor-fjall-migration-20261110`.
+Changed Rust formatting, whitespace checks, and the release library check
+without default features pass.
+Complete migration qualification and incident performance remain open.
+
 Read the [native extraction units](../../crates/araphor-data/src/analysis/native/extraction/tests.rs),
 [selection cases](../../crates/araphor-data/src/analysis/native/extraction/tests/selection.rs),
 [position cases](../../crates/araphor-data/src/analysis/native/extraction/tests/positions.rs),

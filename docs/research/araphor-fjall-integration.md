@@ -88,6 +88,45 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- The two managed guard cases now use native storage. Public managed admission
+  rejects forged implementation pins and missing definition pins. Repeated valid
+  admission and rejected admission preserve the complete branch key/value
+  inventory, native revision, and Data metadata. The definition fault changes
+  only the saved description. It preserves the D key, tenant, embedded revision,
+  and F heads. A native transaction publishes the fault at a new Data cut. Live
+  admission and reopen both report `Missing / managed definition pin`.
+
+  The identity case keeps two independent stores, exact prior results, call
+  heads, result and checkpoint bytes, reference counts, and publication history.
+  It rejects a foreign capture without a managed state change. Backup preserves
+  the ordinary pending attempt. Restore preserves its exact bytes and increments
+  the recovery epoch. The old capture and source live attempt cannot publish on
+  the restored store. The source can still publish. A new restored capture can
+  publish and leaves the copied pending attempt intact. The old SQL guard file
+  and its module declaration are removed after both native cases pass.
+
+  Two private package-provenance units now use native point readers and real
+  package records. Matching Causal and Credentials descriptors and components
+  replace the removed Process fixture. The cases preserve cold and warm proof
+  checks, shared root identity, tenant scope, metadata and body faults, held-view
+  isolation, and mixed-image reopen. Body faults update the saved length and
+  actual body, so they test package validation after successful record loading.
+  No production API, validation rule, storage quota, or input archive is added.
+
+  The final focused run passes 22 context, 206 managed, and 31 package cases.
+  Data unit compilation reports 233 diagnostics, down from 290, with no
+  diagnostic in the private provenance port. The complete unit target still
+  does not compile or run. Those two private units remain **unqualified**.
+  Read `native-guards-qualification.log`, `native-guards-final-native.log`,
+  and `native-guards-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Changed Rust formatting and whitespace checks pass. The release library
+  check without default features passes in 8.47 seconds; read
+  `native-guards-final-default.log` in the same directory.
+  Result: **Done for the native guard qualification and SQL guard retirement;
+  Not done for private unit execution and complete migration**.
+  No incident timing is measured.
+
 - Extraction fixtures now use their native owners. Nineteen store cases and
   five Changes cases move under `analysis::native::extraction::tests`.
   They keep the original source identities, workloads, timeouts, cancellation,
