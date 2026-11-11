@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_analysis_sdk as sdk;
 
 use super::{graph::PreparedGraph, results::ResultBody, ManagedCommit};
-use crate :: analysis :: managed :: { source :: { import :: PreparedDerived , SourceEvidence } , Packet , PreparedMemory , Step } ;
+use crate::analysis::managed::{
+    source::{import::PreparedDerived, SourceEvidence},
+    Packet, PreparedMemory, Step,
+};
 use crate::analysis::native::{DataView, NativeStore};
 use crate::{PackageErrorCodeV1 as Code, Result};
 
@@ -12,11 +15,32 @@ pub struct PreparedManagedCommit<'a> {
     pub(super) evidence: SourceEvidence,
     pub(super) packets: Vec<Packet>,
     pub(super) step: Step,
-    pub(super) contracts: BTreeMap<u64, sdk::Package>,
+    pub(super) contracts: BTreeMap<u64, Contract>,
     pub(super) derived: PreparedDerived,
     pub(super) graph: Option<PreparedGraph>,
     pub(super) source: Option<crate::analysis::managed::source::publication::PreparedSource>,
     pub(super) memory: PreparedMemory<'a>,
+}
+
+pub(super) struct Contract {
+    pub(super) package: sdk::Package,
+    pub(super) descriptor: Vec<u8>,
+}
+
+impl Contract {
+    pub(super) fn parse(
+        call: &crate::ManagedCall,
+        descriptor: &[u8],
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<sdk::Package> {
+        charge(
+            descriptor
+                .len()
+                .saturating_mul(12)
+                .saturating_add(12 * size_of::<sdk::Package>()),
+        )?;
+        call.contract(descriptor)
+    }
 }
 
 impl<'a> PreparedManagedCommit<'a> {
@@ -25,7 +49,7 @@ impl<'a> PreparedManagedCommit<'a> {
     }
 
     pub(in crate::analysis::native) fn contract(&self, call: u64) -> Option<&sdk::Package> {
-        self.contracts.get(&call)
+        self.contracts.get(&call).map(|contract| &contract.package)
     }
 }
 
@@ -81,8 +105,11 @@ impl NativeStore {
         let mut packets = Vec::new();
         for returned in input.returns {
             let declaration = &spec.manifest.calls[&returned.call];
-            let descriptor = current
-                .managed_contract_charged(spec, declaration, &mut |bytes| memory.charge(bytes))?;
+            let bytes =
+                current.managed_descriptor(spec, declaration, &mut |bytes| memory.charge(bytes))?;
+            let descriptor =
+                Contract::parse(declaration, &bytes, &mut |bytes| memory.charge(bytes))?;
+            memory.charge(bytes.capacity().saturating_add(size_of::<Contract>()))?;
             let packet = Packet::prepare(
                 input.attempt,
                 returned.call,
@@ -105,7 +132,13 @@ impl NativeStore {
                 &mut |bytes| memory.charge(bytes),
             )?;
             packets.push(packet);
-            contracts.insert(returned.call, descriptor);
+            contracts.insert(
+                returned.call,
+                Contract {
+                    package: descriptor,
+                    descriptor: bytes,
+                },
+            );
         }
         let step = Step::prepare(
             input.attempt,

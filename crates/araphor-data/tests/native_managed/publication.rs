@@ -8,6 +8,8 @@ use araphor_data::{
 };
 use sdk::arrow_array::{UInt64Array, UInt8Array};
 
+#[path = "publication/contracts.rs"]
+mod contracts;
 #[path = "publication/inputs.rs"]
 mod inputs;
 #[path = "publication/recovery.rs"]

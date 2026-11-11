@@ -69,9 +69,35 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs with qualified Graph contract reuse measure durable creation at 44.222–74.645 ms. The measured gain against DuckDB is 7.56 to 10.37 fold. The 100-fold target is not met. |
+| Performance | Matched release runs with prepared descriptor reuse measure durable creation at 42.151–71.520 ms. The measured gain against DuckDB is 7.89 to 9.80 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- Managed preparation retains the descriptor bytes with the parsed contract.
+  Publication reads the current descriptor under the Data writer. Equal bytes
+  reuse the parsed contract. Different bytes use the existing parse, pin, and
+  package equality checks. Equivalent JSON remains valid. Changed exports,
+  malformed JSON, and wrong package pins retain their existing errors.
+  Read allocation charges remain on each metadata read. Parse allocation
+  charges apply only when a parse occurs. The retained buffer is charged once.
+  No global cache, durable archive, public API, or format is added.
+  The final focused run passes 121 managed cases in 12.83 seconds and six
+  lifecycle cases in 0.29 seconds. The new case checks all five descriptor
+  variants, rollback, same-attempt repair, and reopen.
+  Both matched unchanged incident pairs pass. Median commit validation falls
+  from 1.807–1.856 ms to 1.112–1.113 ms. Durable creation measures
+  42.151–71.520 ms after this change and 42.404–78.044 ms before it.
+  The second notification improves in one pair and increases in the other.
+  These samples do not prove a consistent gain for every notification.
+  Public receipt measures 50.321–88.374 ms after this change. Whole-test time
+  measures 2.08–2.09 seconds. Matched DuckDB creation measures
+  335.570–614.586 ms; public receipt measures 394.723–708.770 ms; whole-test
+  time measures 5.08 seconds. The paired creation gain is 7.89–9.80 fold.
+  Workload hashes, profiles, and measurement boundaries remain equal.
+  The 100-fold target remains **Not done**. Read `descriptor-frame-build.json`,
+  `descriptor-frame-comparison.json`, `descriptor-frame-stages.json`, and
+  `descriptor-frame-final-native.log` under
+  `output/araphor-fjall-migration-20261110`.
 
 - Graph publication reuses returned-call contracts already checked against the
   current view under the same Data writer. An unreturned manifest call still

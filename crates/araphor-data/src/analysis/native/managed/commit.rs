@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use araphor_analysis_sdk as sdk;
 
+use super::prepare::Contract;
 use super::{
     attempts::Attempts,
     results::{ResultBody, StoredResult},
@@ -72,13 +73,18 @@ impl NativeStore {
             return Err(Code::Invalid.error("managed publication time"));
         }
         for (call, contract) in &prepared.contracts {
-            let actual = current.managed_contract_charged(
-                spec,
-                &spec.manifest.calls[call],
-                &mut |bytes| prepared.memory.charge(bytes),
-            )?;
-            if *contract != actual {
-                return crate::AnalysisConflictSnafu.fail();
+            let descriptor =
+                current.managed_descriptor(spec, &spec.manifest.calls[call], &mut |bytes| {
+                    prepared.memory.charge(bytes)
+                })?;
+            if contract.descriptor != descriptor {
+                let actual =
+                    Contract::parse(&spec.manifest.calls[call], &descriptor, &mut |bytes| {
+                        prepared.memory.charge(bytes)
+                    })?;
+                if contract.package != actual {
+                    return crate::AnalysisConflictSnafu.fail();
+                }
             }
         }
         for reference in &prepared.evidence.contexts {

@@ -5,6 +5,7 @@ use araphor_graph::native::{Declaration, Graph};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
+use super::prepare::Contract;
 use super::{InstanceRecord, Records};
 use crate::analysis::managed::graph::GraphDeclarations;
 
@@ -168,12 +169,12 @@ impl DataWrite<'_> {
     fn check_managed_graph(
         &mut self,
         spec: &ManagedSpec,
-        contracts: &BTreeMap<u64, sdk::Package>,
+        contracts: &BTreeMap<u64, Contract>,
     ) -> Result<()> {
         let admission = spec.graph_declarations(|id, call| {
             contracts
                 .get(&id)
-                .cloned()
+                .map(|contract| contract.package.clone())
                 .map(Ok)
                 .unwrap_or_else(|| self.managed_contract(spec, call))
         })?;
@@ -256,6 +257,16 @@ impl DataView {
         call: &crate::ManagedCall,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<sdk::Package> {
+        let descriptor = self.managed_descriptor(spec, call, charge)?;
+        Contract::parse(call, &descriptor, charge)
+    }
+
+    pub(super) fn managed_descriptor(
+        &self,
+        spec: &ManagedSpec,
+        call: &crate::ManagedCall,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<u8>> {
         let descriptor = self
             .package_descriptor_charged(
                 spec.tenant,
@@ -264,13 +275,7 @@ impl DataView {
                 charge,
             )?
             .ok_or_else(|| Code::Missing.error("managed SDK descriptor"))?;
-        charge(
-            descriptor
-                .len()
-                .saturating_mul(12)
-                .saturating_add(12 * size_of::<sdk::Package>()),
-        )?;
-        call.contract(&descriptor)
+        Ok(descriptor)
     }
 
     pub fn managed_graph(

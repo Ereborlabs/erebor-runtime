@@ -3,9 +3,9 @@ use std::{
     sync::Arc,
 };
 
-use araphor_analysis_sdk as sdk;
 use araphor_graph::native::{Graph, LayerRequest, Pending, Prepared};
 
+use super::super::prepare::Contract;
 use super::{origin::GraphOrigin, ManagedGraphJournal};
 use crate::analysis::{
     managed::{
@@ -26,7 +26,7 @@ pub(in crate::analysis::native::managed) struct PreparedGraph {
 impl NativeStore {
     pub(in crate::analysis::native::managed) fn prepare_graph_journals(
         &self,
-        contracts: &BTreeMap<u64, sdk::Package>,
+        contracts: &BTreeMap<u64, Contract>,
         input: &ManagedCommit<'_>,
         evidence: &SourceEvidence,
         derived: &PreparedDerived,
@@ -35,7 +35,7 @@ impl NativeStore {
         let mut journals = BTreeMap::new();
         for returned in input.returns {
             let declaration = &input.attempt.1.spec.manifest.calls[&returned.call];
-            let package = &contracts[&returned.call];
+            let package = &contracts[&returned.call].package;
             let model = package
                 .exports
                 .iter()
@@ -239,7 +239,7 @@ impl PreparedGraph {
         self,
         tx: &mut DataWrite<'_>,
         input: &ManagedCommit<'_>,
-        contracts: &BTreeMap<u64, sdk::Package>,
+        contracts: &BTreeMap<u64, Contract>,
         receipt: &ManagedReceipt,
         results: &BTreeMap<u64, u64>,
         memory: &mut PreparedMemory<'_>,

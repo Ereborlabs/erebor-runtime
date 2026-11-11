@@ -135,6 +135,36 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Prepared descriptor reuse
+
+[NativeStore::prepare_managed](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) reads each returned call's current descriptor.
+  -> [Contract::parse](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) applies the existing parse allocation charge and package pin checks.
+  -> [PreparedManagedCommit](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) retains the parsed package and descriptor bytes for this attempt.
+  -> [NativeStore::commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) reads the current descriptor under the Data writer.
+  -> [Contract::parse](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) runs again only when descriptor bytes differ.
+  -> [DataWrite::check_managed_graph](../../crates/araphor-data/src/analysis/native/managed/graph/mod.rs) uses the qualified package from the same prepared contract.
+
+The current metadata read retains its identity, revision, and cut checks.
+Different descriptor bytes retain semantic package comparison. Equivalent JSON
+remains valid. A changed export returns the existing conflict. Malformed JSON
+and wrong package pins retain their existing errors. This reuse lasts for one
+prepared attempt. It adds no global cache, durable copy, API, or format.
+Each metadata read retains its allocation charge. Parsing retains its existing
+allocation estimate. Preparation charges the retained descriptor buffer once.
+
+The [descriptor case](../../crates/araphor-data/tests/native_managed/publication/contracts.rs)
+checks equivalent JSON, a changed export, malformed JSON, and two wrong pins.
+Each failed publication preserves Data revision, journal head, and results.
+Repair permits the same attempt. Reopen preserves the committed receipt.
+The final focused run passes 121 managed cases and six lifecycle cases.
+
+Both matched unchanged incident pairs pass. Median commit validation falls
+from 1.807–1.856 ms to 1.112–1.113 ms. Durable creation measures
+42.151–71.520 ms; public receipt measures 50.321–88.374 ms; whole-test time
+measures 2.08–2.09 seconds. The second notification has mixed paired results.
+The matched DuckDB gain is 7.89–9.80 fold. The 100-fold target remains
+**Not done**. Read the current worklist for source hashes and complete evidence.
+
 ## Graph publication contracts
 
 [NativeStore::commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) compares prepared returned-call contracts with the current view under the Data writer.
