@@ -85,10 +85,11 @@ impl Causal {
         model.input_mode = sdk::InputMode::Resolved;
         model.graph = Some(sdk::GraphSpec {
             access: sdk::GraphAccess::ReadWrite,
-            relations: DomainRelations::declarations()
-                .into_iter()
-                .filter(|relation| relation.name == DomainRelations::FINDINGS)
-                .collect(),
+            relations: vec![sdk::GraphRelation {
+                name: DomainRelations::FINDINGS.into(),
+                kind: sdk::GraphKind::Node,
+                properties: araphor_analysis_types::FindingMember::port().schema,
+            }],
         });
         for input in &mut model.inputs[..2] {
             input.source = sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {

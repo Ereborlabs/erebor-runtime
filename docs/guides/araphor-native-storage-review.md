@@ -135,6 +135,31 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Causal relation construction
+
+[Causal::detect_model](../../crates/araphor-analysis-builtins/src/causal/descriptor.rs) constructs the one finding relation that the export declares.
+  -> [FindingMember::port](../../crates/araphor-analysis-types/src/relations.rs) supplies the existing property schema.
+  -> [CausalComponent](../../crates/araphor-analysis-builtins/components/causal/src/lib.rs) supplies the same package declaration inside each fresh guest.
+  -> [Component::evaluate](../../crates/araphor-analysis-sdk/src/guest.rs) retains the existing guest input checks and Graph binding.
+
+The prior factory constructs all four domain relations before it selects the
+finding relation. Causal no longer constructs the three unused schemas. The
+[descriptor case](../../crates/araphor-query/tests/native_execution/graph.rs)
+compares the complete package and its JSON bytes with the prior factory.
+The default definition, package exports, Graph operations, and component
+isolation remain unchanged.
+
+The focused Query target passes all three selected cases in 2.68 seconds.
+It includes descriptor equality, real Wasm Graph publication with consumed
+progress, and retained indexed versions.
+
+Both matched unchanged incident pairs pass. Creation measures 44.157–82.437 ms
+after this change and 49.254–86.804 ms immediately before it. Public receipt
+measures 53.124–99.965 ms after this change. Whole-test time measures
+2.26–2.30 seconds. The gain against the matched DuckDB control is 7.34–9.87 fold.
+The 100-fold target remains **Not done**. Read the current worklist for build
+hashes, the temporary diagnostic, and the exact verification commands.
+
 ## Scoped Graph reads
 
 [Values::load](../../crates/araphor-data/src/analysis/native/managed/graph/projection.rs) receives an exact retained Graph property reference.

@@ -69,9 +69,35 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs at `eb2e5c16d` measure durable creation at 47.035–83.606 ms. The measured gain against DuckDB is 7.01 to 8.04 fold. The 100-fold target is not met. |
+| Performance | Matched release runs with direct finding relation construction measure durable creation at 44.157–82.437 ms. The measured gain against DuckDB is 7.34 to 9.87 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- Causal constructs its required finding relation directly. The previous
+  factory constructs four domain relations and discards three. The replacement
+  keeps the same relation name, node kind, and property schema. No SDK, ABI,
+  validation, or component lifetime changes. A temporary diagnostic attributes
+  2.345–2.360 ms of each median guest call to package construction. Both markers
+  are removed after one unchanged successful incident. The diagnostic patch and
+  result remain in `guest-probe.patch`, `guest-probe-incident.json`, and
+  `guest-probe-breakdown.json` under
+  `output/araphor-fjall-migration-20261110`.
+  Both matched incident pairs pass with unchanged test and definition hashes.
+  Creation measures 44.157–82.437 ms after the replacement and
+  49.254–86.804 ms immediately before it. Public receipt measures
+  53.124–99.965 ms after the replacement. Whole-test time measures
+  2.26–2.30 seconds. Median component calls fall from 5.893–6.292 ms to
+  4.651–5.099 ms. Matched DuckDB creation measures 325.501–645.427 ms;
+  public receipt measures 394.637–752.137 ms; whole-test time measures
+  5.45–5.54 seconds. The paired creation gain is 7.34–9.87 fold.
+  These short pairs do not establish a sustained latency bound.
+  The focused native Query target passes all three selected cases in
+  2.68 seconds. The cases compare the complete descriptor and JSON bytes,
+  commit real Wasm Graph mutations with consumed progress, and retain indexed
+  versions. Read `direct-finding-query.log` in the same evidence directory.
+  The 100-fold target remains **Not done**. Read `direct-finding-build.json`,
+  `direct-finding-comparison.json`, and `direct-finding-calls.json` in the
+  same evidence directory.
 
 - Native profile expiry-gap parity is **Done for the four gap contracts**.
   The legacy SQL gap module is removed. Eight native cases preserve the

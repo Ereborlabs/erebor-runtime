@@ -11,6 +11,30 @@ use araphor_analysis_types::{
     },
 };
 
+#[test]
+fn causal_descriptor_matches_factory() -> TestResult {
+    let descriptor = Causal::descriptor();
+    let mut expected = descriptor.clone();
+    expected
+        .exports
+        .iter_mut()
+        .find(|model| model.name == "detect")
+        .ok_or("detect model")?
+        .graph
+        .as_mut()
+        .ok_or("detect Graph")?
+        .relations = araphor_analysis_types::DomainRelations::declarations()
+        .into_iter()
+        .filter(|relation| relation.name == araphor_analysis_types::DomainRelations::FINDINGS)
+        .collect();
+    assert_eq!(descriptor, expected);
+    assert_eq!(
+        serde_json::to_vec(&descriptor)?,
+        serde_json::to_vec(&expected)?
+    );
+    Ok(())
+}
+
 pub(super) fn image() -> araphor_package::Result<PackageBundle> {
     let descriptor = Causal::descriptor();
     let artifact = PackageArtifactV1 {
