@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Resolve the remaining Query contracts. The last complete run has 25
+- Resolve the remaining Query contracts. The last complete run has 19
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
   MVCC currently retains all history. Data startup validation still scans
@@ -87,6 +87,49 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Saved definition preparation now runs the native DataFusion analyzer and
+  optimizer on the final reachable plan. Input binding, unused-CTE removal,
+  and input-gate composition complete first. Admission sealing follows
+  optimization. The preparation state has no execution time, so native time
+  functions remain available for the invocation clock. Recorded source origins,
+  source demand after planning, and existing quota checks keep their owners.
+  Invalid selected SQL bodies and constant parameter casts now fail during
+  preparation. An unused invalid package body remains unexecuted.
+
+  Native analysis can promote the event timestamp from microseconds to
+  nanoseconds. Window recognition now accepts that exact `Cast(Column)` form
+  on either comparison operand. The original field name, microsecond type,
+  and units metadata checks remain. The executed expression and deadline
+  formulas do not change. Inexact event pushdown retains an enforcing Filter;
+  its scan copy no longer adds a second clock count. Other scan predicates
+  and source-port clocks remain visible.
+
+  The clock fixture keeps both original SQL expressions. Native optimization
+  removes the `CURRENT_TIMESTAMP IS NULL` branch because the clock is not
+  nullable. That expression is now an explicit no-clock control with value 7.
+  A real date comparison supplies the time-dependent control with value 7.
+  The literal-text control still has value 24. Per-child clock checks, both
+  package calls, input values, and capacity release remain asserted. The
+  incident source, workload, assertions, and timeouts are unchanged.
+
+  The final complete Query unit run passes 425 cases, fails 19, and ignores
+  five in 28.27 seconds. Four previously failing preparation cases and the
+  `view_port_windows` case pass. Native precision, shared-scope, body-window,
+  provider identity, and admission tampering cases also pass. The view-deadline
+  case now reaches its assertion before expiry and still fails because a clock
+  notice causes evaluation before the saved deadline. This runtime eligibility
+  defect remains open. The native Query integration run passes all 15 cases
+  in 7.34 seconds. The release library check without default features passes
+  in 2 minutes 42 seconds. Changed Rust formatting and whitespace checks pass.
+  Read `native-prepare-baseline.log`, `native-prepare-selected.log`,
+  `native-prepare-regression.log`, `native-prepare-window.log`,
+  `native-prepare-final-focused.log`, `native-prepare-final-query.log`,
+  `native-prepare-final-native-query.log`, and `native-prepare-final-default.log`
+  under `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native preparation and window representation handling;
+  Not done for complete Query qualification and complete migration**.
+  No full CI or incident timing comparison is run.
 
 - The two managed guard cases now use native storage. Public managed admission
   rejects forged implementation pins and missing definition pins. Repeated valid

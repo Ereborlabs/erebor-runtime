@@ -4,6 +4,36 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [definition preparation](../../crates/araphor-query/src/definition.rs),
+[admission sealing](../../crates/araphor-query/src/definition/call.rs),
+[window recognition](../../crates/araphor-query/src/follow/window.rs),
+and [event pushdown](../../crates/araphor-query/src/sources/mod.rs) together.
+The planner binds package inputs and removes unused CTEs. After input-gate
+composition, native `SessionState::optimize` analyzes and optimizes the reachable
+plan. The preparation state clears its execution time. The saved plan therefore
+keeps time functions for the invocation clock. `PackageCall::seal` then records
+the admitted children and providers. Original source demand remains recorded.
+
+The window reader recognizes only the native nanosecond cast around a bare
+column. Existing source-field checks still require the event timestamp's
+microsecond type and exact units metadata. Recognition does not rewrite the
+executed SQL or change the expiry formulas. The native event provider uses
+Inexact pushdown, so its enforcing Filter retains the clock. Clock counting
+omits only that event scan's duplicate expression copy. It still counts other
+scan predicates and source-port clocks.
+
+The [clock fixture](../../crates/araphor-query/src/definition/tests/execution/contract/model.rs)
+keeps the original literal-text expression and the original null-clock test.
+Native optimization removes the latter expression. A genuine date comparison supplies
+the time-dependent case. Child-clock, value, two-call, and capacity-release
+assertions remain. The final complete Query unit run passes 425 cases, fails
+19, and ignores five. All 15 native Query integration cases pass. The release
+library check without default features, changed Rust formatting, and whitespace
+checks pass. Read `native-prepare-*` under
+`output/araphor-fjall-migration-20261110`. The view-deadline case still evaluates
+before expiry. Runtime deadline eligibility, complete qualification, and
+incident performance remain open.
+
 Read the [native managed guards](../../crates/araphor-data/tests/native_managed/storage/guards.rs)
 with [managed admission](../../crates/araphor-data/src/analysis/native/managed/admission.rs),
 [saved image checks](../../crates/araphor-data/src/analysis/managed/contract.rs),

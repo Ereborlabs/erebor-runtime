@@ -519,6 +519,9 @@ impl Engine {
         } else {
             plan
         };
+        // Use the invocation clock when this saved plan runs.
+        state.execution_props_mut().query_execution_start_time = None;
+        let plan = state.optimize(&plan).context(SqlSnafu)?;
         // Seal the complete native plan after parameter binding.
         let plan = PackageCall::seal(plan).context(SqlSnafu)?;
         Planner::quotas(&plan, self.limits())?;

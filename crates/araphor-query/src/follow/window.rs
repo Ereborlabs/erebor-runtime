@@ -316,6 +316,10 @@ impl Window {
                     }
                 }
             }
+            // Inexact event pushdown keeps the clock on the residual Filter.
+            if Self::events(plan) {
+                return Ok(TreeNodeRecursion::Continue);
+            }
             plan.apply_expressions(|expression| {
                 expression.apply(|expression| {
                     if Self::clock(expression) {
@@ -457,11 +461,20 @@ impl Window {
         let Expr::BinaryExpr(binary) = expression else {
             return None;
         };
+        let [left, right] = [&*binary.left, &*binary.right].map(|expression| match expression {
+            Expr::Cast(cast)
+                if cast.field.data_type() == &DataType::Timestamp(TimeUnit::Nanosecond, None)
+                    && matches!(cast.expr.as_ref(), Expr::Column(_)) =>
+            {
+                cast.expr.as_ref()
+            }
+            expression => expression,
+        });
         let (column, bound, lower, inclusive) = match binary.op {
-            Operator::GtEq => (&*binary.left, &*binary.right, true, true),
-            Operator::Gt => (&*binary.left, &*binary.right, true, false),
-            Operator::LtEq => (&*binary.left, &*binary.right, false, true),
-            Operator::Lt => (&*binary.left, &*binary.right, false, false),
+            Operator::GtEq => (left, right, true, true),
+            Operator::Gt => (left, right, true, false),
+            Operator::LtEq => (left, right, false, true),
+            Operator::Lt => (left, right, false, false),
             _ => return None,
         };
         let (column, bound, lower) = if matches!(column, Expr::Column(_)) {

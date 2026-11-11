@@ -601,7 +601,23 @@ async fn model_clock_children() -> TestResult {
 
 #[tokio::test]
 async fn model_input_clocks() -> TestResult {
-    for clocked in [false, true] {
+    for (sql, clocked, expected) in [
+        (
+            "SELECT value + CAST(length('CURRENT_TIMESTAMP') AS BIGINT UNSIGNED) AS value FROM source",
+            false,
+            24,
+        ),
+        (
+            "SELECT CASE WHEN CURRENT_TIMESTAMP >= TIMESTAMP '2000-01-01' THEN value ELSE CAST(0 AS BIGINT UNSIGNED) END AS value FROM source",
+            true,
+            7,
+        ),
+        (
+            "SELECT CASE WHEN CURRENT_TIMESTAMP IS NULL THEN CAST(0 AS BIGINT UNSIGNED) ELSE value END AS value FROM source",
+            false,
+            7,
+        ),
+    ] {
         let base = sdk::Model::new(
             "base",
             Vec::new(),
@@ -630,9 +646,7 @@ async fn model_input_clocks() -> TestResult {
             },
             sdk::InputPort {
                 port: sdk::Port::new("selected", Fixture::schema("value")),
-                source: sdk::InputSource::Query(if clocked {
-                    "SELECT CASE WHEN CURRENT_TIMESTAMP IS NULL THEN CAST(0 AS BIGINT UNSIGNED) ELSE value END AS value FROM source"
-                } else { "SELECT value + CAST(length('CURRENT_TIMESTAMP') AS BIGINT UNSIGNED) AS value FROM source" }.into()),
+                source: sdk::InputSource::Query(sql.into()),
             },
         ];
         image.artifacts[0].descriptor.exports.push(model);
@@ -668,13 +682,13 @@ async fn model_input_clocks() -> TestResult {
         let output = fixture
             .execute(&prepared, invocation("input-clock"))
             .await?;
-        assert_eq!(values(&output.batches)?, [if clocked { 7 } else { 24 }]);
+        assert_eq!(values(&output.batches)?, [expected]);
         assert_eq!(output.calls.len(), 2);
         let input = &output.calls[&root.id()].evaluation().inputs;
         assert_eq!(values(&input[0].data.batches)?, [7]);
         assert_eq!(
             values(&input[1].data.batches)?,
-            [if clocked { 7 } else { 24 }]
+            [expected]
         );
         drop((output, calls, prepared));
         capacity_released(&fixture)?;
