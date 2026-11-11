@@ -835,9 +835,18 @@ impl RawJournal {
         limit: usize,
         control: &super::AnalysisReadControl,
     ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
-        self.select_position_at(&self.index, selection, after, revision, limit, control)
+        self.select_position_at(
+            &self.index,
+            selection,
+            after,
+            revision,
+            limit,
+            None,
+            control,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::analysis) fn select_position_at(
         &self,
         captured: &RawIndex,
@@ -845,6 +854,7 @@ impl RawJournal {
         after: Option<super::StorePositionV1>,
         revision: u64,
         limit: usize,
+        event_ranges: Option<&[(u64, u64)]>,
         control: &super::AnalysisReadControl,
     ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
         if (selection.sources.as_slice().is_empty() && selection.traces.as_slice().is_empty())
@@ -864,7 +874,11 @@ impl RawJournal {
                 }
                 RawIdentity::Diagnostic(identity) => selection.traces.as_slice().contains(identity),
             };
-            if !selected || self.index.expired.contains_key(&entry.reference.id) {
+            if !selected {
+                continue;
+            }
+            let expired = self.index.expired.get(&entry.reference.id);
+            if expired.is_some_and(|expired| expired.revision <= revision) {
                 continue;
             }
             for (index, span) in entry.commit.spans.iter().enumerate() {
@@ -891,6 +905,22 @@ impl RawJournal {
                 };
                 if first > last {
                     continue;
+                }
+                if expired.is_some() {
+                    if entry.identity.evidence().is_some()
+                        && event_ranges.is_some_and(|ranges| {
+                            !ranges.iter().any(|(first, last)| {
+                                (*first..=*last).contains(&entry.commit.intake)
+                            })
+                        })
+                    {
+                        continue;
+                    }
+                    return crate::RetainedRangeExpiredSnafu {
+                        first_cursor: first,
+                        last_cursor: last,
+                    }
+                    .fail();
                 }
                 let available_last = last;
                 let last = last.min(first.saturating_add(limit as u64 - 1));

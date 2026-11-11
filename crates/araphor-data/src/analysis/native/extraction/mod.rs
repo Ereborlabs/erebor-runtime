@@ -310,9 +310,15 @@ impl NativeStore {
         let (through, exhausted) = scan.read(
             &self.root,
             |selection, after, revision, limit, control| {
-                self.raw
-                    .until(control)?
-                    .select_position_at(&view.raw, selection, after, revision, limit, control)
+                self.raw.until(control)?.select_position_at(
+                    &view.raw,
+                    selection,
+                    after,
+                    revision,
+                    limit,
+                    read.event_ranges,
+                    control,
+                )
             },
             &mut output.sink(control),
             &mut capture,
@@ -397,12 +403,19 @@ impl NativeStore {
                 return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
             }
         }
+        let event_ranges = scan.read.event_ranges;
         let (through, exhausted) = scan.read(
             &self.root,
             |selection, after, revision, limit, control| {
-                self.raw
-                    .until(control)?
-                    .select_position_at(&view.raw, selection, after, revision, limit, control)
+                self.raw.until(control)?.select_position_at(
+                    &view.raw,
+                    selection,
+                    after,
+                    revision,
+                    limit,
+                    event_ranges,
+                    control,
+                )
             },
             &mut output.sink(control),
             capture,

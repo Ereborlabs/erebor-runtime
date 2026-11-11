@@ -67,7 +67,7 @@ remain open.
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
 | Fixture retirement | The context, catalogue, image, backup, profile, and managed binary-storage SQL families have native replacements. Native cases preserve typed publication, large records, rollback, backup, contexts, state, history, notices, raw expiry, and Arrow values. Other Data unit fixtures still need native ports. Quota-only cases are removed by user instruction. |
 | Storage lifecycle | Data storage quotas are removed. Keep usage reporting, retention, collection, and checkpoint/restore integrity. Recovery preserves acknowledged raw input and distinguishes a failed raw append from a poisoned native engine. Complete qualification remains open. |
-| Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
+| Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Fifteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | The latest stable native control measures durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Resolve the remaining Query contracts. The current complete run has 25
+- Resolve the remaining Query contracts. The last complete run has 25
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
   MVCC currently retains all history. Data startup validation still scans
@@ -87,6 +87,63 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Ten native cases replace the complete ordinary source-frame family. They
+  retain the two-call Selected package fixture. Existing Graph-destination
+  cases do not replace these checks. The cases preserve guarded publication,
+  exact parent proofs, initial and delta rows, empty batches, duplicate-row
+  handling, foreign-frame rejection, selected witnesses `[2, 4, 5]`, expiry
+  time 200, fixed cuts during actual concurrent append, scan-budget failure,
+  cancellation, pending input retention, context projection, and reopen.
+  Actual X and a records replace SQL header inspection. Nine owner faults
+  either fail native key/version loading or fail the existing frame owner
+  check. Each fault restores exact bytes. Duplicate witnesses must fail native
+  startup validation. A forged expired span must fail recovery and reopen with
+  overlapping cursor ranges. Both cases repair the original bytes and recheck
+  valid history. A real backup and restore changes the recovery epoch for the
+  stale-row-handle case. No corruption or compatibility API is added.
+
+  The first runtime run passes seven cases. Two failures are fixture path or
+  encoding errors. A third assertion expects no proof for a historical delta
+  from an already committed child. The verified SQL owner at
+  `5028dbeba6ad19ceb86375cf33b4dd56f6392993` also binds that exact child proof.
+  The native test now requires the exact child identity. Uncommitted delta
+  frames still have no proof until successful publication. Production proof
+  behavior is unchanged.
+
+  The next run passes nine cases. Its remaining historical full-event read
+  succeeds after payload expiry and returns no rows. The native raw selector
+  skips expired entries without comparing the requested historical revision.
+  The shared selector now reports `RetainedRangeExpired` when an intersecting
+  requested span expired after that revision. Current views still omit expired
+  rows. Existing identity, position, cursor, intake, and event-range filters
+  apply before the historical error. Both native extraction paths pass the
+  existing event ranges through a private argument. Metadata reads and the
+  existing elided Changes behavior are preserved. Historical raw scans report
+  selected payload loss. No additional scan, record, public API, or payload
+  archive is added.
+
+  All ten replacements pass after this correction. Four raw-index assertions
+  also pass: historical payload error, current empty rows, an outside cursor
+  range, and an excluded intake range. The complete focused Data run passes
+  197 managed, 24 raw, six lifecycle, eight backup, and three raw-index cases.
+  All 15 native Query integration cases pass in 9.15 seconds. Formatting of
+  changed Rust files and the release library check without default features
+  pass. Data unit compilation has 369 diagnostics, down from 388. That unit
+  target still does not compile or run.
+  Source cases are split into shared fixtures, frame cases, retention cases,
+  and projection cases. The old source test file and its module declaration
+  are removed. Read `native-source-baseline.log`, `native-source-contracts.log`,
+  `native-source-expiry-diagnostic.log`, `native-source-expiry-fixed.log`,
+  `native-source-raw-index-final.log`, `native-source-final-data.log`, and
+  `native-source-final-query.log`, `native-source-final-default.log`, and
+  `native-source-final-unit.log` under
+  `output/araphor-fjall-migration-20261110`. The filtered raw-index run in
+  `native-source-expiry-fixed.log` executes no raw-index cases; the later
+  unfiltered runs provide that proof.
+  Result: **Done for the ordinary source-frame replacement and historical
+  payload-expiry correction**. Complete migration qualification and incident
+  performance remain **Not done**. No new incident timing is measured.
 
 - Thirteen native cases replace the complete core Data and definition case
   families. Eight store cases preserve receipt revisions, original raw spans,

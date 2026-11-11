@@ -4,6 +4,46 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [ordinary source fixture](../../crates/araphor-data/tests/native_managed/storage/source.rs),
+[frame cases](../../crates/araphor-data/tests/native_managed/storage/source/frames.rs),
+[retention cases](../../crates/araphor-data/tests/native_managed/storage/source/retention.rs),
+and [projection cases](../../crates/araphor-data/tests/native_managed/storage/source/projection.rs)
+with the [raw selector](../../crates/araphor-data/src/analysis/raw.rs) and
+[native extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs).
+These ten cases replace the old ordinary Selected source-frame family. They
+preserve publication guards, parent proofs, row ownership, exact witnesses,
+concurrent capture cuts, context projection, budgets, cancellation, pending
+retention, payload expiry, corruption recovery, repair, and reopen. Native X
+and a inspection uses existing record readers. The nine owner-fault checks
+retain the opaque native attempt boundary. Tenant and instance faults fail
+key loading; the generation fault fails retained-version loading. The other
+six faults fail the frame owner check. Each fault restores the exact record.
+
+Historical delta restoration keeps the exact committed child proof, as the
+verified SQL implementation did. A current uncommitted delta still has no
+proof until publication. The old no-proof assertion for a committed historical
+delta was stale; production proof behavior is unchanged.
+
+The port exposes a historical payload-loss error. The old native raw selector
+omits every expired entry, so a historical full-event read can succeed with no
+rows after its payload is removed. The selector now compares expiry revision
+with the requested cut. It reports `RetainedRangeExpired` only for an
+intersecting historical span. Current reads still omit expired rows. Identity,
+position, cursor, intake, and explicit event-range filters keep their effect.
+Both extraction paths pass the existing event ranges through a private
+argument. Metadata reads and the existing elided Changes behavior are preserved.
+Historical raw scans report selected payload loss. No new
+scan, public API, or archive is added. The
+[raw-index proof](../../crates/araphor-data/tests/raw_index.rs) checks the
+historical error, current empty rows, an outside cursor range, and an excluded
+intake range. The focused Data run passes 197 managed, 24 raw, six lifecycle,
+eight backup, and three raw-index cases. Fifteen native Query integration cases,
+formatting of changed Rust files, and the release library check without default
+features also pass. Data unit compilation has 369 diagnostics, down from 388.
+That unit target still does not compile or run. Read the `native-source-*`
+evidence under `output/araphor-fjall-migration-20261110`. Complete migration qualification
+and incident performance remain open.
+
 Read the [core store cases](../../crates/araphor-data/tests/native_store/core.rs),
 [core raw cases](../../crates/araphor-data/tests/native_raw/store.rs), and
 [definition cases](../../crates/araphor-data/tests/native_packages/catalogue/definitions.rs)

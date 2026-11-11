@@ -1,5 +1,9 @@
 # Araphor retained execution state review
 
+Current Fjall source-frame checks are in the
+[native storage review](araphor-native-storage-review.md). The source test link
+below retains its earlier source revision.
+
 ## Recorded Follow cut, 2026-11-05
 
 Recorded-cut validation replaces broad relation freshness at Follow admission
@@ -3078,7 +3082,7 @@ committed membership. Arrow row blocks retain no membership history.
 Zero-batch headers reconstruct empty datasets from the canonical schema.
 They have no source IPC payload. Explicit empty batches retain their exact
 batch count. The
-[source-frame tests](../../crates/araphor-data/src/analysis/managed/tests/source.rs)
+[source-frame tests](https://github.com/Ereborlabs/erebor-runtime/blob/81fd062f29ab8b12516c2e0a8e197705976ec062/crates/araphor-data/src/analysis/managed/tests/source.rs)
 exercise publication, fixed cuts, replay, rejection, payload shape, and empty
 tables. Current verification results remain in the parent plan.
 

@@ -12,6 +12,8 @@ mod calls;
 mod control;
 #[path = "storage/output.rs"]
 mod output;
+#[path = "storage/source.rs"]
+mod source;
 #[path = "storage/terminal.rs"]
 mod terminal;
 

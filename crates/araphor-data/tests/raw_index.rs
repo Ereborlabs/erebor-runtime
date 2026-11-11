@@ -144,6 +144,84 @@ fn captured_roots_survive_retention() -> TestResult {
         store.read_page_at(&covered_view, &source, 1, &AnalysisReadControl::default()),
         Err(araphor_data::Error::RetainedRangeExpired { .. })
     ));
+    let requests = AnalysisTableRequests::from([(
+        "events".into(),
+        Some(std::collections::BTreeSet::from([
+            AnalysisStore::table_schemas()["events"].index_of("source_cursor")?,
+        ])),
+    )]);
+    let selection =
+        AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]).project(&requests)?;
+    let read = AnalysisTableRead {
+        requests: &requests,
+        event_ranges: None,
+        mode: AnalysisReadModeV1::Complete,
+        now: 201,
+    };
+    let control = AnalysisReadControl::default();
+    assert!(matches!(
+        store.read_tables_at(
+            &covered_view,
+            &selection,
+            read,
+            Default::default(),
+            &control,
+            None
+        ),
+        Err(araphor_data::Error::RetainedRangeExpired { .. })
+    ));
+    let latest = store.read_tables(&selection, read, Default::default(), &control)?;
+    assert_eq!(
+        latest
+            .tables
+            .get("events")
+            .into_iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
+    let mut beyond = selection.clone();
+    beyond.cursor_from = std::ops::Bound::Included(3);
+    let outside = store.read_tables_at(
+        &covered_view,
+        &beyond,
+        read,
+        Default::default(),
+        &control,
+        None,
+    )?;
+    assert_eq!(
+        outside
+            .tables
+            .get("events")
+            .into_iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
+    let excluded = store.read_tables_at(
+        &covered_view,
+        &selection,
+        AnalysisTableRead {
+            event_ranges: Some(&[(101, 102)]),
+            ..read
+        },
+        Default::default(),
+        &control,
+        None,
+    )?;
+    assert_eq!(
+        excluded
+            .tables
+            .get("events")
+            .into_iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        0
+    );
     assert_eq!(
         covered_view
             .source_receipt(&source)?
