@@ -20,25 +20,43 @@ fn graph_state_bootstrap() -> TestResult {
     assert_eq!(page.tables["graph_state"][0].num_rows(), 1);
     assert_eq!(head(&page.tables["graph_state"][0])?.null_count(), 1);
     let requests = araphor_data::AnalysisTableRequests::from([("graph_subjects".into(), None)]);
-    let error = store
-        .read_tables(
-            &selection,
-            araphor_data::AnalysisTableRead {
-                requests: &requests,
-                ..read
-            },
-            AnalysisExtractLimits::default(),
-            &control,
-        )
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        Error::Package {
-            code: Code::Unsupported,
-            field: "native table owner",
-            ..
-        }
-    ));
+    let subjects = store.read_tables(
+        &selection,
+        araphor_data::AnalysisTableRead {
+            requests: &requests,
+            ..read
+        },
+        AnalysisExtractLimits::default(),
+        &control,
+    )?;
+    assert_eq!(
+        subjects
+            .tables
+            .get("graph_subjects")
+            .into_iter()
+            .flatten()
+            .map(sdk::RecordBatch::num_rows)
+            .sum::<usize>(),
+        0
+    );
+    assert_eq!(
+        subjects.extraction.sources.len(),
+        page.extraction.sources.len()
+    );
+    for (actual, expected) in subjects
+        .extraction
+        .sources
+        .iter()
+        .zip(&page.extraction.sources)
+    {
+        assert_eq!(actual.receipt, expected.receipt);
+        assert_eq!(actual.commit_revision, expected.commit_revision);
+        assert_eq!(actual.expired, expected.expired);
+        assert_eq!(actual.recovery, expected.recovery);
+        assert_eq!(actual.pending, expected.pending);
+        assert_eq!(actual.coverage_report, expected.coverage_report);
+    }
+    assert_eq!(subjects.extraction.meta, page.extraction.meta);
     Ok(())
 }
 

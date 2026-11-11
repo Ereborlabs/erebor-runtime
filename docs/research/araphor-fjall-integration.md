@@ -36,12 +36,34 @@ fixture ports, finite-history collection, and complete qualification remain open
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
 | Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
-| Subscription and execution | Complete retained Source providers. Keep saved positions in the original logs and native DataFusion plans. Require restart and unchanged incident proof through the public owner. |
+| Subscription and execution | Correct ordinary Query resume through its saved Data/log cut. The current fresh watch starts at zero and can wait before it reads existing matching input. Keep partial ordinals, native DataFusion plans, and original-log replay. Durable managed consumption and restart have focused proof. |
+| Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | Matched release runs measure durable creation below 100 ms. The measured gain against DuckDB is 6.45 to 7.36 fold. The 100-fold target is not met. |
 
 Current evidence:
 
+- Native checkpoint now collects acknowledged original journals. The minimum
+  saved cursor includes every durable input generation and the shared reader.
+  Fresh subscriptions capture under the same scan lock. Explicit subscriptions
+  behind the acknowledged floor fail even if an old snapshot cached its cursor.
+  The no-consumer check passes in 0.12 seconds. The two-consumer check passes
+  in 0.93 seconds; the slower consumer and a rejected publication prevent
+  release. Actual successful consumption permits release and restart replay.
+  Removal, recreation, and old-generation revival pass in 0.53 seconds.
+  Notification completion, exact retry, compaction, and no redelivery after
+  restart pass after actual collection in 3.29 seconds. Six storage lifecycle
+  checks pass in 1.31 seconds. Sixteen managed input cases pass in 3.76 seconds.
+  The unchanged explicit complete-snapshot check also passes.
+  Read `output/araphor-fjall-migration-20261110/native-journal-*.log`.
+- The broader `native_inputs` target has five passing cases and one existing
+  failure: `raw_position_is_the_last_matching_record_in_the_original_span`.
+  Fresh subscription position is zero; the assertion expects revision 1,
+  ordinal 2. This case does not call checkpoint, and the committed pre-collection
+  path has the same behavior. Query can incorrectly wait on a resumed ordinary
+  read because that path treats the zero position as complete. Correct saved-cut
+  replay next. Keep the assertion until that contract is resolved. This target
+  does not pass; the complete subscription replacement remains **Not done**.
 - The original public `coverage_changes` and `coverage_report` methods now
   use the native owner. Each read holds a reader permit and captures one
   Data view. Four focused cases pass in 0.21 seconds. They check an arrival

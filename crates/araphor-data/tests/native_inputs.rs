@@ -1,5 +1,3 @@
-
-
 use std::{collections::BTreeSet, ops::Bound, time::Duration};
 
 use araphor_data::{
@@ -115,22 +113,39 @@ async fn raw_position_is_the_last_matching_record_in_the_original_span() -> Test
 #[tokio::test]
 async fn missing_saved_journal_cut_is_rejected_while_history_remains_readable() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = NativeStore::open(&directory.path().join("data"))?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
     let first = store.commit_context(&context("watched", 1))?;
-    store.database().inner().flush_memtables()?;
+    let held = store.view()?;
+    let saved = held.snapshot().cursor()?.ok_or("saved cursor")?;
+    store.checkpoint()?;
     store.database().inner().rotate_journal()?;
     store.commit_context(&context("watched", 2))?;
-    let cursor = store.view()?.snapshot().cursor()?.ok_or("current cursor")?;
-    store.database().inner().retain_after(cursor)?;
-    store.database().inner().collect_journals()?;
+    let before = store.meta()?;
+    store.checkpoint()?;
+    assert_eq!(store.meta()?, before);
+    store.checkpoint()?;
+    assert_eq!(store.meta()?, before);
     let historical = store.read_at(first)?;
     assert!(historical.context(&context("watched", 1).key)?.is_some());
     assert!(historical.snapshot().cursor()?.is_none());
+    assert!(held.context(&context("watched", 1).key)?.is_some());
+    assert_eq!(held.snapshot().cursor()?, Some(saved));
     let control = AnalysisReadControl::default();
     let selection = AnalysisSelectionV1::tenant([1; 16]);
     assert!(store
         .subscribe_inputs_at(
             &historical,
+            &selection,
+            &requests("context_versions"),
+            None,
+            &control,
+            &Budget
+        )
+        .is_err());
+    assert!(store
+        .subscribe_inputs_at(
+            &held,
             &selection,
             &requests("context_versions"),
             None,
@@ -150,6 +165,27 @@ async fn missing_saved_journal_cut_is_rejected_while_history_remains_readable() 
         changed(&mut current).await?.commit_revision,
         store.view()?.revision()
     );
+    unchanged(&mut current).await?;
+    drop((current, held, historical, store));
+    let store = NativeStore::open(&root)?;
+    assert!(store
+        .read_at(first)?
+        .context(&context("watched", 1).key)?
+        .is_some());
+    assert!(store.read_at(first)?.snapshot().cursor()?.is_none());
+    let mut current = store.subscribe_inputs(
+        &selection,
+        &requests("context_versions"),
+        None,
+        &control,
+        &Budget,
+    )?;
+    store.commit_context(&context("watched", 4))?;
+    assert_eq!(
+        changed(&mut current).await?.commit_revision,
+        store.view()?.revision()
+    );
+    unchanged(&mut current).await?;
     Ok(())
 }
 

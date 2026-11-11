@@ -1,4 +1,8 @@
-use std :: { collections :: { BTreeMap , BTreeSet } , ops :: Bound :: { Excluded , Included } , sync :: { atomic :: Ordering , Arc , Mutex , RwLock , Weak } } ;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Included},
+    sync::{atomic::Ordering, Arc, Mutex, RwLock, Weak},
+};
 
 use fjall::{cdc::Feed, Branch, SingleWriterTxDatabase};
 use snafu::ResultExt as _;
@@ -6,12 +10,16 @@ use tokio::sync::watch;
 
 use super::{DataView, NativeStore};
 use crate::analysis::inputs::{InputChanges, InputInterest, InputWatch};
-use crate :: { AnalysisReadControl , AnalysisSelectionV1 , AnalysisTableRequests , InputSubscription , ManagedBudget , NativeStateSnafu , NativeStorageSnafu , Result , StorePositionV1 } ;
+use crate::{
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, InputSubscription,
+    ManagedBudget, NativeStateSnafu, NativeStorageSnafu, Result, StorePositionV1,
+};
 
 mod activation;
 pub use activation::ActivationSubscription;
 mod capture;
 mod checkpoint;
+mod collection;
 mod consumer;
 mod cut;
 mod records;
@@ -37,6 +45,7 @@ pub(super) struct Coordinator {
 struct Scan {
     native: Feed,
     raw: u64,
+    retained: Option<fjall::Cursor>,
     consumers: BTreeMap<(u64, u64), Arc<Consumer>>,
     last_real: u64,
 }
@@ -92,6 +101,7 @@ impl Coordinator {
             scan: Mutex::new(Scan {
                 native,
                 raw,
+                retained: None,
                 consumers: BTreeMap::new(),
                 last_real: 0,
             }),
@@ -249,13 +259,24 @@ impl NativeStore {
         control: &AnalysisReadControl,
         budget: &dyn ManagedBudget,
     ) -> Result<InputSubscription> {
-        let view = self.view()?;
-        self.subscribe_inputs_at(&view, selection, requests, owners, control, budget)
+        self.subscribe_inputs_after(None, selection, requests, owners, control, budget)
     }
 
     pub fn subscribe_inputs_at(
         &self,
         after: &DataView,
+        selection: &AnalysisSelectionV1,
+        requests: &AnalysisTableRequests,
+        owners: Option<&BTreeSet<String>>,
+        control: &AnalysisReadControl,
+        budget: &dyn ManagedBudget,
+    ) -> Result<InputSubscription> {
+        self.subscribe_inputs_after(Some(after), selection, requests, owners, control, budget)
+    }
+
+    fn subscribe_inputs_after(
+        &self,
+        after: Option<&DataView>,
         selection: &AnalysisSelectionV1,
         requests: &AnalysisTableRequests,
         owners: Option<&BTreeSet<String>>,
@@ -273,6 +294,7 @@ impl NativeStore {
             .build()
         })?;
         let current = self.inputs.view()?;
+        let after = after.unwrap_or(&current);
         if after.store_uuid != current.store_uuid || after.revision > current.revision {
             return NativeStateSnafu {
                 field: "input saved Data cut",
@@ -282,7 +304,7 @@ impl NativeStore {
         let cursor = after.snapshot.cursor().context(NativeStorageSnafu {
             operation: "capture saved input journal cut",
         })?;
-        if cursor.is_none() {
+        if cursor.is_none() || cursor < scan.retained {
             return NativeStateSnafu {
                 field: "saved input journal is not retained",
             }

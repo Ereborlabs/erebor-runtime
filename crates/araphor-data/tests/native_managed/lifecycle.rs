@@ -199,6 +199,114 @@ fn renewal_and_admission_authority() -> TestResult {
 }
 
 #[test]
+fn retired_inputs_preserve_revival() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = Arc::new(NativeStore::open(&root)?);
+    let fixture = fixture(&store, "retired-inputs")?;
+    let admitted = fixture.admit(&store)?;
+    let requests = [("events".into(), None)].into();
+    let control = AnalysisReadControl::default();
+    let original = store.subscribe_managed_inputs(
+        &admitted,
+        &admitted.grant.selection,
+        &requests,
+        None,
+        &control,
+        &super::graph::Budget,
+    )?;
+    super::attempts::append(&store, 1)?;
+    let first = store.view()?;
+    let first_anchor = (
+        first.revision(),
+        first.snapshot().cursor()?.ok_or("first anchor")?,
+    );
+    drop(first);
+    store.database().inner().flush_memtables()?;
+    store.database().inner().rotate_journal()?;
+    let mut updated = admitted.spec.clone();
+    let call = updated.manifest.calls.remove(&10).ok_or("call")?;
+    updated.manifest.calls.insert(11, call);
+    let candidate = store.prepare_managed_version(&admitted, &updated, || Ok(()))?;
+    let page = capture(&store, &candidate, Some(&admitted))?;
+    let attempt = store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("promote", false),
+        || Ok(()),
+    )?;
+    publish(&store, &attempt, false)?;
+    let current = store
+        .managed_instance([1; 16], "retired-inputs", &control)?
+        .ok_or("promoted instance")?;
+    let promoted = store.subscribe_managed_inputs(
+        &current,
+        &current.grant.selection,
+        &requests,
+        None,
+        &control,
+        &super::graph::Budget,
+    )?;
+    super::attempts::append(&store, 2)?;
+    let second = store.view()?;
+    let second_anchor = (
+        second.revision(),
+        second.snapshot().cursor()?.ok_or("second anchor")?,
+    );
+    drop(second);
+    store.database().inner().flush_memtables()?;
+    store.database().inner().rotate_journal()?;
+    let check = |store: &NativeStore| -> TestResult {
+        for (revision, cursor) in [first_anchor, second_anchor] {
+            assert_eq!(store.read_at(revision)?.snapshot().cursor()?, Some(cursor));
+        }
+        Ok(())
+    };
+    store.checkpoint()?;
+    check(&store)?;
+    let removed = store.remove_managed(&current, || Ok(()))?;
+    store.checkpoint()?;
+    check(&store)?;
+    drop((page, attempt, original, promoted, store));
+    let store = Arc::new(NativeStore::open(&root)?);
+    check(&store)?;
+    let recreated = store.recreate_managed(&removed, &fixture.spec, &fixture.grant, || Ok(()))?;
+    store.checkpoint()?;
+    check(&store)?;
+    let revived = store.prepare_managed_version(&recreated, &updated, || Ok(()))?;
+    assert_eq!(revived.generation, candidate.generation);
+    let page = capture(&store, &revived, Some(&recreated))?;
+    let attempt = store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("revive", false),
+        || Ok(()),
+    )?;
+    publish(&store, &attempt, false)?;
+    let current = store
+        .managed_instance([1; 16], "retired-inputs", &control)?
+        .ok_or("revived instance")?;
+    assert_eq!(current.generation, candidate.generation);
+    let input = store.subscribe_managed_inputs(
+        &current,
+        &current.grant.selection,
+        &requests,
+        None,
+        &control,
+        &super::graph::Budget,
+    )?;
+    assert_eq!(input.position().commit_revision, second_anchor.0);
+    store.checkpoint()?;
+    check(&store)?;
+    drop((page, attempt, input, store));
+    let store = Arc::new(NativeStore::open(&root)?);
+    check(&store)?;
+    assert_eq!(
+        store.managed_instance([1; 16], "retired-inputs", &control)?,
+        Some(current)
+    );
+    Ok(())
+}
+
+#[test]
 fn version_lifecycle_keeps_history() -> TestResult {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("data");

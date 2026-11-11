@@ -21,6 +21,7 @@ use budget::BackupBudget;
 impl NativeStore {
     pub fn checkpoint(&self) -> Result<()> {
         self.check()?;
+        self.checkpoint_inputs()?;
         let _writer = self.writer.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "writer lock",
@@ -42,7 +43,12 @@ impl NativeStore {
             .inspect_err(|_| self.poison())
             .context(NativeStorageSnafu {
                 operation: "flush native checkpoint",
-            })
+            })?;
+        self.inputs.collect_journals().inspect_err(|_| {
+            if self.database.inner().is_poisoned() {
+                self.poison();
+            }
+        })
     }
 
     pub fn backup(&self, destination: &Path) -> Result<AnalysisBackupManifestV1> {

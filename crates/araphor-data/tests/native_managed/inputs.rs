@@ -464,6 +464,105 @@ fn publish(
 }
 
 #[tokio::test]
+async fn journal_floor_tracks_consumers() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = Arc::new(NativeStore::open(&root)?);
+    let running = |id: &str| -> araphor_data::Result<ManagedInstance> {
+        let mut fixture = Fixture::new(&store, [1; 16], id, false)?;
+        fixture.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
+        let admitted = fixture.admit(&store)?;
+        store.set_managed_running([1; 16], id, admitted.lifecycle, true, || Ok(()))
+    };
+    let fast = running("fast")?;
+    let slow = running("slow")?;
+    let fast_input = subscribe(&store, &fast)?;
+    let slow_input = subscribe(&store, &slow)?;
+    let anchor = store.view()?;
+    let cursor = anchor.snapshot().cursor()?.ok_or("consumer anchor")?;
+    super::attempts::append(&store, 1)?;
+    store.database().inner().flush_memtables()?;
+    store.database().inner().rotate_journal()?;
+    let page = capture(&store, &fast, &fast_input, AnalysisReadModeV1::Complete)?;
+    let fast_attempt = store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("fast", true),
+        || Ok(()),
+    )?;
+    let before = store.meta()?;
+    assert!(publish(&store, &fast_attempt, true, true).is_err());
+    assert_eq!(store.meta()?, before);
+    store.checkpoint()?;
+    assert_eq!(
+        store.read_at(anchor.revision())?.snapshot().cursor()?,
+        Some(cursor)
+    );
+    let checkpoint = store.meta()?;
+    store.checkpoint()?;
+    assert_eq!(store.meta()?, checkpoint);
+    publish(&store, &fast_attempt, true, false)?;
+    store.checkpoint()?;
+    assert_eq!(
+        store.read_at(anchor.revision())?.snapshot().cursor()?,
+        Some(cursor)
+    );
+    let page = capture(&store, &slow, &slow_input, AnalysisReadModeV1::Complete)?;
+    let slow_attempt = store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("slow", true),
+        || Ok(()),
+    )?;
+    publish(&store, &slow_attempt, true, false)?;
+    store.checkpoint()?;
+    assert!(store
+        .read_at(anchor.revision())?
+        .snapshot()
+        .cursor()?
+        .is_none());
+    assert_eq!(anchor.snapshot().cursor()?, Some(cursor));
+    let checkpoint = store.meta()?;
+    store.checkpoint()?;
+    assert_eq!(store.meta()?, checkpoint);
+    drop((
+        page,
+        fast_attempt,
+        slow_attempt,
+        fast_input,
+        slow_input,
+        anchor,
+        store,
+    ));
+    let store = Arc::new(NativeStore::open(&root)?);
+    let current = store
+        .managed_resume([1; 16], "fast", &AnalysisReadControl::default())?
+        .instance;
+    let mut input = subscribe(&store, &current)?;
+    assert!(!input.needs_initial());
+    super::attempts::append(&store, 2)?;
+    let arrived = store.view()?.revision();
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), input.changed())
+            .await??
+            .commit_revision,
+        arrived
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), input.changed())
+            .await
+            .is_err()
+    );
+    let page = capture(&store, &current, &input, AnalysisReadModeV1::Complete)?;
+    let attempt = store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("continued", true),
+        || Ok(()),
+    )?;
+    publish(&store, &attempt, true, false)?;
+    store.checkpoint()?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn initial_capture_atomic_ack_and_restart_replay() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");

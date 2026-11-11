@@ -115,6 +115,25 @@ sustained latency guarantee. Read the current worklist for exact report paths.
 
 ## Capacity and maintenance
 
+[Checkpoint](../../crates/araphor-data/src/analysis/native/backup/mod.rs) first
+saves safe filtered input positions. It then holds the Data writer during raw
+sealing, native flush, and [journal collection](../../crates/araphor-data/src/analysis/native/inputs/collection.rs).
+The collection owner catches the shared reader through the published view under
+the scan lock. The minimum of that reader, the published cut, and every durable
+input generation protects the original cursor anchors. Fjall removes only
+eligible sealed journals. The active journal and anchor journal remain.
+
+All saved generations constrain this floor. Version selection can revive an
+older generation after removal and recreation. Collection does not add an
+incarnation limit or change that behavior. Retained native values survive old
+journal removal. Native history and original-log retention have separate policies.
+
+Fresh subscription capture uses the same scan lock. The coordinator remembers
+its acknowledged cursor there. A cached old snapshot can still report a cursor,
+so explicit registration behind that floor is rejected. Restart restores saved
+consumers before a later checkpoint advances the engine acknowledgement again.
+No extra synchronization is added to each package commit.
+
 [Writer admission](../../crates/araphor-data/src/analysis/native/capacity.rs)
 checks actual current usage. Ordinary writes enforce configured disk, entry,
 and free-space limits. Maintenance preserves the free-space reserve and can
@@ -163,6 +182,14 @@ The old SQL backup and restore crash tests are removed.
 
 ## Verification and limits
 
+- Journal collection passes the slowest-consumer, rejected-publication,
+  exhaustive-consumption, dormant-generation, removal/recreation, exact retry,
+  physical journal removal, historical-read, and restart checks. Six storage
+  lifecycle and sixteen managed input cases pass. Actual notification completion
+  and restart after collection also pass. Read the current worklist for commands
+  and logs. The wider `native_inputs` target has one existing initial-position
+  failure. Ordinary Query saved-cut replay remains open; do not treat that target
+  or the full subscription migration as passed.
 - [Native coverage checks](../../crates/araphor-data/tests/native_raw.rs)
   preserve six-report bounded reads, exact report references and bytes,
   retry stability, conflicting-content rejection, and multi-report batches.

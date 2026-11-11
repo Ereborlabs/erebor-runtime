@@ -194,6 +194,9 @@ async fn native_notification_consumption() -> TestResult {
     let mut subscription = Fixture::following(&engine, instance.clone()).await?;
     let update = Fixture::rows(&mut subscription).await?;
     assert!(update.snapshot.notification_capture().is_some());
+    let anchor = fixture.store.view()?.revision();
+    fixture.store.database().inner().flush_memtables()?;
+    fixture.store.database().inner().rotate_journal()?;
     assert_eq!(fixture.consumer()?.completed_through.commit_revision, 0);
     let cut = update.cursor.position();
     let mut concern = Fixture::concern();
@@ -275,7 +278,22 @@ async fn native_notification_consumption() -> TestResult {
         fixture.consumer()?.completed_through,
         empty.cursor.position()
     );
-    fixture.store.database().inner().flush_memtables()?;
+    fixture.store.checkpoint()?;
+    assert!(fixture
+        .store
+        .read_at(anchor)?
+        .snapshot()
+        .cursor()?
+        .is_none());
+    let collected = fixture.store.view()?.revision();
+    assert_eq!(
+        fixture.store.write()?.commit_notifications(
+            update.snapshot.notification_capture().ok_or("capture")?,
+            &[]
+        )?,
+        (collected, true)
+    );
+    assert_eq!(fixture.store.view()?.revision(), collected);
     fixture.store.database().inner().major_compact()?;
     subscription.cancel_and_join().await?;
     drop((update, next, empty, engine, router, sink));
