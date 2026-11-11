@@ -299,7 +299,7 @@ fn checkpoint_resumes_from_native_result_after_each_restart() -> TestResult {
     Ok(())
 }
 
-fn journals(
+pub(super) fn journals(
     store: &NativeStore,
     attempt: &Arc<araphor_data::ManagedAttempt>,
     model: &sdk::Model,

@@ -211,6 +211,31 @@ impl NativeStore {
 }
 
 impl DataWrite<'_> {
+    pub(in crate::analysis::native) fn package_descriptor(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let row = PackageRecord::read_header(
+            tenant,
+            package,
+            revision,
+            |key| Records::staged(key, &self.transaction),
+            &mut |_| Ok(()),
+        )?;
+        if row
+            .as_ref()
+            .is_some_and(|(_, row)| row.revision > self.metadata_revision)
+        {
+            return NativeStateSnafu {
+                field: "package record revision",
+            }
+            .fail();
+        }
+        Ok(row.map(|(_, row)| row.value.descriptor))
+    }
+
     pub(super) fn package_revision(
         &self,
         tenant: [u8; 16],

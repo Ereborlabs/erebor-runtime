@@ -89,6 +89,7 @@ fn contract_reads_metadata() -> TestResult {
     let (key, bytes) = &bodies[0];
     assert_eq!(bytes[0], 0);
     assert_eq!(&bytes[1..], row.artifact.as_slice());
+    let journals = super::publication::journals(&store, &attempt, &model, false)?;
     let mut tx = store.write()?;
     tx.native().remove(key.clone());
     tx.commit([])?;
@@ -107,6 +108,24 @@ fn contract_reads_metadata() -> TestResult {
         model.graph.as_ref().ok_or("Graph contract")?
     );
     assert_eq!(read_nodes(&producer, &store)?.data.rows(), 0);
+    let before = store.meta()?;
+    let head = store.database().inner().journal_head()?;
+    let error = super::publication::publish(&store, &attempt, &model, &journals, true)
+        .err()
+        .ok_or("publication guard did not run")?;
+    assert!(
+        matches!(
+            error.downcast_ref::<araphor_data::Error>(),
+            Some(araphor_data::Error::Package {
+                code: Code::Denied,
+                field: "guard",
+                ..
+            })
+        ),
+        "{error}"
+    );
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.database().inner().journal_head()?, head);
     assert!(changed
         .package_revision(
             [1; 16],
@@ -126,6 +145,7 @@ fn contract_reads_metadata() -> TestResult {
     );
     drop(changed);
     drop(held);
+    drop(journals);
     drop(producer);
     drop(attempt);
     drop(store);

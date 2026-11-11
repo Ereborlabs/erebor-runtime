@@ -42,6 +42,15 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Staged Graph contracts now read package metadata through the same native
+  transaction. Full-image authentication still reads the complete artifact.
+  The public rollback regression fails on the old body read and passes on the
+  metadata path. Three Graph checks pass in 0.14 seconds. Two opposite-order
+  release pairs pass the unchanged incident. Median Graph staging changes
+  from 5.039–5.549 ms to 3.243–3.424 ms. Durable notification creation changes
+  are mixed: before 50.552–92.323 ms, after 49.794–88.307 ms. These runs do
+  not establish an end-to-end gain. The 100-fold target remains **Not done**.
+  Read `output/araphor-fjall-migration-20261110/staged-contract-comparison.json`.
 - The release diagnostic with adjacent managed commit timers passes the
   unchanged incident in 2.07 seconds. Durable creation is 51.461, 76.219,
   and 86.388 ms; public receipt is 59.879, 88.493, and 102.181 ms. Nine

@@ -149,14 +149,14 @@ impl DataWrite<'_> {
         spec: &ManagedSpec,
         call: &crate::ManagedCall,
     ) -> Result<sdk::Package> {
-        let row = self
-            .package_revision(
+        let descriptor = self
+            .package_descriptor(
                 spec.tenant,
                 &call.package.package_id,
                 &call.package.revision,
             )?
             .ok_or_else(|| Code::Missing.error("managed SDK descriptor"))?;
-        call.contract(&row.descriptor)
+        call.contract(&descriptor)
     }
 
     pub(super) fn admit_managed_graph(&mut self, spec: &ManagedSpec, create: bool) -> Result<()> {

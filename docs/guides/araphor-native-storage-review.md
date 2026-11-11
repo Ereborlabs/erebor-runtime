@@ -86,6 +86,13 @@ read metadata only. Full package reads join the artifact through the same native
 snapshot or transaction. Existing artifact and bundle authentication still runs
 at its owning callers. No verifier cache is added by this change.
 
+Staged Graph admission uses the same metadata-only path. The public regression
+removes a package body after it creates both Graph journals. Publication must
+reach its exact final rejection guard and leave Data and WAL unchanged. Full
+artifact reads and reopen still reject the missing body. Three Graph checks
+pass. Matched incident runs reduce the measured Graph phase but do not establish
+an end-to-end notification gain. Read the current worklist for those results.
+
 Installation retries compare both metadata and artifact bytes.
 [Collection](../../crates/araphor-data/src/analysis/native/packages/collection.rs)
 removes metadata, body fragments, and the compact GC catalogue atomically.
