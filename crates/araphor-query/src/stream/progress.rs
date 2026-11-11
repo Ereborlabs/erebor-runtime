@@ -69,26 +69,32 @@ impl Progress {
         )
         .context(crate::SqlSnafu)?;
         requests.retain(|_, columns| columns.is_some());
-        
+
         let indexed = binding.managed.is_some()
             && crate::sources::SourceLookup::required(physical, None).context(crate::SqlSnafu)?;
-        
+
         crate::sources::SourceSnapshot::project_requests(&mut requests, &mut bounds, indexed)
             .context(crate::SqlSnafu)?;
+        let resume = self
+            .run
+            .resume
+            .as_ref()
+            .filter(|_| self.run.follow)
+            .cloned();
         let subscribe = || {
-            
             let session = Arc::new(binding.clone());
-            
+
             let control = Arc::clone(session.control());
             let worker = Arc::clone(&control);
             let requests = requests.clone();
             let owners = bounds.input_owners.clone();
+            let resume = resume.clone();
             async move {
                 crate::execution::Engine::blocking(control, session.token()?, move || {
                     let budget = session
                         .memory()
                         .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
-                    
+
                     if let Some(instance) = session
                         .managed
                         .as_ref()
@@ -101,6 +107,20 @@ impl Progress {
                             .store()
                             .subscribe_managed_inputs(
                                 instance,
+                                session.selection(),
+                                &requests,
+                                owners.as_ref(),
+                                &worker,
+                                budget.as_ref(),
+                            )
+                            .map_err(crate::Error::from);
+                    }
+                    if let Some(cursor) = resume.as_ref().filter(|_| session.managed.is_none()) {
+                        let store = session.engine().store();
+                        cursor.check_store(&store.meta()?)?;
+                        return store
+                            .subscribe_inputs_since(
+                                cursor.position(),
                                 session.selection(),
                                 &requests,
                                 owners.as_ref(),

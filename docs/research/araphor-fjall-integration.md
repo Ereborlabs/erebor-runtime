@@ -36,13 +36,28 @@ fixture ports, finite-history collection, and complete qualification remain open
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
 | Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
-| Subscription and execution | Correct ordinary Query resume through its saved Data/log cut. The current fresh watch starts at zero and can wait before it reads existing matching input. Keep partial ordinals, native DataFusion plans, and original-log replay. Durable managed consumption and restart have focused proof. |
+| Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | Matched release runs measure durable creation below 100 ms. The measured gain against DuckDB is 6.45 to 7.36 fold. The 100-fold target is not met. |
 
 Current evidence:
 
+- Ordinary Query now calls `subscribe_inputs_since` with its saved consumed
+  position. A partial position uses the previous Data cut and replays the
+  original commit; a whole-commit position starts after that cut. The existing
+  shared walker and selectors supply matching input. There is no demand-head
+  scan or new change index. Store identity is checked before replay. Only
+  `AnalysisInputExpired` maps to lawful log expiry; decoder and I/O failures
+  keep their existing categories. The four public resume cases pass in
+  2.54 seconds. All thirteen native Query cases pass in 34.24 seconds,
+  including managed execution, Graph publication, finite runs, and version
+  rollback. Six native input cases pass in 4.27 seconds. The exact bounded
+  revision-1/ordinal-2 assertion now uses explicit original-log replay from
+  zero. Fresh subscriptions start at their captured cut; replay for another
+  subscriber does not wake them. The empty old SQL head module is removed.
+  Read `output/araphor-fjall-migration-20261110/query-resume-after.log`,
+  `query-native-execution-final.log`, and `native-saved-position.log`.
 - Native checkpoint now collects acknowledged original journals. The minimum
   saved cursor includes every durable input generation and the shared reader.
   Fresh subscriptions capture under the same scan lock. Explicit subscriptions
@@ -56,14 +71,14 @@ Current evidence:
   checks pass in 1.31 seconds. Sixteen managed input cases pass in 3.76 seconds.
   The unchanged explicit complete-snapshot check also passes.
   Read `output/araphor-fjall-migration-20261110/native-journal-*.log`.
-- The broader `native_inputs` target has five passing cases and one existing
+- At commit `e504189e3`, the broader `native_inputs` target had five passing cases and one existing
   failure: `raw_position_is_the_last_matching_record_in_the_original_span`.
   Fresh subscription position is zero; the assertion expects revision 1,
   ordinal 2. This case does not call checkpoint, and the committed pre-collection
-  path has the same behavior. Query can incorrectly wait on a resumed ordinary
-  read because that path treats the zero position as complete. Correct saved-cut
-  replay next. Keep the assertion until that contract is resolved. This target
-  does not pass; the complete subscription replacement remains **Not done**.
+  path had the same behavior. Query could incorrectly wait on a resumed ordinary
+  read because that path treated the zero position as complete. The saved-cut
+  correction above resolves that gap through original-log replay. This earlier
+  qualification did not pass the complete target.
 - The original public `coverage_changes` and `coverage_report` methods now
   use the native owner. Each read holds a reader permit and captures one
   Data view. Four focused cases pass in 0.21 seconds. They check an arrival

@@ -105,8 +105,22 @@ async fn raw_position_is_the_last_matching_record_in_the_original_span() -> Test
     unchanged(&mut events).await?;
     let old = araphor_data::AnalysisStore::open(directory.path().join("old"))?;
     old.accept_validated_batch(source("node-a"), batch_range(1, 5, 100)?)?;
-    let head = old.subscribe_inputs(&selection, &requests("events"), None, &control, &Budget)?;
+    let origin = StorePositionV1 {
+        commit_revision: 0,
+        ordinal: 0,
+    };
+    let fresh = old.subscribe_inputs(&selection, &requests("events"), None, &control, &Budget)?;
+    assert_eq!(fresh.position(), origin);
+    let head = old.subscribe_inputs_since(
+        origin,
+        &selection,
+        &requests("events"),
+        None,
+        &control,
+        &Budget,
+    )?;
     assert_eq!(head.position(), matched);
+    assert_eq!(fresh.position(), origin);
     Ok(())
 }
 
@@ -133,26 +147,41 @@ async fn missing_saved_journal_cut_is_rejected_while_history_remains_readable() 
     assert_eq!(held.snapshot().cursor()?, Some(saved));
     let control = AnalysisReadControl::default();
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    assert!(store
-        .subscribe_inputs_at(
-            &historical,
+    for view in [&historical, held.as_ref()] {
+        let error = store
+            .subscribe_inputs_at(
+                view,
+                &selection,
+                &requests("context_versions"),
+                None,
+                &control,
+                &Budget,
+            )
+            .err()
+            .ok_or("expired journal was admitted")?;
+        assert!(
+            matches!(error, araphor_data::Error::AnalysisInputExpired { position, .. }
+            if position == StorePositionV1 { commit_revision: first, ordinal: u32::MAX })
+        );
+    }
+    let partial = StorePositionV1 {
+        commit_revision: first,
+        ordinal: 0,
+    };
+    let error = store
+        .subscribe_inputs_since(
+            partial,
             &selection,
             &requests("context_versions"),
             None,
             &control,
-            &Budget
+            &Budget,
         )
-        .is_err());
-    assert!(store
-        .subscribe_inputs_at(
-            &held,
-            &selection,
-            &requests("context_versions"),
-            None,
-            &control,
-            &Budget
-        )
-        .is_err());
+        .err()
+        .ok_or("expired partial journal was admitted")?;
+    assert!(
+        matches!(error, araphor_data::Error::AnalysisInputExpired { position, .. } if position == partial)
+    );
     let mut current = store.subscribe_inputs(
         &selection,
         &requests("context_versions"),
@@ -212,6 +241,21 @@ async fn a_failed_record_is_retried_without_advancing_the_shared_reader() -> Tes
     .concat();
     tx.native().insert(key, [0, 0xc1]);
     tx.commit([])?;
+    let error = store
+        .subscribe_inputs_since(
+            StorePositionV1 {
+                commit_revision: 0,
+                ordinal: 0,
+            },
+            &selection,
+            &requests("context_versions"),
+            None,
+            &control,
+            &Budget,
+        )
+        .err()
+        .ok_or("corrupt replay succeeded")?;
+    assert!(matches!(error, araphor_data::Error::ManagedDecoding { .. }));
     for _ in 0..2 {
         assert!(
             tokio::time::timeout(Duration::from_secs(5), subscription.changed())

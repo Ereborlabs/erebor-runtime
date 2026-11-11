@@ -6,7 +6,6 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    
     #[snafu(display("Native Data operation {operation} failed: {source}"))]
     NativeStorage {
         operation: &'static str,
@@ -14,7 +13,7 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    
+
     #[snafu(display("Native Data {field} is invalid"))]
     NativeState {
         field: &'static str,
@@ -234,6 +233,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("The input journal no longer retains {position:?}"))]
+    AnalysisInputExpired {
+        position: crate::StorePositionV1,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("The analysis read was cancelled"))]
     AnalysisReadCancelled {
         #[snafu(implicit)]
@@ -425,14 +430,13 @@ impl From<araphor_analysis_types::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            
             Self::NativeStorage {
                 source: fjall::Error::HistoryUnavailable(..),
                 ..
             } => StatusCode::NotFound,
-            
+
             Self::NativeStorage { .. } => StatusCode::External,
-            
+
             Self::NativeState { .. } => StatusCode::IllegalState,
             Self::PreparedNotification { source } => source.status_code(),
             Self::GraphFacility { source } => source.status_code(),
@@ -475,9 +479,9 @@ impl ErrorExt for Error {
             Self::GraphInvalid { .. } => StatusCode::InvalidArguments,
             Self::AnalysisReadDenied { .. } => StatusCode::PermissionDenied,
             Self::AnalysisUnavailable { .. } => StatusCode::Unsupported,
-            Self::AnalysisReplayExpired { .. } | Self::RetainedRangeExpired { .. } => {
-                StatusCode::NotFound
-            }
+            Self::AnalysisReplayExpired { .. }
+            | Self::AnalysisInputExpired { .. }
+            | Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
             Self::AnalysisReadCancelled { .. } => StatusCode::Cancelled,
             Self::AnalysisReadDeadline { .. } => StatusCode::DeadlineExceeded,
             Self::StorageCapacity { .. }
@@ -492,9 +496,9 @@ impl ErrorExt for Error {
             | Self::AnalysisState { .. }
             | Self::StoredArtifact { .. }
             | Self::Json { .. } => StatusCode::IllegalState,
-            Self::Io { .. }
-            | Self::DiscoveryContext { .. }
-            | Self::DiscoveryExecution { .. } => StatusCode::External,
+            Self::Io { .. } | Self::DiscoveryContext { .. } | Self::DiscoveryExecution { .. } => {
+                StatusCode::External
+            }
             Self::GraphContext { .. } => StatusCode::External,
             Self::GraphEncoding { .. }
             | Self::GraphNativeEncoding { .. }
@@ -620,7 +624,9 @@ mod package_tests {
             location: snafu::location!(),
         });
         semantic.push(Error::PackageArrow {
-            source: araphor_analysis_sdk::arrow_schema::ArrowError::ParseError("stored batch".into()),
+            source: araphor_analysis_sdk::arrow_schema::ArrowError::ParseError(
+                "stored batch".into(),
+            ),
             location: snafu::location!(),
         });
         semantic.push(Error::AnalysisContract {
@@ -669,7 +675,10 @@ mod package_tests {
             Code::Incomplete.error("stored input"),
             Error::NativeStorage {
                 operation: "read stored row",
-                source: fjall::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "storage read failed")),
+                source: fjall::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "storage read failed",
+                )),
                 location: snafu::location!(),
             },
             Error::Io {

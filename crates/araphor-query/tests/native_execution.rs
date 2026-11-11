@@ -28,6 +28,8 @@ mod graph;
 mod publication;
 #[path = "native_execution/version.rs"]
 mod version;
+#[path = "native_execution/resume.rs"]
+mod resume;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TENANT: [u8; 16] = [1; 16];

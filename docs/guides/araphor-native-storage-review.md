@@ -134,6 +134,18 @@ so explicit registration behind that floor is rejected. Restart restores saved
 consumers before a later checkpoint advances the engine acknowledgement again.
 No extra synchronization is added to each package commit.
 
+Ordinary Query resume uses `NativeStore::subscribe_inputs_since`. A cursor at
+the end of Data revision R starts at R. A partial cursor starts at R minus one,
+clamped at zero, and replays the original commit. Existing row positions and
+filters select the unread portion. The captured read revision can be newer than
+the last consumed row; it is not the replay start. Fresh subscriptions still
+start at the current captured cut and perform the initial query capture.
+Durable managed and notification consumers keep their saved-position path.
+
+An absent or released native cursor returns `AnalysisInputExpired`, with the
+requested position. Query reports `CursorExpired`. Decoder and I/O errors are
+not converted to expiry. No context/result scan or extra journal is added.
+
 [Writer admission](../../crates/araphor-data/src/analysis/native/capacity.rs)
 checks actual current usage. Ordinary writes enforce configured disk, entry,
 and free-space limits. Maintenance preserves the free-space reserve and can
@@ -187,9 +199,9 @@ The old SQL backup and restore crash tests are removed.
   physical journal removal, historical-read, and restart checks. Six storage
   lifecycle and sixteen managed input cases pass. Actual notification completion
   and restart after collection also pass. Read the current worklist for commands
-  and logs. The wider `native_inputs` target has one existing initial-position
-  failure. Ordinary Query saved-cut replay remains open; do not treat that target
-  or the full subscription migration as passed.
+  and logs. The later saved-cut correction passes all six native input and
+  thirteen native Query cases. Ordinary resume, partial spans, filtered offline
+  traffic, log expiry, and fresh initial capture have public Query proof.
 - [Native coverage checks](../../crates/araphor-data/tests/native_raw.rs)
   preserve six-report bounded reads, exact report references and bytes,
   retry stability, conflicting-content rejection, and multi-report batches.

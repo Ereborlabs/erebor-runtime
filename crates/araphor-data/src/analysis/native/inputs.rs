@@ -262,6 +262,38 @@ impl NativeStore {
         self.subscribe_inputs_after(None, selection, requests, owners, control, budget)
     }
 
+    pub fn subscribe_inputs_since(
+        &self,
+        position: StorePositionV1,
+        selection: &AnalysisSelectionV1,
+        requests: &AnalysisTableRequests,
+        owners: Option<&BTreeSet<String>>,
+        control: &AnalysisReadControl,
+        budget: &dyn ManagedBudget,
+    ) -> Result<InputSubscription> {
+        control.check()?;
+        let current = self.view()?;
+        if position.commit_revision > current.revision {
+            return NativeStateSnafu {
+                field: "input resume position",
+            }
+            .fail();
+        }
+        let anchor = if position.ordinal == u32::MAX {
+            position.commit_revision
+        } else {
+            position.commit_revision.saturating_sub(1)
+        };
+        let after = Self::cut_at(&self.branch, &current, anchor)?;
+        self.subscribe_inputs_at(&after, selection, requests, owners, control, budget)
+            .map_err(|error| match error {
+                crate::Error::AnalysisInputExpired { .. } => {
+                    crate::AnalysisInputExpiredSnafu { position }.build()
+                }
+                error => error,
+            })
+    }
+
     pub fn subscribe_inputs_at(
         &self,
         after: &DataView,
@@ -305,8 +337,11 @@ impl NativeStore {
             operation: "capture saved input journal cut",
         })?;
         if cursor.is_none() || cursor < scan.retained {
-            return NativeStateSnafu {
-                field: "saved input journal is not retained",
+            return crate::AnalysisInputExpiredSnafu {
+                position: StorePositionV1 {
+                    commit_revision: after.revision,
+                    ordinal: u32::MAX,
+                },
             }
             .fail();
         }

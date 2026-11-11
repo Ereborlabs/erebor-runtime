@@ -94,9 +94,9 @@ impl Failure {
             Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             Error::AnalysisReadDenied { .. } => Self::Denied,
             Error::AnalysisUnavailable { .. } => Self::Unsupported,
-            Error::AnalysisReplayExpired { .. } | Error::RetainedRangeExpired { .. } => {
-                Self::CursorExpired
-            }
+            Error::AnalysisReplayExpired { .. }
+            | Error::AnalysisInputExpired { .. }
+            | Error::RetainedRangeExpired { .. } => Self::CursorExpired,
             Error::AnalysisReadCancelled { .. } => Self::Cancelled,
             Error::AnalysisReadDeadline { .. } => Self::DeadlineExceeded,
             Error::AnalysisBusy { .. } => Self::Busy,

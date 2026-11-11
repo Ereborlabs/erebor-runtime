@@ -5,7 +5,6 @@ use tokio::sync::watch;
 
 use super::*;
 
-mod head;
 mod interest;
 mod model;
 
