@@ -5,7 +5,6 @@ use crate :: { BehaviorSnapshotV1 , DiscoveryProofKindV1 , EvidenceIntakeIdentit
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod contexts;
-mod gaps;
 mod native;
 mod notices;
 mod state;

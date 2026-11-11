@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod commit;
+mod coverage;
 mod health;
 mod inputs;
 mod notices;
@@ -290,9 +291,17 @@ impl DataWrite<'_> {
             Processor::key(Processor::PREFIX, id),
             Records::named(state)?,
         );
-        if self.store.retention.raw_max_age_ns.is_some() || self.store.retention.raw_max_bytes.is_some() {
-            self.processors.insert(id, (state.scope.identity.clone(),
-                (state.class == ProcessorClassV1::Required && state.retirement.is_none()).then_some(state.consumed)));
+        if self.store.retention.raw_max_age_ns.is_some()
+            || self.store.retention.raw_max_bytes.is_some()
+        {
+            self.processors.insert(
+                id,
+                (
+                    state.scope.identity.clone(),
+                    (state.class == ProcessorClassV1::Required && state.retirement.is_none())
+                        .then_some(state.consumed),
+                ),
+            );
         }
         self.note_relation("processor_progress", self.revision)
     }

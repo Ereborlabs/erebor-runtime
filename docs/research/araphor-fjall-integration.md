@@ -73,6 +73,23 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Native profile expiry-gap parity is **Done for the four gap contracts**.
+  The legacy SQL gap module is removed. Eight native cases preserve the
+  original `a`, `bc`, `d` batches, two-record interior expiry, zero retained
+  floor, exact clipped proofs, Required rejection, rollback, retries,
+  compaction, and reopen. A later expiry cannot authorize a gap in an older
+  capture. A valid non-gap result from that capture survives publication and
+  restart. Missing or changed accepted gaps reject reopen. Initial profile and
+  interval IDs remain independent. The final managed commit checks cancellation
+  after its test hook. The former global raw-count helper has no production
+  callers and is test-only. The final focused command passes 108 native managed
+  cases in 2.34 seconds and six lifecycle cases in 0.14 seconds. Read
+  `profile-gap-before-valid.log`, `profile-gap-verified-proof.log`, and
+  `profile-gap-final-native.log` under
+  `output/araphor-fjall-migration-20261110`. Ten other legacy profile cases
+  remain. This parity change establishes no incident latency gain. The latest
+  paired incident timing still covers the preceding scoped-reader source.
+
 - Scoped native Graph reads are **Done** for retained property lookup.
   `Graph::scoped_view` reads one relation and one writer through five metadata
   point reads. Data keeps the existing layer, member, schema, reservation, and

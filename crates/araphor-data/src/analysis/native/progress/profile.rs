@@ -1,6 +1,11 @@
 use super::*;
-use crate :: analysis :: { managed :: PreparedMemory , progress :: { PreparedProfile , ProfileCommit , ResultHead } } ;
-use crate :: { AnalysisResultReceiptV1 , DiscoveryProfileV1 , ManagedAttempt , ManagedDestination , ManagedReceipt } ;
+use crate::analysis::{
+    managed::PreparedMemory,
+    progress::{PreparedProfile, ProfileCommit, ResultHead},
+};
+use crate::{
+    AnalysisResultReceiptV1, DiscoveryProfileV1, ManagedAttempt, ManagedDestination, ManagedReceipt,
+};
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct IntervalHead {
@@ -141,6 +146,7 @@ impl DataWrite<'_> {
                         &prior,
                         &mut |bytes| memory.charge(bytes),
                     )?
+                    .0
                     .matches(&attempt.instance().spec)
             {
                 return Err(Code::Denied.error("historical profile producer"));
@@ -171,10 +177,7 @@ impl DataWrite<'_> {
                     .producer
                     .ok_or_else(|| Code::Incomplete.error("closed profile producer"))?;
             }
-        } else if packet.notice.is_some()
-            || profile.revision != 1
-            || profile.interval_id != profile.profile_id
-        {
+        } else if packet.notice.is_some() || profile.revision != 1 {
             return crate::Error::reject_path(
                 &self.store.root,
                 "the initial profile interval is invalid",
@@ -190,6 +193,7 @@ impl DataWrite<'_> {
             return Err(Code::Invalid.error("managed profile source"));
         }
         packet.request.body = packet.profile.body;
+        let source = self.store.read_at(attempt.captured_revision())?;
         let output = self.progress_rows(
             &packet.request,
             ResultHead::Current(packet.head.as_ref()),
@@ -197,6 +201,7 @@ impl DataWrite<'_> {
             Some(&mut packet.profile.profile),
             &packet.profile.contexts,
             Some(&producer),
+            &source,
             memory,
         )?;
         Ok(Some(output.receipt))

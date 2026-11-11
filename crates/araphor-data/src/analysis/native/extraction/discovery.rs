@@ -163,6 +163,7 @@ impl NativeStore {
                                 &result,
                                 &mut |bytes| output.charge(bytes),
                             )?
+                            .0
                             .matches(&target.spec);
                     }
                     state.facts_revision = Some(profile.facts_revision);
@@ -238,6 +239,7 @@ impl NativeStore {
                                     &result,
                                     &mut |bytes| output.charge(bytes),
                                 )?
+                                .0
                                 .matches(&target.spec)
                             } else {
                                 false

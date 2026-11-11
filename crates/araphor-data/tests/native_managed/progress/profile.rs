@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "profile/gaps.rs"]
+mod gaps;
 use araphor_data::{
     analysis::{
         native::{ManagedCommit, ManagedReturn},
@@ -108,10 +111,15 @@ fn packet(
     })
 }
 
-fn attempt(store: &NativeStore, name: &str) -> araphor_data::Result<araphor_data::ManagedAttempt> {
+fn capture(
+    store: &NativeStore,
+    tables: &[&str],
+    follow: bool,
+) -> araphor_data::Result<araphor_data::ManagedCapture> {
     let resume = store.managed_resume([1; 16], "profile", &AnalysisReadControl::default())?;
-    let requests: araphor_data::AnalysisTableRequests = ["events", "context_versions"]
-        .into_iter()
+    let requests: araphor_data::AnalysisTableRequests = tables
+        .iter()
+        .copied()
         .map(|name| {
             (
                 name.into(),
@@ -136,7 +144,7 @@ fn attempt(store: &NativeStore, name: &str) -> araphor_data::Result<araphor_data
             instance: resume.instance,
             expected: None,
             rebuild: false,
-            follow: false,
+            follow,
             completed: Some(resume.completed),
             execution: None,
             source: None,
@@ -151,8 +159,12 @@ fn attempt(store: &NativeStore, name: &str) -> araphor_data::Result<araphor_data
         &AnalysisReadControl::default(),
         None,
     )?;
+    Ok(page.state)
+}
+
+fn attempt(store: &NativeStore, name: &str) -> araphor_data::Result<araphor_data::ManagedAttempt> {
     store.register_managed_attempt(
-        &page.state,
+        &capture(store, &["events", "context_versions"], false)?,
         &super::super::attempts::request(name, true),
         || Ok(()),
     )
@@ -171,6 +183,30 @@ fn publish(
     ),
     Box<dyn std::error::Error>,
 > {
+    let control = AnalysisReadControl::default();
+    publish_checked(store, attempt, model, packet, &control, || {
+        if reject {
+            Err(Code::Denied.error("guard"))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+fn publish_checked(
+    store: &NativeStore,
+    attempt: &araphor_data::ManagedAttempt,
+    model: &sdk::Model,
+    packet: Option<ProfileCommit>,
+    control: &AnalysisReadControl,
+    check: impl FnOnce() -> araphor_data::Result<()>,
+) -> Result<
+    (
+        araphor_data::ManagedReceipt,
+        Option<araphor_data::AnalysisResultReceiptV1>,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let evaluation = super::super::publication::evaluation(attempt);
     let output = super::super::publication::output(model)?;
     let returns = [ManagedReturn {
@@ -181,10 +217,9 @@ fn publish(
         graph: None,
         retained: None,
     }];
-    let control = AnalysisReadControl::default();
     let budget = super::super::graph::Budget;
     let input = ManagedCommit {
-        control: &control,
+        control,
         budget: &budget,
         attempt,
         completed: true,
@@ -193,15 +228,7 @@ fn publish(
         selected: &output.datasets[0],
         selected_schema: &attempt.instance().spec.manifest.selected_schema,
     };
-    Ok(
-        store.commit_managed_profile(store.prepare_managed(&input)?, packet, || {
-            if reject {
-                Err(Code::Denied.error("guard"))
-            } else {
-                Ok(())
-            }
-        })?,
-    )
+    Ok(store.commit_managed_profile(store.prepare_managed(&input)?, packet, check)?)
 }
 
 #[test]

@@ -269,10 +269,10 @@ impl NativeStore {
         if let Some((frame, proof)) = &source_proof {
             frame.check_proof(proof)?;
         }
-        prepared.memory.check()?;
-        check()?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
+        prepared.memory.check()?;
+        check()?;
         let prepared_at = std::time::Instant::now();
         tx.commit_published(
             pending

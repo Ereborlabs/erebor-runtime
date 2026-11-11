@@ -1102,6 +1102,7 @@ impl RawJournal {
         Ok(ranges)
     }
 
+    #[cfg(test)]
     pub(super) fn record_count(&self, key: &[u8], first: u64, last: u64, revision: u64) -> u64 {
         if first > last {
             return 0;

@@ -329,6 +329,33 @@ and original spans. No second durable backlog index is added.
 
 ## Backup and recovery
 
+[DataWrite::profile_rows](../../crates/araphor-data/src/analysis/native/progress/profile.rs) receives a typed package profile and its managed attempt.
+  -> [NativeStore::read_at](../../crates/araphor-data/src/analysis/native/mod.rs) selects the attempt's captured input cut.
+  -> [DataView::progress_inputs](../../crates/araphor-data/src/analysis/native/progress/coverage.rs) walks only the requested original source spans.
+  -> [DataWrite::progress_rows](../../crates/araphor-data/src/analysis/native/progress/commit.rs) stages proved gaps, resume progress, profile results, and references in the existing transaction.
+  -> [NativeStore::commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) checks cancellation and the final guard after the test hook, then commits the managed result and consumed input together.
+
+The span proof excludes input expired at the captured metadata cut. Each new
+gap matches the exact expiry revision and clipped original commit/intake group.
+Live records plus proved missing records cover the consumed interval. Only
+Optional Discovery accepts those gaps. Witness and context authority remain
+current at the DataWrite cut. Profile and interval IDs have no equality rule.
+
+[Progress recovery](../../crates/araphor-data/src/analysis/native/progress/recovery.rs)
+gets the producer capture from the existing qualified managed result. It checks
+each advancing typed result at its publication cut. Accepted gaps are absent
+before publication and present at publication. The existing exact gap-set check
+rejects missing or changed current rows. Resume-only transitions keep their
+existing rule. No new table, archive, or durable format is added.
+
+Eight [native gap cases](../../crates/araphor-data/tests/native_managed/progress/profile/gaps.rs)
+pass, including later expiry, exact head conflicts, cancellation, and stamped
+corruption. The final native managed suite passes 108 cases in 2.34 seconds.
+Six native lifecycle cases pass in 0.14 seconds. The four legacy SQL gap cases
+are removed. Result: **Done for these gap contracts**. Ten other legacy profile
+cases and the complete replacement remain **Not done**. This source has no new
+incident timing measurement.
+
 [Processor history](../../crates/araphor-data/tests/native_managed/progress/history.rs)
 walks the same processor key backward through native snapshots. Each stored
 revision selects the preceding cut. The test requires exactly four versions:

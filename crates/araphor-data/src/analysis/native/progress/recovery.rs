@@ -7,25 +7,45 @@ impl NativeStore {
         snapshot: &fjall::BranchSnapshot,
         limits: crate::RetentionLimitsV1,
     ) -> Result<()> {
-        if limits.raw_max_age_ns.is_none() && limits.raw_max_bytes.is_none() { return Ok(()); }
+        if limits.raw_max_age_ns.is_none() && limits.raw_max_bytes.is_none() {
+            return Ok(());
+        }
         let mut tenants = BTreeSet::new();
         for entry in snapshot.prefix(Processor::PREFIX) {
-            let (key, _) = entry.context(crate::NativeStorageSnafu { operation: "restore Required input owners" })?;
-            if key.len() != Processor::PREFIX.len() + 8 { continue; }
+            let (key, _) = entry.context(crate::NativeStorageSnafu {
+                operation: "restore Required input owners",
+            })?;
+            if key.len() != Processor::PREFIX.len() + 8 {
+                continue;
+            }
             let bytes = Records::payload(&key, |key| Records::read(key, snapshot))?
                 .ok_or_else(|| Code::Missing.error("processor state"))?;
             let state: Processor = Records::decode(&bytes)?;
-            if state.class != ProcessorClassV1::Required || state.retirement.is_some() { continue; }
-            if !state.scope.valid() { return Err(Code::Invalid.error("processor scope")); }
+            if state.class != ProcessorClassV1::Required || state.retirement.is_some() {
+                continue;
+            }
+            if !state.scope.valid() {
+                return Err(Code::Invalid.error("processor scope"));
+            }
             let owner = Self::number(&key[Processor::PREFIX.len()..])?;
-            raw.budget.set_required(owner, state.scope.identity.key(), state.scope.identity.tenant_id, Some(state.consumed));
+            raw.budget.set_required(
+                owner,
+                state.scope.identity.key(),
+                state.scope.identity.tenant_id,
+                Some(state.consumed),
+            );
             tenants.insert(state.scope.identity.tenant_id);
         }
-        for tenant in tenants { raw.reconcile_backlog(tenant, limits)?; }
+        for tenant in tenants {
+            raw.reconcile_backlog(tenant, limits)?;
+        }
         Ok(())
     }
 
-    pub(in crate::analysis::native) fn validate_progress_recovery(&self, counts: &mut super::super::capacity::RevisionCounts) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_progress_recovery(
+        &self,
+        counts: &mut super::super::capacity::RevisionCounts,
+    ) -> Result<()> {
         let view = self.view()?;
         let mut intervals = BTreeMap::new();
         let mut bodies = BTreeSet::new();
@@ -114,16 +134,65 @@ impl NativeStore {
                 return Err(Code::Invalid.error("processor profile header"));
             }
             if let Some(profile) = profile {
-                if let Some(producer) = &row.producer {
-                    if producer.commit_revision > row.revision {
-                        return Err(Code::Invalid.error("profile producer revision"));
-                    }
-                    view.profile_producer(
-                        &crate::AnalysisSelectionV1::tenant(row.request.scope.identity.tenant_id),
-                        &profile,
-                        &row,
+                let (_, captured) = view.profile_producer(
+                    &crate::AnalysisSelectionV1::tenant(row.request.scope.identity.tenant_id),
+                    &profile,
+                    &row,
+                    &mut |_| Ok(()),
+                )?;
+                let (owner, state) = Processor::read(
+                    &profile.scope,
+                    committed.metadata_revision,
+                    |key| Records::read(key, &committed.snapshot),
+                    &mut |_| Ok(()),
+                )?
+                .ok_or_else(|| Code::Missing.error("profile processor"))?;
+                if state.revision == row.revision
+                    && state.head.as_ref().is_some_and(|head| {
+                        head.result_id == row.request.result_id
+                            && head.commit_revision == row.revision
+                    })
+                {
+                    let (prior_owner, prior) = Processor::read(
+                        &profile.scope,
+                        source.metadata_revision,
+                        |key| Records::read(key, &source.snapshot),
                         &mut |_| Ok(()),
+                    )?
+                    .ok_or_else(|| Code::Missing.error("previous profile processor"))?;
+                    let captured = self.read_at(captured)?;
+                    let accepted = captured.progress_inputs(
+                        &row.request,
+                        Some(&profile),
+                        prior.class,
+                        &self.root,
+                        || Ok(()),
                     )?;
+                    if prior_owner != owner
+                        || row.request.expected_cursor != prior.consumed.max(prior.resumed)
+                        || state.resumed
+                            != prior
+                                .resumed
+                                .max(accepted.last().map_or(prior.resumed, |gap| gap.last_cursor))
+                    {
+                        return Err(Code::Invalid.error("profile progress transition"));
+                    }
+                    for gap in accepted {
+                        let key = [
+                            Processor::key(Processor::GAPS, owner),
+                            gap.first_cursor.to_be_bytes().to_vec(),
+                            gap.last_cursor.to_be_bytes().to_vec(),
+                        ]
+                        .concat();
+                        let bytes = Records::named(gap)?;
+                        if Records::read(&key, &source.snapshot)?.is_some()
+                            || Records::read(&key, &committed.snapshot)?.as_deref()
+                                != Some(bytes.as_slice())
+                            || gaps.insert(key, bytes).is_some()
+                        {
+                            return Err(Code::Invalid.error("profile accepted gap"));
+                        }
+                    }
                 }
                 let (owner, _) = Processor::read(
                     &profile.scope,
@@ -232,7 +301,12 @@ impl NativeStore {
         Ok(())
     }
 
-    fn validate_processor_history(&self, id: u64, mut state: Processor, gaps: &mut BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
+    fn validate_processor_history(
+        &self,
+        id: u64,
+        mut state: Processor,
+        gaps: &mut BTreeMap<Vec<u8>, Vec<u8>>,
+    ) -> Result<()> {
         loop {
             let at = self.read_at(state.revision)?;
             let actual = Processor::read(
@@ -269,6 +343,7 @@ impl NativeStore {
             {
                 return Err(Code::Invalid.error("processor source bounds"));
             }
+            let mut profile_head = false;
             if let Some(head) = &state.head {
                 if let Some((_, result)) = ResultRecord::read_header(
                     &head.result_id,
@@ -284,6 +359,8 @@ impl NativeStore {
                     {
                         return Err(Code::Invalid.error("processor head progress"));
                     }
+                    profile_head =
+                        result.header.interval_id.is_some() && result.revision == state.revision;
                 } else {
                     let (header, result) = at.source_progress(&state.scope, head)?;
                     let source = header.summary(&result)?;
@@ -330,18 +407,43 @@ impl NativeStore {
             {
                 return Err(Code::Invalid.error("processor transition"));
             }
-            if state.resumed > prior.resumed {
-                let first = prior.consumed.max(prior.resumed).checked_add(1)
+            if state.resumed > prior.resumed
+                && !(profile_head
+                    && state.head != prior.head
+                    && state.class == ProcessorClassV1::Optional
+                    && state.scope.processor_id == crate::DISCOVERY_PROCESSOR)
+            {
+                let first = prior
+                    .consumed
+                    .max(prior.resumed)
+                    .checked_add(1)
                     .ok_or_else(|| Code::Invalid.error("optional resume cursor"))?;
                 let expired = at.expired_after(&state.scope.identity, first - 1)?;
                 if state.class != crate::ProcessorClassV1::Optional
-                    || state.consumed != prior.consumed || state.head != prior.head
-                    || state.coverage != prior.coverage || state.context != prior.context
-                    || expired.is_none_or(|gap| gap.first_cursor > first || gap.last_cursor != state.resumed)
-                { return Err(Code::Invalid.error("optional resume history")); }
-                let gap = crate::AnalysisGapV1 { first_cursor: first, last_cursor: state.resumed, commit_revision: state.revision };
-                let key = [Processor::key(Processor::GAPS, id), gap.first_cursor.to_be_bytes().to_vec(), gap.last_cursor.to_be_bytes().to_vec()].concat();
-                if gaps.insert(key, Records::named(&gap)?).is_some() { return Err(Code::Invalid.error("optional resume gap")); }
+                    || state.consumed != prior.consumed
+                    || state.head != prior.head
+                    || state.coverage != prior.coverage
+                    || state.context != prior.context
+                    || expired.is_none_or(|gap| {
+                        gap.first_cursor > first || gap.last_cursor != state.resumed
+                    })
+                {
+                    return Err(Code::Invalid.error("optional resume history"));
+                }
+                let gap = crate::AnalysisGapV1 {
+                    first_cursor: first,
+                    last_cursor: state.resumed,
+                    commit_revision: state.revision,
+                };
+                let key = [
+                    Processor::key(Processor::GAPS, id),
+                    gap.first_cursor.to_be_bytes().to_vec(),
+                    gap.last_cursor.to_be_bytes().to_vec(),
+                ]
+                .concat();
+                if gaps.insert(key, Records::named(&gap)?).is_some() {
+                    return Err(Code::Invalid.error("optional resume gap"));
+                }
             }
             state = prior;
         }

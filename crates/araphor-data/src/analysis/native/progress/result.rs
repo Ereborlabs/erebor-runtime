@@ -102,7 +102,7 @@ impl NativeStore {
         if crate::DiscoveryProfileV1::try_from(result.request.body.as_slice())? != *profile {
             return Err(Code::Conflict.error("discovery retained profile"));
         }
-        let producer =
+        let (producer, _) =
             view.profile_producer(selection, profile, &result, &mut |_| control.check())?;
         control.check()?;
         Ok(producer)
@@ -127,7 +127,7 @@ impl DataView {
         profile: &crate::DiscoveryProfileV1,
         stored: &ResultRecord,
         charge: &mut dyn FnMut(usize) -> Result<()>,
-    ) -> Result<crate::analysis::DiscoveryProducer> {
+    ) -> Result<(crate::analysis::DiscoveryProducer, u64)> {
         let source = &profile.scope.identity;
         if source.tenant_id != selection.tenant_id
             || !selection.sources.is_all() && !selection.sources.as_slice().contains(source)
@@ -149,12 +149,12 @@ impl DataView {
         if reference.commit_revision > stored.revision {
             return Err(Code::Invalid.error("discovery producer revision"));
         }
-        let producer = self.profile_call(selection, reference, charge)?;
+        let (producer, captured) = self.profile_call(selection, reference, charge)?;
         if !matches!(&producer.spec.destination, crate::ManagedDestination::DiscoveryProfile { source: owned, call, .. } if owned == source && *call == producer.call)
         {
             return Err(Code::Invalid.error("discovery producer destination"));
         }
-        Ok(producer)
+        Ok((producer, captured))
     }
 
     pub fn processor_result(

@@ -33,6 +33,7 @@ impl NativeStore {
         let budget = ProgressBudget;
         let mut memory = PreparedMemory::new(&control, &budget)?;
         let mut tx = self.maintenance_write()?;
+        let source = self.view()?;
         let output = tx.progress_rows(
             input,
             ResultHead::Unchecked,
@@ -40,6 +41,7 @@ impl NativeStore {
             None,
             &[],
             None,
+            &source,
             &mut memory,
         )?;
         if !output.commit {
@@ -61,6 +63,7 @@ impl DataWrite<'_> {
         mut profile: Option<&mut DiscoveryProfileV1>,
         contexts: &[AnalysisContextVersionV1],
         producer: Option<&PackageResultRefV1>,
+        source: &DataView,
         memory: &mut PreparedMemory<'_>,
     ) -> Result<ProgressWrite> {
         input.check(profile.as_deref(), contexts, &self.store.root)?;
@@ -179,62 +182,19 @@ impl DataWrite<'_> {
         {
             return crate::AnalysisConflictSnafu.fail();
         }
-        let view = self.store.view()?;
-        let receipt = view
-            .source_receipt(&input.scope.identity)?
-            .ok_or_else(|| Code::Missing.error("processor source"))?;
-        if input.consumed_cursor > receipt.contiguous_cursor
-            || input.coverage_revision > receipt.coverage_revision
-        {
-            return crate::Error::reject_path(
-                &self.store.root,
-                "the result claims unavailable source or coverage progress",
-            );
-        }
-        let available = self
-            .store
-            .raw
-            .lock()
-            .map_err(|_| {
-                crate::NativeStateSnafu {
-                    field: "raw owner lock",
-                }
-                .build()
-            })?
-            .record_count(
-                &input.scope.identity.key(),
-                input.expected_cursor.saturating_add(1),
-                input.consumed_cursor,
-                view.revision,
-            );
-        if let Some(profile) = profile.as_deref().filter(|_| advance) {
-            let gaps = &profile.gaps[profile
-                .gaps
-                .partition_point(|gap| gap.last_cursor <= input.expected_cursor)..];
-            if !gaps.is_empty() {
-                if input.scope.processor_id != crate::DISCOVERY_PROCESSOR
-                    || state.class != ProcessorClassV1::Optional
-                {
-                    return crate::Error::reject_path(
-                        &self.store.root,
-                        "only optional Discovery can consume expired input",
-                    );
-                }
-                return crate::Error::reject_path(
-                    &self.store.root,
-                    "the discovery gap differs from its captured expiry",
-                );
-            }
-        }
-        if available != input.consumed_cursor - input.expected_cursor {
-            return crate::Error::reject_path(
-                &self.store.root,
-                "the processor result skips unavailable raw input",
-            );
+        let gaps = source.progress_inputs(
+            input,
+            profile.as_deref(),
+            state.class,
+            &self.store.root,
+            || memory.check(),
+        )?;
+        for gap in gaps {
+            self.stage_processor_gap(owner, *gap)?;
         }
         let segments = self
             .store
-            .resolve_witnesses(&input.witnesses, view.revision)?;
+            .resolve_witnesses(&input.witnesses, self.revision - 1)?;
         for reference in &request.context_refs {
             if !self.check_context_ref(reference)? {
                 return crate::AnalysisConflictSnafu.fail();
@@ -288,6 +248,9 @@ impl DataWrite<'_> {
             )?;
         }
         if advance {
+            state.resumed = state
+                .resumed
+                .max(gaps.last().map_or(state.resumed, |gap| gap.last_cursor));
             state.consumed = input.consumed_cursor;
             state.required = state.consumed;
             state.coverage = input.coverage_revision;

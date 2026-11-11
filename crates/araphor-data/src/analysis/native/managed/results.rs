@@ -148,7 +148,7 @@ impl DataView {
         selection: &crate::AnalysisSelectionV1,
         result: &crate::analysis::PackageResultRefV1,
         charge: &mut dyn FnMut(usize) -> Result<()>,
-    ) -> Result<crate::analysis::DiscoveryProducer> {
+    ) -> Result<(crate::analysis::DiscoveryProducer, u64)> {
         let (_, stored, attempt) = self.result_owner(
             selection.tenant_id,
             &result.result_id,
@@ -164,12 +164,16 @@ impl DataView {
         {
             return Err(Code::Invalid.error("discovery producer revision"));
         }
-        Ok(crate::analysis::DiscoveryProducer {
-            result: result.clone(),
-            generation: attempt.instance().generation,
-            call: record.call,
-            spec: attempt.instance().spec.clone(),
-        })
+        let captured = attempt.captured_revision();
+        Ok((
+            crate::analysis::DiscoveryProducer {
+                result: result.clone(),
+                generation: attempt.instance().generation,
+                call: record.call,
+                spec: attempt.instance().spec.clone(),
+            },
+            captured,
+        ))
     }
 
     pub(in crate::analysis::native) fn result_reference(
