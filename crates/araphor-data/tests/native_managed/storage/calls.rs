@@ -1,6 +1,6 @@
 use super::*;
 
-fn call_context(
+pub(super) fn call_context(
     result: &araphor_data::InstanceResultV1,
 ) -> Result<&araphor_data::ResultContext, Box<dyn std::error::Error>> {
     let araphor_data::InstanceResultKindV1::Call { context, .. } = &result.kind else {
@@ -10,7 +10,7 @@ fn call_context(
 }
 
 impl StorageFixture {
-    fn continued(
+    pub(super) fn continued(
         &self,
         request: &ManagedRequest,
         call: u64,
@@ -28,7 +28,7 @@ impl StorageFixture {
         Ok(evaluation)
     }
 
-    fn receipt(
+    pub(super) fn receipt(
         store: &NativeStore,
         tenant: [u8; 16],
         instance: &str,
@@ -40,7 +40,7 @@ impl StorageFixture {
             .and_then(|attempt| attempt.receipt().cloned()))
     }
 
-    fn checkpoint(
+    pub(super) fn checkpoint(
         &self,
         store: &NativeStore,
         reference: &PackageResultRefV1,
@@ -60,7 +60,7 @@ impl StorageFixture {
         Err("checkpoint result".into())
     }
 
-    fn rows(
+    pub(super) fn rows(
         store: &NativeStore,
         reference: &PackageResultRefV1,
     ) -> Result<u64, Box<dyn std::error::Error>> {

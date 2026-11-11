@@ -74,10 +74,6 @@ fixture ports, finite-history collection, and complete qualification remain open
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Complete the native port of the old terminal family. The same-owner startup
-  outcome correction and its candidate-promotion regression are implemented.
-  The other claim, failure, generation, corruption, and restore cases still
-  need their complete native replacement before removal of that family.
 - Resolve the remaining Query contracts. The current complete run has 25
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -87,6 +83,29 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Nine native cases replace the complete old SQL terminal family. They check
+  claim ownership, failure guards, lifecycle and activation, five corruption
+  cases, live recovery, generation selection, startup, and restore. Startup
+  and restore preserve all three result records, both checkpoints, and both
+  dependency records. Exact attempt bytes change only at the terminal field.
+  Historical views retain the pending image. Both source and restored stores
+  reopen with exact Data records and metadata after independent publication.
+  The source retains its 22 and 33 outputs; restore retains its 2 and 3 outputs.
+  The old family and its module declaration are removed. Shared fixtures for
+  other old cases remain. The nine focused cases pass in 0.24 seconds.
+  The complete focused run passes 141 managed, 18 raw, six lifecycle, and eight
+  backup cases. Data library test compilation still fails with 776 diagnostics
+  from remaining old fixtures and removed APIs. These are compile diagnostics,
+  not 776 established production defects. The command is
+  `cargo test --release -p araphor-data --features test-fixtures --lib --no-run --message-format=short`.
+  Read `native-terminal-family-exact.log`,
+  `native-terminal-retirement-contracts.log`, and
+  `native-terminal-retirement-lib.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for terminal fixture retirement**. Complete migration
+  qualification and incident performance remain **Not done**. No new incident
+  timing is measured.
 
 - Startup now settles at most one eligible attempt per owner in each Data
   transaction. It groups the existing pending scan by owner, preserves queue
@@ -104,8 +123,8 @@ Current evidence:
   `native-startup-waves-final.log`, and `native-startup-waves-exact.log` under
   `output/araphor-fjall-migration-20261110`.
   Result: **Done for same-owner startup settlement**. The complete terminal
-  fixture port, complete migration qualification, and incident performance
-  remain **Not done**. No new incident timing is measured.
+  fixture port is recorded above. Complete migration qualification and
+  incident performance remain **Not done**. No new incident timing is measured.
 
 - Managed Query fixtures now use real native admission, commits, and durable
   receipts. They no longer fabricate an execution acknowledgement. Each offer

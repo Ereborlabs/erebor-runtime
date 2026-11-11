@@ -13,7 +13,23 @@ owner get successive revisions. The existing terminal writer and eligibility
 checks remain. No format or index changes. The regression preserves exact
 immutable attempt bytes and the historical pending image. It also preserves
 successful results, checkpoints, lifecycle, and input frontier. A second reopen
-does not write another revision. The other old terminal cases remain open.
+does not write another revision.
+
+The same native file replaces all nine old SQL terminal cases. It checks claim
+ownership, failure guards, activation, five corruption cases, live recovery,
+generation selection, and restore. Whole-prefix comparisons require three
+result records, two checkpoint records, and two dependency records. They use
+the actual native prefixes. Exact X and U bytes cover the old frozen result
+metadata and checkpoint bytes. Public reads also check context, checkpoint,
+and selected results. Both stores reopen after the source commits its 22 and
+33 outputs. Restore keeps its earlier 2 and 3 outputs. Full Data records,
+metadata, and history remain exact. The old terminal file and module
+declaration are removed; other old fixtures remain. The focused run passes
+141 managed, 18 raw, six lifecycle, and eight backup cases. Data library test
+compilation still has 776 diagnostics from old fixtures and removed APIs.
+Read `native-terminal-retirement-contracts.log` and
+`native-terminal-retirement-lib.log` under
+`output/araphor-fjall-migration-20261110`.
 
 Read [Graph conversion](../../crates/araphor-analysis/src/graph/native/commit.rs)
 with the [managed sink](../../crates/araphor-analysis/src/instance/sink.rs)
