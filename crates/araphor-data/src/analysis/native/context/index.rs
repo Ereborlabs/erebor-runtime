@@ -1,9 +1,15 @@
-use std :: { collections :: BTreeSet , ops :: Bound :: { Excluded , Included } } ;
+use std::{
+    collections::BTreeSet,
+    ops::Bound::{Excluded, Included},
+};
 
 use snafu::ResultExt as _;
 
 use super::{DataView, DataWrite, NativeStore, Records};
-use crate :: { AnalysisContextRefV1 , AnalysisExtractionV1 , AnalysisReadControl , AnalysisSelectionV1 , NativeStateSnafu , NativeStorageSnafu , Result , Selection } ;
+use crate::{
+    AnalysisContextRefV1, AnalysisExtractionV1, AnalysisReadControl, AnalysisSelectionV1,
+    NativeStateSnafu, NativeStorageSnafu, Result, Selection,
+};
 
 struct ContextIndex;
 
@@ -28,18 +34,47 @@ impl ContextIndex {
 }
 
 impl DataWrite<'_> {
-    pub(in crate::analysis::native) fn context_owner_ids(&self, owner: &str) -> Result<Vec<u64>> {
+    pub(in crate::analysis::native) fn context_owner_ids(
+        &self,
+        tenant: Option<[u8; 16]>,
+        owner: &str,
+    ) -> Result<Vec<u64>> {
         let mut ids = Vec::new();
-        for entry in self.transaction.prefix(ContextIndex::TENANT) {
+        let prefix = if let Some(tenant) = tenant {
+            let Some(id) = Records::find(&ContextIndex::owner(tenant, owner)?, |key| {
+                Records::staged(key, &self.transaction)
+            })?
+            else {
+                return Ok(ids);
+            };
+            ContextIndex::owned(id)
+        } else {
+            ContextIndex::TENANT.to_vec()
+        };
+        let width = if tenant.is_some() { 16 } else { 32 };
+        for entry in self.transaction.prefix(&prefix) {
             let (key, _) = entry.context(NativeStorageSnafu {
                 operation: "read retained context headers",
             })?;
-            if key.len() != ContextIndex::TENANT.len() + 32 {
+            if key.len() != prefix.len() + width {
                 continue;
             }
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
-                .ok_or_else(|| NativeStateSnafu { field: "retained context header" }.build())?;
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "retained context header",
+                    }
+                    .build()
+                })?;
             let reference: AnalysisContextRefV1 = Records::decode(&bytes)?;
+            if tenant.is_some_and(|tenant| {
+                reference.key.tenant_id != tenant || reference.key.owner_id != owner
+            }) {
+                return NativeStateSnafu {
+                    field: "retained context owner",
+                }
+                .fail();
+            }
             if reference.key.owner_id == owner {
                 ids.push(NativeStore::number(&key[key.len() - 8..])?);
             }

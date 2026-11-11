@@ -120,6 +120,38 @@ and 5.03–5.09 seconds DuckDB. The measured creation target is met in these run
 the 100-fold requirement is not met. These short pairs do not establish a
 sustained latency guarantee. Read the current worklist for exact report paths.
 
+## Package context collection
+
+[NativeStore::collect_package](../../crates/araphor-data/src/analysis/native/packages/collection.rs) receives one tenant and package revision.
+  -> [DataWrite::package_roots](../../crates/araphor-data/src/analysis/native/packages/collection.rs) selects retained image, context, definition, and managed roots for that tenant.
+  -> [DataWrite::context_owner_ids](../../crates/araphor-data/src/analysis/native/context/index.rs) reads the existing tenant/owner index before it loads context bodies.
+  -> [DataWrite::collect_packages](../../crates/araphor-data/src/analysis/native/packages/collection.rs) counts dependencies within the selected tenant and stages eligible removals.
+  -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) commits those removals and publishes one Data revision.
+
+Targeted collection and image uninstall carry the same tenant scope. All retained
+context versions, definition revisions, and managed generations remain roots.
+Global admission collection checks all tenants. A malformed selected context
+rejects the transaction. Repair permits retry. Neither rejection nor a no-op retry
+changes Data revision or the original journal head. No new index or format is added.
+
+The old target path decoded a foreign tenant's malformed context. The public
+native regression fails on that path and passes after the scope correction.
+[Package context tests](../../crates/araphor-data/tests/native_context/packages.rs)
+preserve tenant roots, revision notices, exact retries, seven forged fields,
+dependency export identity, and malformed or trailing binary input.
+[The large closure test](../../crates/araphor-data/tests/native_context/packages/closure.rs)
+keeps 1,025 artifacts, 1,024 dependencies, dependency metadata above one MiB,
+1,025 dependency exports, and exact digest equality after backup and restore.
+[Corruption tests](../../crates/araphor-data/tests/native_context/packages/corruption.rs)
+check current context, descriptor, missing artifact, and changed body faults.
+The body change preserves byte length. Point reads, head pages, and reopen reject
+the faults. One test warms verification, removes a dependency in the same staged
+transaction, and rejects exact retry before rollback.
+
+These ten native checks replace the old SQL package-context family. The separate
+private verifier tests still require a native port. These checks do not establish
+a new incident speed gain. Read the current worklist for commands and results.
+
 ## Capacity and maintenance
 
 [Checkpoint](../../crates/araphor-data/src/analysis/native/backup/mod.rs) first

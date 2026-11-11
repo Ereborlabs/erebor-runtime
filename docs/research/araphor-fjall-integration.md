@@ -43,6 +43,22 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Ten native package-context cases pass in 32.92 seconds. The collection
+  regression first fails because targeted collection decodes another tenant's
+  malformed context. Targeted collection and uninstall now scope roots,
+  package headers, and dependency counts to their tenant. The existing owner
+  index supplies context roots. Global collection remains strict and rejects
+  malformed contexts without a Data revision or journal change. Repair and
+  retry pass. The unchanged large closure has 1,025 artifacts, 1,024
+  dependencies, metadata above one MiB, and 1,025 dependency exports. Backup,
+  restore, digest equality, seven forged fields, exact retries, corruption,
+  and a dependency removed after verification in the same transaction pass.
+  The old ten-case SQL family is replaced. The two private verifier unit tests
+  still require a native port. These checks establish no new latency gain.
+  Final qualification after SQL fixture removal passes all 22 native context
+  cases in 33.66 seconds and all ten native package cases in 0.21 seconds.
+  Read `output/araphor-fjall-migration-20261110/context-collection-before.log`
+  and `context-package-final.log` in the same directory.
 - The connected release at `d429b0d08` passes two opposite-order incident
   pairs against the saved successful DuckDB release. Native durable creation
   is 49.947–88.429 ms; DuckDB is 334.639–601.712 ms. Paired gains are

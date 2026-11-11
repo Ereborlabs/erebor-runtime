@@ -4,7 +4,6 @@ use snafu::ResultExt as _;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
-mod context;
 mod image;
 
 fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {

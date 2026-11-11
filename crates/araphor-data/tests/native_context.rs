@@ -5,6 +5,8 @@ use araphor_data::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_context/packages.rs"]
+mod packages;
 #[path = "native_context/pages.rs"]
 mod pages;
 

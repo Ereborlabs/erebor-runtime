@@ -48,7 +48,7 @@ impl NativeStore {
         );
         tx.dirty = true;
         tx.image_head(tenant, &image.package_id)?;
-        tx.collect_packages(Some(id))?;
+        tx.collect_packages(Some((tenant, id)))?;
         check()?;
         tx.commit([])?;
         Ok(true)
@@ -68,7 +68,7 @@ impl NativeStore {
         else {
             return Ok(());
         };
-        tx.collect_packages(Some(id))?;
+        tx.collect_packages(Some((tenant, id)))?;
         tx.commit([])?;
         Ok(())
     }
@@ -117,7 +117,7 @@ impl DataWrite<'_> {
         Ok(())
     }
 
-    fn package_roots(&self) -> Result<BTreeSet<u64>> {
+    fn package_roots(&self, tenant: Option<[u8; 16]>) -> Result<BTreeSet<u64>> {
         let mut roots = BTreeSet::new();
         for entry in self.transaction.prefix(b"\0data/I") {
             let (key, _) = entry.context(NativeStorageSnafu {
@@ -129,11 +129,11 @@ impl DataWrite<'_> {
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
                 .ok_or_else(|| Code::Missing.error("retained image"))?;
             let row: ImageRecord = Records::decode(&bytes)?;
-            if row.installed {
+            if row.installed && tenant.is_none_or(|tenant| row.tenant == tenant) {
                 roots.insert(NativeStore::number(&key[7..])?);
             }
         }
-        for id in self.context_owner_ids("native-package-v1")? {
+        for id in self.context_owner_ids(tenant, "native-package-v1")? {
             let key = Records::key(b'C', id);
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
                 .ok_or_else(|| Code::Missing.error("retained context"))?;
@@ -156,6 +156,9 @@ impl DataWrite<'_> {
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
                 .ok_or_else(|| Code::Missing.error("retained definition"))?;
             let row: DefinitionRecord = Records::decode(&bytes)?;
+            if tenant.is_some_and(|tenant| row.tenant != tenant) {
+                continue;
+            }
             for pin in row.definition(self.metadata_revision)?.images {
                 roots.insert(self.package_id(row.tenant, &pin.image)?);
             }
@@ -170,6 +173,9 @@ impl DataWrite<'_> {
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
                 .ok_or_else(|| Code::Missing.error("retained managed version"))?;
             let row: VersionRecord = Records::decode(&bytes)?;
+            if tenant.is_some_and(|tenant| row.spec.tenant != tenant) {
+                continue;
+            }
             for pin in &row.spec.definition.images {
                 roots.insert(self.package_id(row.spec.tenant, &pin.image)?);
             }
@@ -177,8 +183,9 @@ impl DataWrite<'_> {
         Ok(roots)
     }
 
-    fn collect_packages(&mut self, target: Option<u64>) -> Result<()> {
-        let roots = self.package_roots()?;
+    fn collect_packages(&mut self, target: Option<([u8; 16], u64)>) -> Result<()> {
+        let tenant = target.map(|(tenant, _)| tenant);
+        let roots = self.package_roots(tenant)?;
         let mut packages = BTreeMap::new();
         for entry in self.transaction.prefix(PackageHeader::PREFIX) {
             let (key, _) = entry.context(NativeStorageSnafu {
@@ -191,6 +198,9 @@ impl DataWrite<'_> {
             let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
                 .ok_or_else(|| Code::Missing.error("package collection header"))?;
             let header: PackageHeader = Records::decode(&bytes)?;
+            if tenant.is_some_and(|tenant| header.tenant != tenant) {
+                continue;
+            }
             if self.package_id(header.tenant, &header.root)? != id
                 || header.revision == 0
                 || header.revision > self.revision
@@ -220,7 +230,7 @@ impl DataWrite<'_> {
             return Err(Code::Missing.error("package collection root"));
         }
         let mut pending = match target {
-            Some(id) => VecDeque::from([id]),
+            Some((_, id)) => VecDeque::from([id]),
             None => packages.keys().copied().collect(),
         };
         while let Some(id) = pending.pop_front() {

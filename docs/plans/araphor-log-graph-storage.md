@@ -15,6 +15,13 @@ Full storage lifecycle parity, obsolete fixture ports, and the 100-fold target
 remain **Not done**. The following records retain the proof for their stated
 source versions.
 
+Ten native package-context cases now preserve the old SQL family's closure,
+tenant scope, retry, corruption, and backup behavior. Targeted collection uses
+the existing tenant/owner index. Global collection keeps full validation.
+Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
+for the failure-first regression and qualification limits. The separate private
+verifier fixture port remains open. No new latency gain is measured by these checks.
+
 ## Production integration status, 2026-11-09
 
 The active user goal approves the complete production migration described in
