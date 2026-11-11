@@ -35,6 +35,7 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Owner | Current work and completion proof |
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
+| Fixture retirement | The context, catalogue, and image SQL families have native replacements. The remaining Data unit target still fails to compile obsolete callers. Replace the ten backup cases next. Preserve trace reserves, manifest admission, the 17 MiB raw segment, bundle faults, and revision isolation. Private verifier and witness ports remain open. |
 | Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
@@ -43,6 +44,17 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- At `0b8490cbd`, a compile-only Data unit diagnostic still fails. The command
+  is `cargo test --offline -p araphor-data --lib --no-run --message-format=json`.
+  It reports 1,060 errors, including cascading errors. This count does not
+  identify 1,060 production defects. The largest source groups include backup
+  fixtures, managed fixtures, and dependency fixtures. The diagnostic does not
+  run tests. The 48 recorded native context/package cases remain passing
+  evidence for their stated scope. Do not treat those cases as full unit-target
+  qualification. The next agreed replacement uses public native backup APIs.
+  Preserve the old assertions before removing their source. Read
+  `output/araphor-fjall-migration-20261110/remaining-fixtures.json` and
+  `remaining-fixtures-build.jsonl` in the same directory.
 - Sixteen native catalogue/image cases pass in 13.85 seconds and replace
   fifteen old SQL cases. The retained dependency-order regression first fails
   on reopen. `PackageHeader::check` now sorts only its temporary ID vectors
