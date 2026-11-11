@@ -1,5 +1,10 @@
 # Araphor Graph Commit Review
 
+Current Data storage uses Fjall. Links to retired package owners use source
+revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
+SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
+for the current owners and checks.
+
 ## Native Fjall participant, 2026-11-09
 
 The optional `native-store` feature adds a Graph participant for the approved
@@ -1133,7 +1138,7 @@ The current change retains a validated summary in one AnalysisStore process.
   -> [PackageRevisionV1::fingerprint](../../crates/araphor-data/src/analysis/packages/model.rs) hashes stored descriptor and artifact bytes with dependency identities
 
 [AnalysisStore::check_cached_provenance](../../crates/araphor-data/src/analysis/context/provenance.rs) starts a cold read when no summary exists
-  -> [AnalysisStore::package_artifacts_inspect_from](../../crates/araphor-data/src/analysis/packages/image.rs) fetches and inspects the complete package closure
+  -> [AnalysisStore::package_artifacts_inspect_from](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) fetches and inspects the complete package closure
   -> [NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs) validates the complete image before Data stores the summary
 
 [AnalysisStore::validate_context_packages](../../crates/araphor-data/src/analysis/context/provenance.rs) runs full validation when a warm row changes
@@ -1162,9 +1167,9 @@ remain **Not done**.
   -> [AnalysisStore::check_cached_provenance](../../crates/araphor-data/src/analysis/context/provenance.rs) checks each current package row and falls back to full validation when a row changes
   -> [NativePackageContext](../../crates/araphor-data/src/package/provenance.rs) uses strict MessagePack with an exact-byte decode check
 
-[AnalysisStore::stage_package_context_roots](../../crates/araphor-data/src/analysis/packages/collection.rs) reads every retained native package context in the collection transaction
-  -> [AnalysisStore::release_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) uses the staged typed roots to keep referenced packages
-  -> [AnalysisStore::drop_package_context_roots](../../crates/araphor-data/src/analysis/packages/collection.rs) clears the temporary table before a successful commit
+[AnalysisStore::stage_package_context_roots](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs) reads every retained native package context in the collection transaction
+  -> [AnalysisStore::release_package_rows](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs) uses the staged typed roots to keep referenced packages
+  -> [AnalysisStore::drop_package_context_roots](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs) clears the temporary table before a successful commit
 
 All eight focused package context tests passed. They cover a 1,025-artifact
 closure, current and historical roots, tenant scope, exact retries, corrupt

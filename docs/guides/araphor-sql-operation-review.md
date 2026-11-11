@@ -1,5 +1,10 @@
 # Araphor SQL Operation Review
 
+Current Data storage uses Fjall. Links to retired package owners use source
+revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
+SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
+for the current owners and checks.
+
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines input ownership. The [current verification](../plans/araphor-performance-simplification-todo.md)
 records the source and checks. The
@@ -108,7 +113,7 @@ Disabled quotas retain journal-only acceptance without logical usage queries.
 The existing raw owner still retains journal positions, receipts, witness pins,
 required processor floors, expired ranges, and terminal reservations.
 
-[Package collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+[Package collection](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs)
 uses the native affected-row count to detect a change. It does not measure
 stored bytes before and after deletion. The existing source, reference,
 package, graph, and snapshot validators retain actual data integrity checks.
@@ -398,7 +403,7 @@ inputs, and atomic profile publication remain **Not done** in that record.
 
 [EvidenceIntakeOwner::run_retention](../../crates/mithril-control/src/evidence.rs) starts with a configured retention or logical pressure quota
   -> [EvidenceRetentionOwner::step](../../crates/araphor-data/src/analysis/retention.rs) captures one bounded retention operation
-  -> [native selection](../../crates/araphor-data/src/analysis/retention.sql) selects eligible segments and calculates the next deadline
+  -> [EvidenceRetentionOwner::select](../../crates/araphor-data/src/analysis/native/retention/selection.rs) selects eligible segments and calculates the next deadline
   -> [RawJournal::segment_entries](../../crates/araphor-data/src/analysis/raw.rs) checks cursor bounds, intake times, and committed bytes
   -> [retention owner](../../crates/araphor-data/src/analysis/retention.rs) compares the selected catalog identity with each journal identity
   -> [retention commit](../../crates/araphor-data/src/analysis/retention.rs) records exact expired spans and advances replay and receipt floors

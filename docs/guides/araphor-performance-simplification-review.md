@@ -1,5 +1,10 @@
 # Araphor Performance Simplification Review
 
+Current Data storage uses Fjall. Links to retired package owners use source
+revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
+SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
+for the current owners and checks.
+
 Review the production changes in the [approved TODO](../plans/araphor-performance-simplification-todo.md).
 These changes remove repeated reads, decoding, validation, and input preparation.
 The source basis is `aa390d9f647c304ef212396433824a6b9c560982` plus the working tree.
@@ -369,7 +374,7 @@ config duplicates the separate descriptor column; install, decode, and recovery
 require agreement. Fixture payloads remain raw layers. Validation-only callers
 now allocate owned layers and perform canonical reconstruction hashes. No old
 CBOR artifact reader remains, and no speed improvement is claimed.
-[Package charges](../../crates/araphor-data/src/analysis/packages/schema.rs)
+[Package charges](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/schema.rs)
 use actual stored artifact bytes. Decimal JSON byte counting, its frame field,
 and `encoded_bytes` are removed. Schema 22 has no older-format reader.
 The quota-unit change does not replace executable hashing or current trust.

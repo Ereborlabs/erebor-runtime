@@ -4,6 +4,12 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+The five unused SQL storage files and five empty legacy package modules are
+removed. The two `ResolvedInput` SQL files remain active DataFusion queries.
+Historical package review links use the verified DuckDB control source revision.
+The production Data library check passes after this removal. Existing warnings
+remain. No new runtime or timing result follows from removal of unreachable files.
+
 The connected release at `d429b0d08` passes two matched incident pairs.
 Durable notification creation is 49.947–88.429 ms, a measured 6.70–7.30-fold
 gain against DuckDB. Public receipt is 59.273–123.986 ms. Whole-test time is

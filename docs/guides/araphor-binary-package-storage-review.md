@@ -1,5 +1,10 @@
 # Araphor Binary Package Storage Review
 
+Current Data storage uses Fjall. Links to retired package owners use source
+revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
+SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
+for the current owners and checks.
+
 Use the [approved plan](../plans/araphor-production-dataflow-simplification.md)
 for scope and the [current review](araphor-performance-simplification-review.md)
 for the shared execution flow. This guide owns the storage and OCI contracts.
@@ -28,7 +33,7 @@ The following flow records the removed package activation path.
   -> [AnalysisPackageOwner::install_revision](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/lifecycle/revisions.rs) the package owner builds revision metadata or reuses the same immutable revision
   -> [PackageArtifactV1::encode](../../crates/araphor-package/src/bundle.rs) the artifact uses the shared PackageOci metadata and raw-layer codec
   -> [PackageOci::artifact_layout](../../crates/araphor-package/src/oci.rs) the existing SDK Layout encodes one artifact as an OCI archive
-  -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the store decodes the artifact, checks descriptor agreement, and writes the complete revision in one transaction
+  -> [AnalysisStore::install_package](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/revisions.rs) the store decodes the artifact, checks descriptor agreement, and writes the complete revision in one transaction
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) loading parses the separate descriptor and calls the shared artifact decoder
   -> [PackageArtifactV1::from_bytes](../../crates/araphor-package/src/bundle.rs) the SDK Content decoder and PackageOci fill the raw payload slots and check canonical identity
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) loading requires the two descriptors to agree
@@ -39,12 +44,12 @@ The following flow records the removed package activation path.
 [ClientGrpcOwner::image_request](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/mithril-control/src/client_grpc/packages.rs) An operator installs an image
   -> [PackageBundleV1::metadata](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/metadata.rs) the image owner validates the bundle and returns declarations without executable buffers
   -> [ClientAuth](../../crates/mithril-control/src/client_auth/packages.rs) Control checks the current grant and exact image trust pin
-  -> [AnalysisStore::install_package_image](../../crates/araphor-data/src/analysis/packages/image.rs) Data commits the complete revision closure and its image root in one transaction
-  -> [AnalysisStore::collect_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) the image root and dependency references retain the code during collection
+  -> [AnalysisStore::install_package_image](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) Data commits the complete revision closure and its image root in one transaction
+  -> [AnalysisStore::collect_package_rows](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs) the image root and dependency references retain the code during collection
 
 [ClientGrpcOwner::image_request](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/mithril-control/src/client_grpc/packages.rs) An operator inspects an image
-  -> [AnalysisStore::package_image](../../crates/araphor-data/src/analysis/packages/image.rs) Data loads the exact requested revision or the last installed image for that tenant
-  -> [AnalysisStore::package_image_from](../../crates/araphor-data/src/analysis/packages/image.rs) Data reconstructs the locked closure and checks the saved manifest digest
+  -> [AnalysisStore::package_image](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) Data loads the exact requested revision or the last installed image for that tenant
+  -> [AnalysisStore::package_image_from](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) Data reconstructs the locked closure and checks the saved manifest digest
   -> [PackageBundleV1::metadata](https://github.com/Ereborlabs/erebor-runtime/blob/bd2c4bc776b851e6cf51feff6a7477044c2edaad/crates/araphor-package/src/metadata.rs) the response contains descriptors, targets, artifact identities, and fixture names
 
 The [image namespace](../../crates/araphor-cli/src/cli/araphor/packages.rs)
@@ -85,7 +90,7 @@ image root and its dependency closure.
 [AnalysisStore::open_leased](../../crates/araphor-data/src/analysis/mod.rs) A database opens
   -> [AnalysisStore::open_leased](../../crates/araphor-data/src/analysis/mod.rs) the store requires its current schema version
   -> [AnalysisStore::validate_state](../../crates/araphor-data/src/analysis/schema.rs) the store validates current rows, references, and charges
-  -> [AnalysisStore::validate_package_contracts](../../crates/araphor-data/src/analysis/packages/recovery.rs) the store checks retained artifacts, descriptor agreement, same-tenant dependencies, and each reconstructed image digest
+  -> [AnalysisStore::validate_package_contracts](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/recovery.rs) the store checks retained artifacts, descriptor agreement, same-tenant dependencies, and each reconstructed image digest
 
 ## Owners and representation
 
@@ -154,7 +159,7 @@ and storage admission. Finite execution admits executable code separately.
   -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the binary request from the existing gRPC bytes field
   -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant
   -> [AnalysisPackageOwner::admit_artifact](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
-  -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
+  -> [AnalysisStore::install_package](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
 
 The SDK owns OCI representation and content checks. The image crate owns
 raw-slot order and bundle validation. Data owns persistence and retention.

@@ -43,6 +43,15 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Five unused SQL storage files and five empty legacy package modules are
+  removed. The production Data library passes `cargo check --offline -p
+  araphor-data --lib` in 11.77 seconds. Existing warnings remain. The two
+  `ResolvedInput` SQL files remain active native DataFusion queries. Twenty-five
+  review links now use the verified successful DuckDB source revision; the
+  guide text remains available as historical evidence. Current readers use
+  the native storage review guide. No runtime test or timing comparison is
+  repeated for these unreachable files. Read
+  `output/araphor-fjall-migration-20261110/obsolete-sql-check.log`.
 - Ten native package-context cases pass in 32.92 seconds. The collection
   regression first fails because targeted collection decodes another tenant's
   malformed context. Targeted collection and uninstall now scope roots,

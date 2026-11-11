@@ -1,5 +1,10 @@
 # Discovery Definition Review
 
+Current Data storage uses Fjall. Links to retired package owners use source
+revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
+SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
+for the current owners and checks.
+
 Current execution storage is in
 [Checked journal references](araphor-retained-execution-review.md#checked-journal-references).
 The saved-output query and host alias sections below describe historical
@@ -3048,7 +3053,7 @@ Data retains valid package contracts without hidden count or byte ceilings.
 The existing storage owner enforces configured quotas. Collection retains every
 live pin and releases unused artifacts in one atomic sweep.
 
-[Package admission](../../crates/araphor-data/src/analysis/packages/revisions.rs) validates typed revisions without a fixed closure ceiling.
+[Package admission](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/revisions.rs) validates typed revisions without a fixed closure ceiling.
   -> [Package commit](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/commit.rs) retains contract and checkpoint data with the existing final guard and storage charges.
   -> [Completed input](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/input.rs) fetches contract, body and window through one fully fenced query.
   -> [Package recovery](https://github.com/Ereborlabs/erebor-runtime/blob/4e6b4af668cba0270408ed809275482b83930a23/crates/araphor-data/src/analysis/packages/recovery.rs) checks stored contracts without the removed admission ceilings.
@@ -3799,7 +3804,7 @@ This review follows the native boundary proof at `4e6b4af6`. The old Data
 package lifecycle retires as one model. Shared artifact and evidence behavior
 remain. Query and the native Managed owner retain execution responsibility.
 
-[Image installation](../../crates/araphor-data/src/analysis/packages/image.rs) retains code and an exact dependency closure.
+[Image installation](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) retains code and an exact dependency closure.
   -> [Definition admission](../../crates/araphor-data/src/analysis/definitions.rs) retains the admitted program and exact image pins without execution.
 
 [Instance subscriptions](../../crates/araphor-analysis/src/instance/subscription.rs) consume work from the Query stream.
@@ -3810,18 +3815,18 @@ remain. Query and the native Managed owner retain execution responsibility.
   -> [Native Data publication](../../crates/araphor-data/src/analysis/managed/commit.rs) commits output, checkpoints, heads, progress, and the receipt atomically.
 
 [Data recovery](../../crates/araphor-data/src/analysis/connection.rs) restores the durable store.
-  -> [Artifact validation](../../crates/araphor-data/src/analysis/packages/recovery.rs) checks descriptors, dependency closure, and exact image digests.
+  -> [Artifact validation](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/recovery.rs) checks descriptors, dependency closure, and exact image digests.
   -> [Native execution validation](../../crates/araphor-data/src/analysis/managed/schema.rs) checks retained native state and output.
   -> [Lifecycle recovery](../../crates/araphor-data/src/analysis/connection.rs) emits the existing notice only when the recovered revision changes.
 
-[Revision reads](../../crates/araphor-data/src/analysis/packages/revisions.rs)
+[Revision reads](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/revisions.rs)
 and [source-current checks](../../crates/araphor-data/src/analysis/dependencies.rs)
 keep their implementations. The old execution reader is removed.
 [Evidence reads](../../crates/araphor-data/src/analysis/packages/witnesses.rs)
 read the existing native or generic request metadata directly. The old
 package result join and codec are removed.
 
-[Collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+[Collection](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs)
 keeps installed-image, definition, context, and dependency roots.
 [Shared context tests](../../crates/araphor-data/src/analysis/packages/tests/context.rs)
 retain tenant, closure, corruption, reopen, and restore assertions through
@@ -3835,17 +3840,17 @@ This flow covers retained package content after `dc46e193d`. The old
 InstalledRefV1 body and its separate descriptor closure retire. Native
 execution and current authority keep their existing owners.
 
-[Image reads](../../crates/araphor-data/src/analysis/packages/image.rs) select an exact retained root and expected digest.
-  -> [The shared artifact traversal](../../crates/araphor-data/src/analysis/packages/image.rs) loads that root and its retained dependencies.
+[Image reads](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) select an exact retained root and expected digest.
+  -> [The shared artifact traversal](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) loads that root and its retained dependencies.
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) checks stored identity, descriptor, OCI content, and exact dependency keys.
   -> [PackageBundleV1::checked_layout](../../crates/araphor-package/src/admission.rs) checks the canonical bundle and expected digest.
 
 [Native context validation](../../crates/araphor-data/src/analysis/context/provenance.rs) reads a current native provenance body.
-  -> [The shared artifact traversal](../../crates/araphor-data/src/analysis/packages/image.rs) loads the closure without requiring an installed-image row.
+  -> [The shared artifact traversal](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) loads the closure without requiring an installed-image row.
   -> [NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs) checks the canonical digest and exact package, export, and output.
 
-[Recovery](../../crates/araphor-data/src/analysis/packages/recovery.rs) reuses the same retained-row guard.
-  -> [Stored package checks](../../crates/araphor-data/src/analysis/packages/recovery.rs) retain missing-dependency and image pin checks.
+[Recovery](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/recovery.rs) reuses the same retained-row guard.
+  -> [Stored package checks](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/recovery.rs) retain missing-dependency and image pin checks.
   -> [Context recovery and reads](../../crates/araphor-data/src/analysis/context/reads.rs) still validate retained native context content.
 
 [StoredArtifact](../../crates/araphor-data/src/error.rs) distinguishes invalid retained content from bad caller content.
@@ -3853,7 +3858,7 @@ execution and current authority keep their existing owners.
   -> [New context admission](../../crates/araphor-data/src/analysis/context/write.rs) keeps canonical Missing/NotFound for an absent supplied root.
   -> [Discovery replay](../../crates/araphor-analysis/src/discovery/replay.rs) reads one StoredArtifact cause for its existing known-Missing decision.
 
-[Collection](../../crates/araphor-data/src/analysis/packages/collection.rs)
+[Collection](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/collection.rs)
 keeps installed images, definition pins, native package-context roots, and
 recursive dependency roots. It stops interpreting the retired installed-list
 body. Generic context storage and Graph fact validation remain.
@@ -3912,7 +3917,7 @@ grant, SQL plan, runtime, or execution state.
   -> [Metadata](../../crates/araphor-package/src/metadata.rs) projects the retained content and digest.
   -> [Footprint](../../crates/araphor-package/src/admission.rs) counts the owner header, raw heap, and digest capacity.
 
-[Data image reads](../../crates/araphor-data/src/analysis/packages/image.rs) select the exact current installed or retained record.
+[Data image reads](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) select the exact current installed or retained record.
   -> [Row decoding](../../crates/araphor-data/src/analysis/packages/model.rs) checks stored identity, descriptor, artifact, and dependency keys.
   -> [Checked admission](../../crates/araphor-package/src/admission.rs) validates that reconstructed content against the stored digest.
   -> [Query Packages](../../crates/araphor-query/src/definition/package.rs) retains one owner Arc and the existing image reservation.
