@@ -2162,7 +2162,12 @@ async fn moving_window_nanoseconds() {
     let retained = next(&mut subscription).await;
     assert!(retained.clock_changed);
     assert!(retained.completed_windows.is_empty());
-    assert_eq!(values(&retained, 0), [ScalarValue::Int64(Some(1))]);
+    assert!(retained.batches.is_none());
+    assert!(Arc::ptr_eq(&retained.snapshot, &first.snapshot));
+    assert_eq!(retained.cursor, first.cursor);
+    assert_eq!(retained.evaluated_utc_ns, first.evaluated_utc_ns);
+    assert_eq!(retained.snapshot.witnesses, first.snapshot.witnesses);
+    assert_eq!(retained.snapshot.next_change, Some(2_000_001_000));
     assert_eq!(
         retained.snapshot.selection.received_from,
         Bound::Included(1_000_000_000)

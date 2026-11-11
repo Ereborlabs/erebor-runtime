@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Resolve the remaining Query contracts. The last complete run has 19
+- Resolve the remaining Query contracts. The last complete run has 17
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
   MVCC currently retains all history. Data startup validation still scans
@@ -87,6 +87,54 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Clock notices now evaluate only when a saved deadline is due. Runtime samples
+  the actual Clock; the watch supplies a change notice. Evaluation keeps
+  its separate clock sample after it obtains the permit. An idle clock notice
+  before a saved future deadline returns the existing evaluated snapshot Arc.
+  It preserves selection, witnesses, deadline, cursor, and evaluation time.
+  A clock notice without a deadline still returns fresh metadata-only health.
+  Control notices and resume without a saved snapshot also keep that path.
+
+  Fresh metadata still checks the current store identity, schema, recovery
+  epoch, and readiness. Current trace authorization checks the snapshot that
+  Runtime returns. An idle update observes current metadata but does not
+  acknowledge input, move its captured position, or replace its saved view.
+  Early wall-timer wakes no longer consume a future deadline. When the actual
+  sampled time is still before a stored deadline, Progress resets its existing
+  fired or elapsed flag. A deadline at or before that time stays consumed.
+  No timer, durable record, state field, or public API is added. The unused
+  private deadline getter is removed.
+
+  Moving and fixed window cases restore their original assertions for no
+  batch before expiry. They also check exact snapshot Arc, cursor, and time.
+  Real due-deadline evaluations retain their repeated-value assertions.
+  Mixed-port health retains its unrelated context commit and uses the existing
+  discovery owner control notice. The owner is released after joined shutdown;
+  no unrelated CDC input is added to the watch. The checker cleanup case waits
+  for actual child cancellation while it drives completion, within its original
+  eight-second bound. All later cleanup and authority assertions remain.
+
+  The original trace paging and resume proof remains intact. A second native
+  subscription joins those trace rows with a real notification deadline.
+  It checks count, trace-read authority, the saved deadline, and an idle Arc.
+  Real revocation before expiry then returns Denied and EOF. Two Progress
+  variants force an early wall wake, sample the unchanged manual clock, and
+  advance time without a clock notice. Both deadlines still fire and then stay
+  consumed. The existing consumed-deadline case remains unchanged.
+
+  The final complete Query unit run passes 428 cases, fails 17, and ignores
+  five in 27.30 seconds. All 15 native Query integration cases pass in
+  7.16 seconds. The release library check without default features passes
+  in 25.02 seconds. Changed Rust formatting and whitespace checks pass.
+  Read `native-clock-idle-focused.log`, `native-clock-idle-contracts.log`,
+  `native-clock-idle-health.log`, `native-clock-idle-rearm.log`,
+  `native-clock-idle-qualified-query.log`, and
+  `native-clock-idle-qualified-default.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for clock eligibility, retained-view health, and timer rearming;
+  Not done for complete Query qualification and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Saved definition preparation now runs the native DataFusion analyzer and
   optimizer on the final reachable plan. Input binding, unused-CTE removal,

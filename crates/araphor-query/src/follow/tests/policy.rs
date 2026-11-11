@@ -270,6 +270,17 @@ async fn checker_end_keeps_cleanup() {
             };
         tokio::pin!(complete);
         assert!(futures_util::poll!(&mut complete).is_pending(), "{ending}");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(8), async {
+                tokio::select! {
+                    _ = child.cancelled() => true,
+                    _ = &mut complete => false,
+                }
+            })
+            .await
+            .unwrap(),
+            "{ending}"
+        );
         assert!(child.check().is_err(), "{ending}");
         assert_eq!(control.check().is_ok(), ending == "eof");
         assert!(parent.check().is_ok(), "{ending}");

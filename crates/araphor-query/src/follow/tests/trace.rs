@@ -7,6 +7,7 @@ use araphor_data::{
     TraceTerminalReasonV1, TraceTerminalV1,
 };
 use datafusion::common::ScalarValue;
+use futures_util::StreamExt as _;
 
 use super::{next, values, Cursor, Fixture, Limits, Operation, TestClock, Update};
 
@@ -250,7 +251,7 @@ async fn interleaved_trace_pages() {
             Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
             b"ordered trace principal",
             Some(resume),
-            clock,
+            clock.clone(),
             true,
         )
         .await
@@ -265,4 +266,49 @@ async fn interleaved_trace_pages() {
     assert_eq!(last.cursor.position(), last.snapshot.page.scanned_through);
     assert!(last.cursor.position() > expected[6].0);
     resumed.cancel().unwrap();
+    fixture.notification(2_000);
+    let mut timed = fixture
+        .engine
+        .subscribe(
+            "SELECT COUNT(*) AS total FROM trace_output CROSS JOIN notifications",
+            vec![],
+            AnalysisSelectionV1::tenant(a.tenant_id),
+            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
+            b"ordered trace principal",
+            None,
+            clock.clone(),
+            true,
+        )
+        .await
+        .unwrap();
+    let captured = next(&mut timed).await;
+    assert_eq!(
+        values(&captured, 0),
+        [ScalarValue::Int64(Some(expected.len() as i64))]
+    );
+    assert_eq!(captured.snapshot.next_change, Some(2_000));
+    assert_eq!(
+        captured.snapshot.page.extraction.trace_reads(),
+        &[a.request_id]
+    );
+    clock.set(1_001);
+    let idle = next(&mut timed).await;
+    assert!(idle.clock_changed);
+    assert!(idle.batches.is_none());
+    assert!(Arc::ptr_eq(&idle.snapshot, &captured.snapshot));
+    assert_eq!(idle.cursor, captured.cursor);
+    assert_eq!(idle.evaluated_utc_ns, captured.evaluated_utc_ns);
+    let (mut state, _) = fixture
+        .store
+        .trace_intent(a.tenant_id, a.request_id)
+        .unwrap()
+        .unwrap();
+    state.cancel_requested = true;
+    state.read_revoked = true;
+    fixture.store.update_trace(&state).unwrap();
+    clock.set(1_002);
+    let error = timed.next().await.unwrap().unwrap_err();
+    assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
+    assert!(timed.next().await.is_none());
+    timed.cancel().unwrap();
 }

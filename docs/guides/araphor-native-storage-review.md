@@ -4,6 +4,39 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [Progress](../../crates/araphor-query/src/stream/progress.rs) with
+[Runtime clock updates](../../crates/araphor-query/src/stream/physical/runtime.rs),
+the [timer regression](../../crates/araphor-query/src/follow/tests/progress.rs),
+and the [trace authority case](../../crates/araphor-query/src/follow/tests/trace.rs).
+Runtime samples actual time before it decides whether a deadline is due.
+Evaluation still samples time after permit acquisition. An early wall wake
+cannot consume a future deadline: Progress resets only future fired or elapsed
+flags. Equality and past deadlines keep their consumed state.
+
+Before a saved future deadline, a clock notice returns the existing evaluated
+snapshot Arc without execution. Fresh metadata supplies the current store and
+recovery checks. Current trace authorization checks the actual returned Arc.
+An idle update preserves the saved position, deadline, view, and evaluation
+time. It does not acknowledge input. Clock notices without a deadline, Control
+notices, and resume without a saved view still return fresh metadata-only health.
+No row authority is copied into a metadata-only snapshot.
+
+The moving and fixed window cases restore their original idle assertion before
+expiry. Genuine due evaluations still deliver their native values. Mixed-port
+health uses the existing discovery owner control signal and releases it after
+joined shutdown. The unrelated context commit remains. Checker cleanup waits
+for child cancellation, not one pending poll, and keeps its original time bound
+and cleanup assertions. The trace case keeps its original paging and resume
+workload, then uses a real notification deadline to prove retained-view
+revocation. The timer case covers both explicit and captured deadlines without
+an external clock notice after time advances.
+
+The final complete Query unit run passes 428 cases, fails 17, and ignores five.
+All 15 native Query integration cases pass. The release library check without
+default features, changed Rust formatting, and whitespace checks pass. Read
+`native-clock-idle-*` under `output/araphor-fjall-migration-20261110`.
+Complete qualification and incident performance remain open.
+
 Read [definition preparation](../../crates/araphor-query/src/definition.rs),
 [admission sealing](../../crates/araphor-query/src/definition/call.rs),
 [window recognition](../../crates/araphor-query/src/follow/window.rs),

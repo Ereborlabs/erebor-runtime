@@ -83,7 +83,10 @@ async fn fixed_window_keeps_cut() {
     clock.set(3_000_000_000);
     let interim = next(&mut subscription).await;
     assert!(interim.completed_windows.is_empty());
-    assert_eq!(values(&interim, 0), [ScalarValue::Int64(Some(1))]);
+    assert!(interim.batches.is_none());
+    assert!(Arc::ptr_eq(&interim.snapshot, &first.snapshot));
+    assert_eq!(interim.cursor, first.cursor);
+    assert_eq!(interim.evaluated_utc_ns, first.evaluated_utc_ns);
     clock.set(7_500_000_000);
     let closed = next(&mut subscription).await;
     assert_eq!(closed.completed_windows, [window]);

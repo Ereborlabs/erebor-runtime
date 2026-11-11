@@ -677,37 +677,45 @@ impl Runtime {
         self.evaluate(true, completed).await
     }
 
-    async fn metadata_update(&mut self, clock_changed: bool) -> Result<Event> {
-        let clock_changed = clock_changed || self.progress.clock_pending();
+    async fn metadata_update(&mut self, clock_wake: bool) -> Result<Event> {
+        let clock_changed = clock_wake || self.progress.clock_pending();
+        let now = self.progress.time()?;
         if clock_changed
-            && (self.progress.deadline().is_some()
+            && (self.progress.expired(now)
                 || self
                     .snapshot
                     .as_ref()
-                    .is_some_and(|snapshot| snapshot.next_change.is_some()))
+                    .is_some_and(|snapshot| snapshot.next_change.is_some_and(|due| due <= now)))
         {
             return self
                 .evaluate(true, Vec::new())
                 .await?
                 .ok_or_else(Self::state_error);
         }
-        let now = self.progress.time()?;
-        let snapshot = self
+        let metadata = self
             .run
             .session
             .subscription_metadata(self.run.sources(), now, self.run.selection_window()?)
             .await?;
-        self.check_store(&snapshot.page.extraction.meta)?;
+        self.check_store(&metadata.page.extraction.meta)?;
+        let snapshot = if clock_wake {
+            self.snapshot
+                .as_ref()
+                .filter(|snapshot| snapshot.next_change.is_some())
+                .unwrap_or(&metadata)
+        } else {
+            &metadata
+        };
         self.run
             .session
             .control()
-            .query_async(self.run.session.check_read(&snapshot))
+            .query_async(self.run.session.check_read(snapshot))
             .await?;
-        self.progress.completed(&snapshot.page.extraction.meta, 0);
+        self.progress.completed(&metadata.page.extraction.meta, 0);
         Ok(Event {
             calls: Default::default(),
             output: Output {
-                snapshot,
+                snapshot: Arc::clone(snapshot),
                 batches: None,
                 positions: Vec::new(),
                 position: self.position.ok_or_else(Self::state_error)?,

@@ -162,6 +162,7 @@ async fn mixed_port_deadlines() -> TestResult {
         );
         let retained = Arc::clone(&first.calls[&id]);
         fixture.context(1)?;
+        fixture.engine.store().register_discovery_owner();
         let health = next(&mut stream).await?;
         assert!(health.batches.is_none());
         assert!(health.calls.is_empty());
@@ -210,6 +211,7 @@ async fn mixed_port_deadlines() -> TestResult {
         assert_eq!(fixture.engine.store().meta()?, before);
         assert!(futures_util::poll!(stream.next()).is_pending());
         tokio::time::timeout(Duration::from_secs(30), stream.cancel_and_join()).await??;
+        fixture.engine.store().release_discovery_owner();
         assert_eq!(
             retained.evaluation().inputs[0]
                 .data

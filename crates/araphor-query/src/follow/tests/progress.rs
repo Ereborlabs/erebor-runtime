@@ -215,6 +215,36 @@ async fn progress_idle_waits_for_input() {
 }
 
 #[tokio::test]
+async fn early_timer_keeps_deadline() {
+    for explicit in [false, true] {
+        let fixture = Fixture::new(Limits::default());
+        let clock = TestClock::new(10);
+        let mut progress = progress(&fixture, clock.clone()).await;
+        let control = AnalysisReadControl::default();
+        let position = progress.source_position();
+        assert_eq!(progress.begin().unwrap(), 10);
+        progress.captured(position, (!explicit).then_some(11));
+        let deadline = explicit.then_some(11);
+        assert!(matches!(
+            wake(&mut progress, &control, deadline).await,
+            Wake::Clock
+        ));
+        assert_eq!(progress.time().unwrap(), 10);
+        assert_eq!(progress.source_position(), position);
+        clock.now.store(11, Ordering::SeqCst);
+        assert!(matches!(
+            wake(&mut progress, &control, deadline).await,
+            Wake::Clock
+        ));
+        assert_eq!(progress.begin().unwrap(), 11);
+        assert_eq!(progress.source_position(), position);
+        let waiting = progress.next(&control, deadline);
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+    }
+}
+
+#[tokio::test]
 async fn progress_context_keeps_deadline_consumed() {
     let fixture = Fixture::new(Limits::default());
     let mut progress = progress(&fixture, TestClock::new(10)).await;

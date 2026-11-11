@@ -193,7 +193,14 @@ impl Progress {
 
     pub(crate) fn time(&mut self) -> Result<u64> {
         self.clock_changes.borrow_and_update();
-        self.now()
+        let now = self.now()?;
+        if self.fired.is_some_and(|due| due > now) {
+            self.fired = None;
+        }
+        if self.expiry.is_some_and(|due| due > now) {
+            self.elapsed = false;
+        }
+        Ok(now)
     }
 
     pub(crate) fn captured(&mut self, position: StorePositionV1, expiry: Option<u64>) {
@@ -207,10 +214,6 @@ impl Progress {
         if let Some(changes) = &mut self.changes {
             changes.observed_meta(meta, publication);
         }
-    }
-
-    pub(crate) fn deadline(&self) -> Option<u64> {
-        self.expiry
     }
 
     pub(crate) fn expired(&self, now: u64) -> bool {
