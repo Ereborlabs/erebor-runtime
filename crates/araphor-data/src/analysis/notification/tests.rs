@@ -1,3 +1,4 @@
+use crate::analysis::AnalysisStore;
 use super::*;
 use crate::{
     AnalysisContextKeyV1, ContextSensitivityV1, NotificationFindingRefV1, NotificationKeyV1,

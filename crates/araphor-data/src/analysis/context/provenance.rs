@@ -150,6 +150,7 @@ impl VerifiedPackages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
     use crate::analysis::PackageRevisionV1;
     use crate::PackageImplementationV1;
     use crate::{PackageArtifactV1, PackageBundle, PackageBundleV1};

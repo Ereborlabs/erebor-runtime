@@ -31,6 +31,7 @@ impl ProcessorRetirementV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
     use crate::{
         AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
         EvidenceRetentionOwner, ProcessorClassV1, ProcessorStateV1, RetentionLimitsV1,

@@ -12,6 +12,8 @@ pub struct WitnessUsageV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
+    use crate::AnalysisReadControl;
     use crate::{
         AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
         AnalysisResultCommitV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceIntakeIdentityV1,

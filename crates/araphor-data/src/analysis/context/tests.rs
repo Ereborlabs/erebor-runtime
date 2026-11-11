@@ -1,3 +1,4 @@
+use crate::analysis::AnalysisStore;
 use super::*;
 
 #[test]

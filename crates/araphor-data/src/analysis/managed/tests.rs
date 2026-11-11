@@ -8,8 +8,15 @@ use snafu::ResultExt as _;
 
 use super::codec::ManagedCodec;
 use super::*;
-use crate :: analysis :: { AnalysisExtractLimits , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , AnalysisTableRequests } ;
-use crate :: { AnalysisReadControl , PackageArtifactV1 , PackageBundleV1 , PackageGrantV1 , PackageImplementationV1 , SqlModelV1 , SqlReasonV1 } ;
+use crate::analysis::{
+    AnalysisExtractLimits, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisTableRead,
+    AnalysisTableRequests,
+};
+use crate::analysis::{AnalysisStore, ManagedCommit, ManagedReturn, PackageResultRefV1};
+use crate::{
+    AnalysisReadControl, PackageArtifactV1, PackageBundleV1, PackageGrantV1,
+    PackageImplementationV1, SqlModelV1, SqlReasonV1,
+};
 
 mod changes;
 mod destination;
@@ -58,8 +65,21 @@ struct Fixture {
     model: sdk::Model,
 }
 
+#[derive(serde::Deserialize)]
+struct Stored {
+    id: String,
+    revision: u64,
+    body: Body,
+}
+
+#[derive(serde::Deserialize)]
+enum Body {
+    Call {},
+    Selected { rows: u64 },
+}
+
 impl Fixture {
-    fn publish(
+    fn commit(
         store: &AnalysisStore,
         input: &ManagedCommit<'_>,
         check: impl FnOnce() -> crate::Result<()>,
@@ -80,9 +100,50 @@ impl Fixture {
             .and_then(|attempt| attempt.receipt().cloned()))
     }
 
-    
+    fn checkpoint(
+        &self,
+        store: &AnalysisStore,
+        reference: &PackageResultRefV1,
+    ) -> TestResult<sdk::Checkpoint> {
+        let view = store.view()?;
+        for entry in view.snapshot().prefix(b"\0data/X") {
+            let (key, bytes) = entry?;
+            if key.len() != 15 {
+                continue;
+            }
+            assert_eq!(bytes.first(), Some(&0));
+            let stored: Stored = rmp_serde::from_slice(&bytes[1..])?;
+            if stored.id == reference.result_id {
+                assert_eq!(stored.revision, reference.commit_revision);
+                assert!(matches!(stored.body, Body::Call { .. }));
+                let key = [b"\0data/U".as_slice(), &key[7..]].concat();
+                let bytes = view.snapshot().get(key)?.ok_or("checkpoint")?;
+                assert_eq!(bytes.first(), Some(&0));
+                let wire: Option<sdk::wire::Checkpoint> = rmp_serde::from_slice(&bytes[1..])?;
+                return Ok(wire.ok_or("checkpoint")?.decode_model(&self.model)?);
+            }
+        }
+        Err("checkpoint result".into())
+    }
 
-    
+    fn rows(store: &AnalysisStore, reference: &PackageResultRefV1) -> TestResult<u64> {
+        for entry in store.view()?.snapshot().prefix(b"\0data/X") {
+            let (key, bytes) = entry?;
+            if key.len() != 15 {
+                continue;
+            }
+            assert_eq!(bytes.first(), Some(&0));
+            let stored: Stored = rmp_serde::from_slice(&bytes[1..])?;
+            if stored.id == reference.result_id {
+                assert_eq!(stored.revision, reference.commit_revision);
+                let Body::Selected { rows } = stored.body else {
+                    return Err("selected result kind".into());
+                };
+                return Ok(rows);
+            }
+        }
+        Err("selected result".into())
+    }
 
     fn current(&self, store: &AnalysisStore) -> TestResult<ManagedInstance> {
         store
@@ -393,7 +454,7 @@ impl Fixture {
             name: "selected".into(),
             batches: outputs[0].datasets[0].batches.clone(),
         };
-        Ok(Fixture::publish(
+        Ok(Fixture::commit(
             &store,
             &ManagedCommit {
                 control: &crate::AnalysisReadControl::default(),
@@ -521,13 +582,13 @@ fn managed_sql_checks_authority() -> TestResult {
         selected_schema: &schema,
     };
     let before = store.meta()?;
-    assert!(Fixture::publish(&store, &commit, || {
+    assert!(Fixture::commit(&store, &commit, || {
         checked += 1;
         crate::AnalysisReadDeniedSnafu.fail()
     })
     .is_err());
     assert_eq!(store.meta()?, before);
-    let receipt = Fixture::publish(&store, &commit, || {
+    let receipt = Fixture::commit(&store, &commit, || {
         checked += 1;
         Ok(())
     })?;
@@ -1067,7 +1128,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .state;
         let input = request(&format!("native-{index}"));
         let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
-        let receipt = Fixture::publish(
+        let receipt = Fixture::commit(
             &store,
             &ManagedCommit {
                 control: &crate::AnalysisReadControl::default(),
@@ -1316,7 +1377,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     };
     let before = store.meta()?;
     assert!(matches!(
-        Fixture::publish(&store, &commit, || Ok(())),
+        Fixture::commit(&store, &commit, || Ok(())),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Incomplete,
             field: "managed witness lifetime",
@@ -1326,7 +1387,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     assert_eq!(store.meta()?, before);
     commit.now_utc_ns = 20;
     assert!(matches!(
-        Fixture::publish(&store, &commit, || Ok(())),
+        Fixture::commit(&store, &commit, || Ok(())),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Incomplete,
             field: "managed witness lifetime",
@@ -1335,7 +1396,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     ));
     assert_eq!(store.meta()?, before);
     commit.now_utc_ns = 19;
-    assert!(Fixture::publish(&store, &commit, || crate::AnalysisReadDeniedSnafu.fail()).is_err());
+    assert!(Fixture::commit(&store, &commit, || crate::AnalysisReadDeniedSnafu.fail()).is_err());
     assert_eq!(store.meta()?, before);
     let count: u64 = store.read_snapshot(|reader| {
         reader
@@ -1345,7 +1406,7 @@ fn managed_witness_lifetime_check() -> TestResult {
             })
     })?;
     assert_eq!(count, 0);
-    let receipt = Fixture::publish(&store, &commit, || Ok(()))?;
+    let receipt = Fixture::commit(&store, &commit, || Ok(()))?;
     let count: u64 = store.read_snapshot(|reader| {
         reader
             .query_row("SELECT count(*) FROM evidence_refs", [], |row| row.get(0))

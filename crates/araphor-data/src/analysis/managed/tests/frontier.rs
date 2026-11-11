@@ -83,7 +83,7 @@ fn assert_frontier(completed: bool) -> TestResult {
     };
     let before = store.meta()?;
     assert!(matches!(
-        Fixture::publish(&store, &commit, || Err(
+        Fixture::commit(&store, &commit, || Err(
             Code::Denied.error("frontier final authority")
         )),
         Err(crate::Error::Package {
@@ -95,7 +95,7 @@ fn assert_frontier(completed: bool) -> TestResult {
     assert!(store
         .managed_resume([1; 16], "counter", &AnalysisReadControl::default())
         .is_err());
-    let receipt = Fixture::publish(&store, &commit, || Ok(()))?;
+    let receipt = Fixture::commit(&store, &commit, || Ok(()))?;
     let mut expected = input.frontier.clone();
     expected.as_mut().ok_or("offered frontier")?.pending = !completed;
     assert_eq!(receipt.frontier, expected);
@@ -409,7 +409,7 @@ fn finite_result_rejects_resume() -> TestResult {
     };
     let before = store.meta()?;
     assert!(matches!(
-        Fixture::publish(
+        Fixture::commit(
             &store,
             &ManagedCommit {
                 control: &crate::AnalysisReadControl::default(),

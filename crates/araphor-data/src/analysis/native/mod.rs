@@ -674,6 +674,9 @@ impl<'a> DataWrite<'a> {
             }
         };
         let visible = (|| {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            self.store
+                .run_commit_hook(super::AnalysisCommitStage::AfterMetadataSync)?;
             let snapshot =
                 self.store
                     .branch

@@ -1446,6 +1446,7 @@ impl RawCommit {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
     use std::io::Write as _;
     use std::os::unix::fs::FileExt as _;
 

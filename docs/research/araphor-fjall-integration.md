@@ -88,6 +88,46 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Two native cases replace the old SQL uncertain lifecycle commit case.
+  A child process forces an actual journal `EFBIG` error. It checks the native
+  error chain, engine poison, blocked reads and writes, blocked activation
+  catch-up, and recovery refusal. It restores the OS limit, flushes an explicit
+  marker, and exits before database destruction can retry buffered bytes.
+  The parent requires that marker and exit code 73. Reopen restores the exact
+  pre-change Data records, metadata, running instance, and active membership.
+  The original journal has no new instance change after the saved position.
+  This proves the unapplied outcome at that abrupt crash boundary. A returned
+  journal error alone does not prove abort; clean close can flush buffered data.
+  The second case uses the existing test hook after durable metadata sync and
+  before Data view publication. It keeps the engine healthy, poisons Data,
+  and refuses in-place recovery of the changed metadata cut. Reopen restores
+  the exact committed stop and one original journal instance change. Both cases
+  check historical state, repeated recovery, and silence after unrelated raw
+  input. The hook uses the existing failure path and is gated by `test` or
+  `test-fixtures`. No storage format or production check is added.
+  Both cases pass in 0.09 seconds. The complete focused run passes 151 managed,
+  18 raw, six lifecycle, and eight backup cases. The release library check
+  without default features also passes.
+
+  Shared unit fixtures now import the existing native API. Their static
+  prepare-and-commit helper has a distinct name. Private X and U inspectors
+  replace the missing SQL result helpers. Activation cases use the supported
+  subscription methods and release the live handle before reopen. Only obsolete
+  reader-quota assertions are removed. Scope, history, cancellation, witness
+  accounting, memory budgets, retention, and real I/O checks remain.
+  Data unit compilation improves from 737 to 594, then 488, then 450 diagnostics.
+  The unit target still does not compile or run. This is compile progress;
+  complete native qualification of those remaining fixtures is **Not done**.
+  Read `native-lifecycle-faults-crash.log`,
+  `native-lifecycle-faults-contracts.log`,
+  `native-lifecycle-faults-default.log`, and
+  `native-fixture-wiring-final.log` under
+  `output/araphor-fjall-migration-20261110`. Earlier import diagnostics and the
+  failed clean-close assumption remain in that directory.
+  Result: **Done for native lifecycle commit failure proof and retirement of
+  the SQL ambiguity case**. Complete migration qualification and incident
+  performance remain **Not done**. No new incident timing is measured.
+
 - Eight native cases replace the complete old SQL result-reference family.
   The native baseline passes five and fails three. Live selected
   reads accepted swapped call bindings and changed dependency records.

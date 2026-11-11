@@ -534,8 +534,8 @@ fn admission_failure_keeps_intent() -> TestResult {
         frontier: None,
         completed: terminal.revision,
     };
-    let mut activations = store.subscribe_activations();
-    activations.borrow_and_update();
+    let activations = store.subscribe_activations()?;
+    assert_eq!(activations.position(), store.meta()?.commit_revision);
     let recorded = store.fail_managed(&expected, Code::Limit, || Ok(()))?;
     assert_eq!(recorded, expected.instance);
     assert_eq!(recorded.progress, prior.commit_revision);
@@ -566,6 +566,7 @@ fn admission_failure_keeps_intent() -> TestResult {
     assert_eq!(failure.code, Code::Limit);
     assert_eq!(failure.progress, prior.commit_revision);
     assert_eq!(failure.revision, before.commit_revision);
+    drop(activations);
     drop(store);
     let store = AnalysisStore::open(&root)?;
     let saved = status(&store, &fixture)?;

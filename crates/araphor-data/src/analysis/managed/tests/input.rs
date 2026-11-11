@@ -14,8 +14,6 @@ struct Saved {
 }
 
 impl Saved {
-    
-
     fn append(store: &AnalysisStore, cursor: u64) -> crate::Result<()> {
         let record = crate::EvidenceRecord {
             observed_boottime_ns: cursor,
@@ -62,17 +60,5 @@ impl Saved {
                 None,
             )?
             .state)
-    }
-
-    fn permits(&self) -> TestResult {
-        assert_eq!(
-            self.store
-                .read_slots
-                .as_ref()
-                .ok_or("reader admissions absent")?
-                .available_permits(),
-            2
-        );
-        Ok(())
     }
 }

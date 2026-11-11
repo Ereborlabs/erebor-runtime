@@ -1187,6 +1187,8 @@ impl AnalysisExtractionV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
+    use std::borrow::Cow;
     use crate::{
         AnalysisContextVersionV1, AnalysisResultCommitV1, ContextSensitivityV1,
         EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1, RetentionLimitsV1,

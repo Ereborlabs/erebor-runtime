@@ -12,6 +12,8 @@ pub struct StorageHealthV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::{AnalysisStore, ProcessorScopeV1};
+    use crate::EvidenceIntakeIdentityV1;
     use crate::{
         AnalysisResultCommitV1, EvidenceRetentionOwner, RetentionLimitsV1, ValidatedEvidenceBatchV1,
     };

@@ -96,6 +96,7 @@ pub enum AnalysisCommitStage {
     BeforeResultCommit,
     BeforeRetentionCommit,
     BeforeContextCommit,
+    AfterMetadataSync,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -208,6 +209,7 @@ pub enum EvidenceStoreOutcomeV1 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::{fs, path::PathBuf};
     use crate::EVIDENCE_BATCH_RECORDS;
 
     pub(in crate::analysis) fn assert_no_execution(store: &AnalysisStore) -> Result<()> {

@@ -1,3 +1,4 @@
+use crate::analysis::AnalysisStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

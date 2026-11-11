@@ -4,6 +4,27 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native lifecycle fault cases](../../crates/araphor-data/tests/native_managed/lifecycle/faults.rs)
+with [Data publication](../../crates/araphor-data/src/analysis/native/mod.rs)
+and [recovery](../../crates/araphor-data/src/analysis/native/recovery.rs).
+The journal failure case uses an actual `EFBIG` error in a child process. It
+checks blocked reads, writes, captures, and activation catch-up before it exits.
+The parent requires the explicit marker and exit code 73. It then checks exact
+pre-change Data records, metadata, active membership, and the original log.
+Abrupt exit prevents database destruction from retrying buffered journal data.
+A returned journal error alone does not establish an aborted transaction.
+The other case injects an error after durable commit and before publication.
+`AfterMetadataSync` is part of the existing test-only commit hook. Its error
+uses the existing Data poison path. Native recovery requires reopen after a
+changed metadata cut; it does not recreate SQL in-place commit reconciliation.
+Reopen restores the committed stop and exactly one original journal instance
+change. Both cases retain historical state and reject unrelated activation.
+The old SQL ambiguity case is removed. The focused run passes 151 managed,
+18 raw, six lifecycle, and eight backup cases. The release library check without
+default features passes. Shared fixture wiring and removal of reader-quota
+assertions reduce unit compilation diagnostics to 450. That unit target still
+does not compile or run; its remaining native fixture ports stay open.
+
 Read [selected result reads](../../crates/araphor-data/src/analysis/native/managed/read.rs)
 with [recovery metadata checks](../../crates/araphor-data/src/analysis/native/managed/result_recovery.rs)
 and the [eight result-reference cases](../../crates/araphor-data/tests/native_managed/storage/output.rs).

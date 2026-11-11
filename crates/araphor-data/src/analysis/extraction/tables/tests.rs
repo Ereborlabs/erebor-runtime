@@ -1,3 +1,4 @@
+use crate::analysis::AnalysisStore;
 use std::time::Duration;
 
 use sdk::arrow_array::{BinaryArray, UInt64Array};

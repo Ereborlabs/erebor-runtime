@@ -75,6 +75,8 @@ impl SegmentRange {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
+    use std::{collections::BTreeSet, fs};
     use crate::{
         AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceRetentionOwner, ProcessorClassV1,
         ProcessorScopeV1, RetentionLimitsV1, ValidatedEvidenceBatchV1,

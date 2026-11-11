@@ -5,6 +5,7 @@ type PackageEvidence = (Vec<AnalysisWitnessV1>, Vec<AnalysisContextRefV1>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
 
     #[test]
     fn empty_provenance_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {

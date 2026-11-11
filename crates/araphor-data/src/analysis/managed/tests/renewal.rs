@@ -1,8 +1,8 @@
 use super::*;
 use crate::PackageErrorCodeV1 as Code;
 
-#[test]
-fn renewal_cas_is_inert() -> TestResult {
+#[tokio::test]
+async fn renewal_cas_is_inert() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
@@ -10,7 +10,7 @@ fn renewal_cas_is_inert() -> TestResult {
     let mut grant = expected.grant.clone();
     grant.revision += 1;
     let before = store.meta()?;
-    let mut notices = store.subscribe_activations();
+    let mut notices = store.subscribe_activations()?;
     let mut checked = 0;
     assert!(matches!(
         store.renew_managed(expected, &grant, || {
@@ -51,7 +51,8 @@ fn renewal_cas_is_inert() -> TestResult {
     assert_eq!(renewed.progress, expected.progress);
     assert!(!renewed.running);
     assert!(renewed.lifecycle > expected.lifecycle);
-    assert_eq!(*notices.borrow_and_update(), renewed.lifecycle);
+    notices.changed().await?;
+    assert_eq!(notices.position(), renewed.lifecycle);
     let before = store.meta()?;
     assert!(store.renew_managed(expected, &grant, || Ok(())).is_err());
     assert!(store

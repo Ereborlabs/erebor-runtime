@@ -105,6 +105,5 @@ fn retained_origins_merge_refs() -> TestResult {
     );
     assert_eq!(generic_entry.origins(), &[Origin::ExplicitResult]);
     assert_eq!(page.extraction.witnesses, vec![earliest]);
-    saved.permits()?;
     Ok(())
 }

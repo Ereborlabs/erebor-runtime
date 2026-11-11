@@ -8,6 +8,8 @@ use serde::Deserialize as _;
 
 #[path = "lifecycle/activation.rs"]
 mod activation;
+#[path = "lifecycle/faults.rs"]
+mod faults;
 #[path = "lifecycle/recovery.rs"]
 mod recovery;
 

@@ -788,14 +788,6 @@ fn source_reads_release_views() -> TestResult {
                 .sum::<usize>(),
             2
         );
-        assert_eq!(
-            store
-                .read_slots
-                .as_ref()
-                .ok_or("source reader slots")?
-                .available_permits(),
-            1
-        );
         assert_eq!(store.meta()?, meta);
     }
     Ok(())

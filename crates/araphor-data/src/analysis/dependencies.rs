@@ -11,6 +11,9 @@ mod tests {
     use prost::Message as _;
 
     use super::*;
+    use crate::analysis::{AnalysisStore, ProcessorScopeV1};
+    use crate::{AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, Result};
+    use std::collections::BTreeSet;
     use crate :: { AnalysisContextKeyV1 , AnalysisContextVersionV1 , ContextSensitivityV1 , CoverageReport , EvidenceIntakeIdentityV1 , EvidenceRecord , ValidatedCoverageV1 , ValidatedEvidenceBatchV1 } ;
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;

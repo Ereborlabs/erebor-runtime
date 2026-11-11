@@ -254,6 +254,8 @@ impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
+    use crate::EvidenceIntakeIdentityV1;
     use crate::{
         AnalysisContextVersionV1, ContextSensitivityV1, EvidenceStoreOutcomeV1,
         ValidatedEvidenceBatchV1,

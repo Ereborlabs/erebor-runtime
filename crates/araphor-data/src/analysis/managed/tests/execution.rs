@@ -91,7 +91,7 @@ fn execution_retains_only_committed_state() -> TestResult {
             fixture.model.outputs[0].schema.clone(),
         ))],
     };
-    let empty = Fixture::publish(
+    let empty = Fixture::commit(
         &store,
         &ManagedCommit {
             control: &crate::AnalysisReadControl::default(),

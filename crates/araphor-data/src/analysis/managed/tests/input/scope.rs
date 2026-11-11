@@ -88,14 +88,6 @@ fn history_keeps_saved_scope() -> TestResult {
             .ok_or("original attempt absent")?;
         assert_eq!(retained.instance().grant, original.grant);
         assert_eq!(retained.receipt(), Some(&receipt));
-        assert_eq!(
-            store
-                .read_slots
-                .as_ref()
-                .ok_or("reader admissions absent")?
-                .available_permits(),
-            2
-        );
     }
     Ok(())
 }

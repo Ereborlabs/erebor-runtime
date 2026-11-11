@@ -358,7 +358,7 @@ fn call_references_commit_atomically() -> TestResult {
     };
     let before = store.meta()?;
     let mut checked = false;
-    assert!(Fixture::publish(
+    assert!(Fixture::commit(
         &store,
         &ManagedCommit {
             control: &crate::AnalysisReadControl::default(),

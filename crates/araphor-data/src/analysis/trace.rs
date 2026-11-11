@@ -89,6 +89,8 @@ pub struct TraceIntentPageV1 {
 #[cfg(test)]
 pub(in crate::analysis) mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
+    use crate::AnalysisReadControl;
 
     pub(in crate::analysis) fn intent(request: u8) -> Result<TraceIntentV1> {
         let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;

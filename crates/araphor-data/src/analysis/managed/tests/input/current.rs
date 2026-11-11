@@ -136,7 +136,6 @@ fn source_change_keeps_commit() -> TestResult {
         Some(crate::Error::AnalysisSourceChanged { .. })
     ));
     assert_eq!(saved.commit_state()?, before);
-    saved.permits()?;
     Ok(())
 }
 
@@ -200,7 +199,6 @@ fn trace_revocation_keeps_commit() -> TestResult {
     assert_eq!(saved.commit_state()?, before);
     assert!(saved.capture()?.contract.traces.is_empty());
     assert_eq!(saved.commit_state()?, before);
-    saved.permits()?;
     Ok(())
 }
 
@@ -266,7 +264,6 @@ fn raw_fault_keeps_commit() -> TestResult {
         saved.fixture.current(&saved.store)?.progress,
         receipt.commit_revision
     );
-    saved.permits()?;
     Ok(())
 }
 

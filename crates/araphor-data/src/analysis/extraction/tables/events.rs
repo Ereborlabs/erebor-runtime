@@ -145,6 +145,7 @@ impl Capture<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::AnalysisStore;
     use crate::evidence::catalog_tests::CatalogFixture;
     use crate::{AnalysisExtractLimits, AnalysisReadModeV1, ValidatedEvidenceBatchV1};
     use sdk::arrow_array::{Array, BooleanArray, StringArray, UInt32Array, UInt64Array};
