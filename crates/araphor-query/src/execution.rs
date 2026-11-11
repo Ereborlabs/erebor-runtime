@@ -1014,7 +1014,11 @@ impl Session {
             Arc::clone(&self.memory),
             self.managed.clone(),
         );
-        let sources = sources.keys().map(|name| (name.clone(), None)).collect();
+        let sources = sources
+            .keys()
+            .filter(|name| !self.tables.contains_key(*name))
+            .map(|name| (name.clone(), None))
+            .collect();
         let scope = self.token()?;
         Engine::blocking(control, scope, move || {
             capture
@@ -1538,6 +1542,10 @@ impl Session {
             self.calls.as_deref(),
         )
         .context(SqlSnafu)?;
+        requests.retain(|name, columns| columns.is_some() || !self.tables.contains_key(name));
+        if !requests.contains_key("events") {
+            bounds.events = None;
+        }
         if let Some(calls) = &self.calls {
             for (source, _, _, clock) in &mut bounds.windows {
                 *clock = calls.window_clock(*source).context(SqlSnafu)?;

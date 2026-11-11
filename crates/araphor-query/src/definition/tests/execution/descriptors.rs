@@ -68,10 +68,23 @@ async fn selected_descriptor_keeps_auxiliary() -> TestResult {
         .map(|call| call.export())
         .collect::<Vec<_>>();
     assert_eq!(guests, ["count-input"]);
-    fixture.engine.store().fault_write(
-        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
-        &[],
-    )?;
+    assert_eq!(fixture.engine.store().meta()?, before);
+    let bodies = fixture
+        .engine
+        .store()
+        .view()?
+        .snapshot()
+        .prefix(b"\0data/@package-body/")
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(bodies.len(), 1);
+    let (key, bytes) = &bodies[0];
+    assert_eq!(bytes[0], 0);
+    let mut damaged = vec![b'x'; bytes.len()];
+    damaged[0] = 0;
+    let mut write = fixture.engine.store().write()?;
+    write.native().insert(key.as_ref(), damaged);
+    write.commit([])?;
+    let before = fixture.engine.store().meta()?;
     let error = fixture.prepare(&Fixture::sql(
         r#"SELECT * FROM "runtime-fixture"."1"."count-input"(mode => 'sum-input', amount => 0)"#,
     )).await.err().ok_or("cold corrupted image accepted")?;

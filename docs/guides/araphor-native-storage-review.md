@@ -14,6 +14,24 @@ Native result and attempt counts replace the old SQL count query. The focused
 run passes 130 managed cases and 18 raw cases. Other Data unit fixtures remain
 open. This fixture retirement establishes no latency gain.
 
+Read [Query capture](../../crates/araphor-query/src/execution.rs) with
+[native extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs).
+Query removes registered local declarations before Data checks durable owners.
+Complete event reads retain witnesses when no event column remains.
+[Input identity](../../crates/araphor-query/src/inputs/receipt.rs) binds catalog
+reads to the captured owner flags. It does not use an unrelated Data head.
+[Input replay](../../crates/araphor-data/src/analysis/native/inputs/replay.rs)
+owns the live handle's budget leases. The durable consumer keeps its log
+positions when those handles close. Read the
+[lease case](../../crates/araphor-data/tests/native_managed/inputs/leases.rs)
+for clone, release, and offline wake proof.
+[Query progress](../../crates/araphor-query/src/stream/progress.rs) reads the
+clock for a deadline; an idle wait with no deadline waits for an event.
+The 19 affected Query contracts and 15 native integration cases pass.
+Complete unit qualification remains open:
+404 Query cases pass, 40 fail, and five are ignored. The Data unit target still
+has old fixture compile failures. Read the current worklist for exact evidence.
+
 The five unused SQL storage files and five empty legacy package modules are
 removed. The two `ResolvedInput` SQL files remain active DataFusion queries.
 Historical package review links use the verified DuckDB control source revision.

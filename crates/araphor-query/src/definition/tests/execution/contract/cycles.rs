@@ -59,6 +59,11 @@ async fn image_rejects_artifact_cycles() -> TestResult {
         artifact.descriptor.validate()?;
     }
     assert_eq!(selected.order()?.len(), 3);
+    let packages = selected
+        .artifacts
+        .iter()
+        .map(PackageArtifactV1::reference)
+        .collect::<Vec<_>>();
     let before = fixture.engine.store().meta()?;
     assert!(matches!(
         araphor_package::PackageBundle::try_from(selected).map_err(araphor_data::Error::from),
@@ -69,11 +74,19 @@ async fn image_rejects_artifact_cycles() -> TestResult {
         })
     ));
     assert_eq!(fixture.engine.store().meta()?, before);
-    assert!(fixture
-        .engine
-        .store()
-        .package_revisions([1; 16])?
-        .is_empty());
+    for package in packages {
+        assert!(fixture
+            .engine
+            .store()
+            .view()?
+            .package_revision(
+                [1; 16],
+                &package.package_id,
+                &package.revision,
+                &AnalysisReadControl::default(),
+            )?
+            .is_none());
+    }
     assert!(fixture
         .engine
         .store()

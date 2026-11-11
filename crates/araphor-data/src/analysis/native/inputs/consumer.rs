@@ -22,7 +22,6 @@ pub(super) struct Consumer {
     pub version: u64,
     pub registration: Arc<InputRegistration>,
     pub delivery: Arc<Delivery>,
-    pub memory: Mutex<Option<Box<dyn std::any::Any + Send + Sync>>>,
 }
 
 pub(in crate::analysis) struct Delivery(Mutex<Progress>);

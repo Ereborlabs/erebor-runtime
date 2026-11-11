@@ -250,12 +250,17 @@ impl Progress {
             .filter(|deadline| Some(*deadline) != self.fired)
             .chain(self.expiry.filter(|_| !self.elapsed))
             .min();
-        let now = self.now()?;
-        if deadline.is_some_and(|deadline| deadline <= now) {
-            self.fired = deadline;
-            self.elapsed |= self.expiry == deadline;
-            return Ok(Wake::Clock);
-        }
+        let remaining = if let Some(due) = deadline {
+            let now = self.now()?;
+            if due <= now {
+                self.fired = deadline;
+                self.elapsed |= self.expiry == deadline;
+                return Ok(Wake::Clock);
+            }
+            Some(Duration::from_nanos(due - now))
+        } else {
+            None
+        };
         tokio::select! {
             _ = control.cancelled() => {
                 control.check()?;
@@ -281,7 +286,7 @@ impl Progress {
                 self.controls.borrow_and_update();
                 Ok(Wake::Control)
             }
-            _ = tokio::time::sleep(Duration::from_nanos(deadline.unwrap_or(now).saturating_sub(now))), if deadline.is_some() => {
+            _ = tokio::time::sleep(remaining.unwrap_or_default()), if remaining.is_some() => {
                 self.fired = deadline;
                 self.elapsed |= self.expiry == deadline;
                 Ok(Wake::Clock)

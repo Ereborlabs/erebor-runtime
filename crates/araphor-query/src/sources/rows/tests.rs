@@ -446,9 +446,6 @@ fn catalog_content_contract() -> TestResult {
         if enabled & 1 != 0 {
             store.register_discovery_owner();
         }
-        let _graph = (enabled & 2 != 0)
-            .then(|| store.lease_graph(vec![AnalysisSelectionV1::tenant([1; 16])]))
-            .transpose()?;
         if enabled & 4 != 0 {
             store.enable_notification_owner()?;
         }
@@ -506,13 +503,7 @@ fn catalog_content_contract() -> TestResult {
                 | "graph_subjects"
                 | "graph_branches"
                 | "correlation_packages"
-                | "policy_observations" => {
-                    if enabled & 2 != 0 {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                }
+                | "policy_observations" => "enabled",
                 "notifications" => {
                     if enabled & 4 != 0 {
                         "enabled"

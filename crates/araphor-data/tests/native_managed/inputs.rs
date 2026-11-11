@@ -6,6 +6,9 @@ use araphor_data::{
 };
 use serde::Deserialize;
 
+#[path = "inputs/leases.rs"]
+mod leases;
+
 #[derive(Debug, Deserialize, PartialEq)]
 struct Cut {
     revision: u64,

@@ -448,7 +448,10 @@ impl Inputs {
             || port.origins.iter().any(|origin| {
                 matches!(origin, SourceOrigin::Port(_))
                     || origin.durable().is_some_and(|name| {
-                        !matches!(name, "events" | "coverage" | "context_versions" | "context")
+                        !matches!(
+                            name,
+                            "events" | "coverage" | "context_versions" | "context" | "catalog"
+                        )
                     })
             });
         let local = port
@@ -482,10 +485,20 @@ impl Inputs {
         let generation = snapshot
             .managed()
             .map_or(0, |capture| capture.instance().generation);
+        let catalog = if has("catalog") {
+            format!(
+                ":{}:{}:{}",
+                u8::from(snapshot.page.extraction.discovery_enabled),
+                u8::from(snapshot.page.extraction.graph_enabled),
+                u8::from(snapshot.page.extraction.notification_enabled),
+            )
+        } else {
+            String::new()
+        };
         let revision = sdk::Revision {
             owner: "araphor-query.Inputs".into(),
             id: format!(
-                "{}:{}:{}:{generation}:{call}:{}:{version}:{time}:{}:{}:{invocation}",
+                "{}:{}:{}:{generation}:{call}:{}:{version}:{time}:{}:{}:{invocation}{catalog}",
                 meta.store_uuid,
                 meta.schema_version,
                 meta.recovery_epoch,

@@ -465,8 +465,30 @@ async fn catalog_input_contract() -> TestResult {
     assert_eq!(input.data.batches[0].num_rows(), 100);
     assert!(output.snapshot.page.extraction.meta.commit_revision > read_revision);
     assert!(output.snapshot.witnesses.is_empty());
+    let mut previous = input.revision.clone();
+    let before = fixture.engine.store().meta()?;
     drop((output, prepared));
     capacity_released(&fixture)?;
+    for discovery in [true, false] {
+        if discovery {
+            fixture.engine.store().register_discovery_owner();
+        } else {
+            fixture.engine.store().enable_notification_owner()?;
+        }
+        assert_eq!(fixture.engine.store().meta()?, before);
+        let prepared = fixture.prepare(&definition).await?;
+        let output = fixture
+            .execute(&prepared, invocation("catalog-readiness"))
+            .await?;
+        let call = output.calls.values().next().ok_or("readiness call")?;
+        let input = &call.evaluation().inputs[0];
+        assert_ne!(input.revision, previous);
+        previous = input.revision.clone();
+        assert_eq!(values(&output.batches)?, [100]);
+        assert_eq!(fixture.engine.store().meta()?, before);
+        drop((output, prepared));
+        capacity_released(&fixture)?;
+    }
     Ok(())
 }
 

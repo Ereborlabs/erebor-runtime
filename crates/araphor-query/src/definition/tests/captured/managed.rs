@@ -1007,12 +1007,34 @@ async fn stale_admission_keeps_capture_cut() -> TestResult {
                     framed_records: frame.into(),
                 },
             )?;
-            let (_, revision) = fixture.engine.store().dependency_revision_for(
+            let requests = [("events".to_owned(), Some([0].into_iter().collect()))]
+                .into_iter()
+                .collect();
+            let page = fixture.engine.store().read_tables(
                 &AnalysisSelectionV1::tenant([1; 16]),
-                &[("events".to_owned(), None)].into_iter().collect(),
+                araphor_data::AnalysisTableRead {
+                    requests: &requests,
+                    event_ranges: None,
+                    mode: araphor_data::AnalysisReadModeV1::Changes(
+                        araphor_data::StorePositionV1 {
+                            commit_revision: captured,
+                            ordinal: u32::MAX,
+                        },
+                    ),
+                    now: NOW,
+                },
+                araphor_data::AnalysisExtractLimits::default(),
                 &control,
             )?;
-            assert!(revision <= captured);
+            assert_eq!(
+                page.tables
+                    .get("events")
+                    .into_iter()
+                    .flatten()
+                    .map(|batch| batch.num_rows())
+                    .sum::<usize>(),
+                0
+            );
         }
         assert!(fixture.engine.store().meta()?.commit_revision > captured);
         release.send(())?;

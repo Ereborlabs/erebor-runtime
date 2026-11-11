@@ -90,6 +90,29 @@ impl Failure {
                 _ => Self::InvalidQuery,
             },
             Error::AnalysisContract { source, .. } => Self::contract(source),
+            Error::GraphFacility { source } => {
+                let mut current = std::error::Error::source(source);
+                while let Some(cause) = current {
+                    if let Some(cause) = cause.downcast_ref::<crate::Error>() {
+                        return Self::from(cause);
+                    }
+                    if let Some(cause) = cause.downcast_ref::<datafusion::error::DataFusionError>()
+                    {
+                        return Self::native(cause);
+                    }
+                    if let Some(cause) = cause.downcast_ref::<araphor_data::Error>() {
+                        return Self::data(cause);
+                    }
+                    if let Some(cause) = cause.downcast_ref::<araphor_package_runtime::Error>() {
+                        return Self::runtime(cause);
+                    }
+                    if let Some(cause) = cause.downcast_ref::<araphor_analysis_sdk::Error>() {
+                        return Self::contract(cause);
+                    }
+                    current = cause.source();
+                }
+                Self::EvaluationFailed
+            }
             Error::Package { code, .. } => Self::package(*code),
             Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             Error::AnalysisReadDenied { .. } => Self::Denied,

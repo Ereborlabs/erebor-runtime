@@ -19,6 +19,9 @@ use super::{
     Fixture, Limits, Operation, Subscription, TestClock,
 };
 
+#[path = "discovery/profile.rs"]
+mod profile;
+
 const COUNTS: &str = "SELECT event_count, first_cursor, last_cursor, binding_id, source_id
     FROM discovery.observed_effects ORDER BY source_id";
 
@@ -412,7 +415,8 @@ async fn targets_keep_snapshot_metadata() {
     }
     subscription.cancel().unwrap();
     assert!(subscription.next().await.is_none());
-    drop((subscription, first, second));
+    subscription.cancel_and_join().await.unwrap();
+    drop((first, second));
     assert_released(&fixture);
 }
 
@@ -597,6 +601,7 @@ async fn state_follows_processor_head() {
         ..Default::default()
     });
     fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    let writer = profile::ProfileWriter::new(&fixture).unwrap();
     let sql =
         "SELECT contiguous_cursor, processor_present, current_result_id, result_commit_revision,
             consumed_cursor, profile_revision,
@@ -659,37 +664,16 @@ async fn state_follows_processor_head() {
                 .collect(),
         },
     };
-    let input = |profile: &araphor_data::DiscoveryProfileV1| araphor_data::AnalysisResultCommitV1 {
-        scope: scope.clone(),
-        expected_cursor: 0,
-        consumed_cursor: 0,
-        coverage_revision: 0,
-        context_revision: 0,
-        result_id: profile.profile_id.clone(),
-        body: Vec::new(),
-        created_utc_ns: profile.updated_utc_ns,
-        witnesses: Vec::new(),
-        context_refs: Vec::new(),
-    };
     let first_id = profile.profile_id.clone();
-    let committed = fixture
-        .store
-        .commit_working_profile(
-            input(&profile),
-            araphor_data::analysis::PreparedProfile::new(profile.clone()).unwrap(),
-            None,
-        )
-        .unwrap();
+    let committed = writer.publish(profile.clone(), None).unwrap();
     let first = next(&mut subscription).await;
     profile.revision += 1;
     profile.profile_id = "native-state-2".into();
     profile.updated_utc_ns += 1;
     let second_id = profile.profile_id.clone();
-    let refreshed = fixture
-        .store
-        .commit_working_profile(
-            input(&profile),
-            araphor_data::analysis::PreparedProfile::new(profile).unwrap(),
+    let refreshed = writer
+        .publish(
+            profile,
             Some(araphor_data::analysis::PackageResultRefV1 {
                 result_id: first_id.clone(),
                 commit_revision: committed.commit_revision,

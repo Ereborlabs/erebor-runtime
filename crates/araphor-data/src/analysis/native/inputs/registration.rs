@@ -1,8 +1,16 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use super::{InputRecord, Wake};
-use crate :: analysis :: { inputs :: { InputCut , InputInterest } , managed :: PreparedMemory , native :: { managed :: InstanceRecord , records :: Records , NativeStore } } ;
-use crate :: { AnalysisReadControl , AnalysisSelectionV1 , AnalysisTableRequests , InputSubscription , ManagedBudget , ManagedInstance , NativeStateSnafu , PackageErrorCodeV1 as Code , Result , StorePositionV1 } ;
+use crate::analysis::{
+    inputs::{InputCut, InputInterest},
+    managed::PreparedMemory,
+    native::{managed::InstanceRecord, records::Records, NativeStore},
+};
+use crate::{
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, InputSubscription,
+    ManagedBudget, ManagedInstance, NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
+    StorePositionV1,
+};
 
 impl NativeStore {
     pub fn subscribe_managed_inputs(
@@ -17,7 +25,7 @@ impl NativeStore {
         instance.grant.remaining()?;
         let memory = PreparedMemory::new(control, budget)?;
         let lease = memory.reserve(InputInterest::allocation_bytes(selection, requests, owners))?;
-        let replay = super::Replay::new(control, budget)?;
+        let replay = super::Replay::new(control, budget, lease)?;
         let interest = InputInterest::new(selection.clone(), requests.clone(), owners.cloned())?;
         let spec = interest.spec();
         let scope = instance
@@ -89,14 +97,6 @@ impl NativeStore {
             .get(&(owner, current.generation))
             .cloned()
             .ok_or_else(|| Code::Conflict.error("input consumer registration"))?;
-        let mut allocation = consumer
-            .memory
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if allocation.is_none() {
-            *allocation = Some(lease);
-        }
-        drop(allocation);
         let mut receiver = consumer.registration.watch.changes.subscribe();
         if *receiver.borrow() > consumer.delivery.completed() {
             receiver.mark_changed();

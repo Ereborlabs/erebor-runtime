@@ -2,8 +2,13 @@ use snafu::ResultExt as _;
 use std::sync::Arc;
 
 use super::{Consumer, Coordinator, Delivery, InputRecord, InputWatch, Scan};
-use crate :: analysis :: { inputs :: InputInterest , native :: { managed :: InstanceRecord , records :: Records , DataView , NativeStore } } ;
-use crate :: { AnalysisReadControl , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
+use crate::analysis::{
+    inputs::InputInterest,
+    native::{managed::InstanceRecord, records::Records, DataView, NativeStore},
+};
+use crate::{
+    AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
+};
 
 impl InputRecord {
     pub(super) fn identity(key: &[u8]) -> Result<Option<(u64, u64)>> {
@@ -106,7 +111,6 @@ impl Coordinator {
             version: record.version,
             registration: self.readers.register(&watch),
             delivery,
-            memory: std::sync::Mutex::new(None),
         });
         scan.consumers.insert((owner, generation), consumer);
         if empty || Some(record.cut.cursor()) < scan.native.cursor() {

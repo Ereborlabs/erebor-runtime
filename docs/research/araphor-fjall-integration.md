@@ -73,6 +73,41 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- The complete Query unit target now compiles. Six calls to removed SQL APIs
+  have native replacements in five fixture locations. Typed profile publication
+  uses a real admitted managed package and the normal atomic Data boundary.
+  It uses an encoded Query cursor and the real typed profile receipt.
+  No public SQL fixture API is restored and no test is excluded.
+
+  Qualification found shared production gaps. Complete reads now retain event
+  witnesses when optimization removes all event columns. Query removes only
+  registered local declarations before a native read; Data still rejects an
+  unknown durable table. Catalog input identity uses its captured owner flags
+  instead of an unrelated Data head. Graph backend errors retain the existing
+  Query failure classification. Live subscription handles own their input
+  budget leases; the durable consumer still records changes after those handles
+  close. Idle waits read the clock only when a deadline exists. They keep the
+  original CDC, control, cancellation, and clock-change waits.
+
+  All 19 affected Query contracts pass in 2.03 seconds. Six native input,
+  131 managed, and 18 raw cases also pass. The new lease case checks cloned
+  handles, final release, unchanged durable state, and offline CDC revival.
+  All 15 real native Query integration cases pass in 9.60 seconds. They retain
+  saved-plan execution, atomic consumed progress, offline replay, expiry,
+  version revival, Graph state, and trace authority.
+  A full Query unit run now passes 404 cases and fails 40, with five ignored.
+  The first full run passed 380 and failed 64. Remaining failures include
+  full-pool resume, input provenance, deadline metadata, and old fixture
+  assumptions. The Data unit compile diagnostic reports 822 errors, including
+  cascading errors from removed test-only owners and APIs. It runs no tests;
+  it does not identify 822 production defects.
+  Read `query-owner-contracts-focused.log`, `native-subscription-owners.log`,
+  `query-native-integration-final.log`, `query-native-owners-final.log`, and
+  `data-retirement-current.jsonl` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Not done for complete Query and Data unit qualification**.
+  No incident comparison or new latency gain follows from this work.
+
 - Four managed call lifecycle cases now use the native owner. The cases retain
   independent outputs 12 and 103, then 22 and 203; exact invocation context,
   image and export identities; checkpoint schemas and values; historical

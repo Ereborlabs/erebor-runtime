@@ -231,7 +231,11 @@ impl NativeStore {
         self.select_profiles(view, &mut selected, &mut output, control)?;
         limits.check_keys(&selected)?;
         let mode = match read.mode {
-            AnalysisReadModeV1::Complete if !read.reads_raw() => AnalysisReadModeV1::Metadata,
+            AnalysisReadModeV1::Complete
+                if !read.reads_raw() && !read.requests.contains_key("events") =>
+            {
+                AnalysisReadModeV1::Metadata
+            }
             other => other,
         };
         let end = StorePositionV1 {

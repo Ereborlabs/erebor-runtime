@@ -1,12 +1,18 @@
-use std :: { any :: Any , sync :: { Arc , Mutex } } ;
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use super::{InputRecord, Wake};
 use crate::analysis::{native::records::Records, PackageResultRefV1};
-use crate :: { AnalysisReadControl , InputSubscription , ManagedBudget , ManagedSourceFrame , ManagedSourceRead , ManagedSourceRef , NativeStateSnafu , Result , StorePositionV1 } ;
+use crate::{
+    AnalysisReadControl, InputSubscription, ManagedBudget, ManagedSourceFrame, ManagedSourceRead,
+    ManagedSourceRef, NativeStateSnafu, Result, StorePositionV1,
+};
 
 pub(super) struct Replay {
     head: Mutex<Option<Head>>,
-    _memory: Box<dyn Any + Send + Sync>,
+    _memory: (Box<dyn Any + Send + Sync>, Box<dyn Any + Send + Sync>),
 }
 
 struct Head {
@@ -19,13 +25,14 @@ impl Replay {
     pub(super) fn new(
         control: &AnalysisReadControl,
         budget: &dyn ManagedBudget,
+        interest: Box<dyn Any + Send + Sync>,
     ) -> Result<Arc<Self>> {
         control.check()?;
         budget.check()?;
         let memory = budget.reserve(size_of::<Self>() + 4 * size_of::<usize>())?;
         Ok(Arc::new(Self {
             head: Mutex::new(None),
-            _memory: memory,
+            _memory: (memory, interest),
         }))
     }
 
