@@ -292,6 +292,17 @@ and original spans. No second durable backlog index is added.
 
 ## Backup and recovery
 
+[Processor history](../../crates/araphor-data/tests/native_managed/progress/history.rs)
+walks the same processor key backward through native snapshots. Each stored
+revision selects the preceding cut. The test requires exactly four versions:
+registration, two results, and retirement. It checks result bodies and context
+watermarks before expiry, after two raw records expire, and after compaction
+and reopen. Exact retries and a rejected commit preserve Data revision and the
+original journal head. [Processor recovery](../../crates/araphor-data/tests/native_managed/progress.rs)
+also rejects invalid history start, class, progress, retirement revision, and
+declared revision. The former SQL history module is removed. All three focused
+processor cases pass in 0.47 seconds with `test-fixtures` enabled.
+
 [Backup](../../crates/araphor-data/src/analysis/native/backup/mod.rs) seals raw
 segments and exports the protected engine cut. The checkpoint callback records
 unique relative paths and expected file lengths. Data compares that inventory

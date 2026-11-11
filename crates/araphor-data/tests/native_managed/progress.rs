@@ -6,6 +6,10 @@ use araphor_data::{
 #[path = "progress/profile.rs"]
 mod profile;
 
+#[cfg(feature = "test-fixtures")]
+#[path = "progress/history.rs"]
+mod history;
+
 fn scope() -> ProcessorScopeV1 {
     ProcessorScopeV1 {
         processor_id: "native-progress".into(),
@@ -28,11 +32,13 @@ fn processor_lifecycle() -> TestResult {
     let store = NativeStore::open(&root)?;
     let scope = scope();
     let before = store.view()?.revision();
-    assert!(store
-        .register_processor_guarded(&scope, ProcessorClassV1::Required, 1, || Err(
-            Code::Denied.error("guard")
-        ))
-        .is_err());
+    assert!(
+        store
+            .register_processor_guarded(&scope, ProcessorClassV1::Required, 1, || Err(
+                Code::Denied.error("guard")
+            ))
+            .is_err()
+    );
     assert_eq!(store.view()?.revision(), before);
     store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
     assert!(store.processor_result(&scope)?.is_none());
@@ -106,7 +112,7 @@ fn processor_lifecycle() -> TestResult {
     Ok(())
 }
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct State {
     scope: ProcessorScopeV1,
     class: ProcessorClassV1,
@@ -129,6 +135,10 @@ fn processor_recovery() -> TestResult {
         "orphan-gap",
         "body-fragment",
         "history-class",
+        "history-start",
+        "history-progress",
+        "retirement-revision",
+        "declared-revision",
         "result-body",
     ] {
         let directory = tempfile::tempdir()?;
@@ -152,7 +162,7 @@ fn processor_recovery() -> TestResult {
         };
         store.commit_result(&request)?;
         super::attempts::append(&store, 2)?;
-        if mode == "history-class" {
+        if matches!(mode, "history-class" | "history-start" | "history-progress") {
             let (key, bytes) = store
                 .view()?
                 .snapshot()
@@ -162,7 +172,14 @@ fn processor_recovery() -> TestResult {
             let original: State = rmp_serde::from_slice(&bytes[1..])?;
             let mut tx = store.write()?;
             let mut changed = original.clone();
-            changed.class = ProcessorClassV1::Optional;
+            match mode {
+                "history-class" => changed.class = ProcessorClassV1::Optional,
+                "history-start" => changed.start = 2,
+                _ => {
+                    changed.consumed = 0;
+                    changed.required = 0;
+                }
+            }
             changed.revision = tx.revision();
             let mut bytes = vec![0];
             bytes.extend(rmp_serde::to_vec_named(&changed)?);
@@ -185,6 +202,25 @@ fn processor_recovery() -> TestResult {
                 cutoff_cursor: 2,
             })?;
             let view = store.view()?;
+            if mode == "retirement-revision" || mode == "declared-revision" {
+                let (key, bytes) = view
+                    .snapshot()
+                    .prefix(b"\0data/@progress/state/")
+                    .next()
+                    .ok_or("state")??;
+                let mut changed: State = rmp_serde::from_slice(&bytes[1..])?;
+                let mut tx = store.write()?;
+                changed.revision = tx.revision();
+                if mode == "retirement-revision" {
+                    changed.retirement.as_mut().ok_or("retirement")?.1 -= 1;
+                } else {
+                    changed.revision = 0;
+                }
+                let mut bytes = vec![0];
+                bytes.extend(rmp_serde::to_vec_named(&changed)?);
+                tx.native().insert(key, bytes);
+                tx.commit([])?;
+            }
             if mode == "missing-gap" || mode == "orphan-gap" {
                 let (key, bytes) = view
                     .snapshot()

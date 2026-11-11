@@ -73,6 +73,17 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- The processor history SQL fixture is removed. Its native replacement checks
+  exactly four same-key versions through historical snapshots. Registration,
+  two results, and retirement preserve context watermarks and result bodies.
+  Retries and rejected commits do not advance Data revision or the original
+  journal. Two raw records expire. The version chain survives compaction and
+  reopen. Native recovery rejects all five former SQL corruption classes.
+  `cargo test --offline --release -p araphor-data --features test-fixtures
+  --test native_managed processor` passes all three cases in 0.47 seconds.
+  Result: **Done for processor history fixture retirement**. Other SQL fixture
+  ports and the complete replacement remain **Not done**.
+
 - Host evaluation checks are consolidated at each execution boundary. The
   checked host value supplies encoding, narrowed Graph capability, and bounded
   output decoding. Guest, IPC, command, output, and current-authority checks

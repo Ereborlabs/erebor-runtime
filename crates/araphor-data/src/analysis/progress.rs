@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::AnalysisContextKeyV1;
 use crate::{AnalysisStreamIdentityV1, Result};
 
-#[cfg(test)]
-mod history;
 mod notices;
 mod profile;
 mod schema;
@@ -686,8 +684,8 @@ mod tests {
     }
 
     #[test]
-    fn observability_recovery_mixed_witnesses(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_mixed_witnesses()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::{
             AnalysisReadControl, EvidenceRetentionOwner, RetentionLimitsV1, TraceBatchV1,
             TraceBindingV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
