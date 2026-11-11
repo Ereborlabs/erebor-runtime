@@ -17,6 +17,14 @@ gain against DuckDB. Public receipt is 59.273–123.986 ms. Whole-test time is
 remains **Not done**. These short pairs do not establish a sustained latency
 bound or a new gain from the journal/resume corrections alone.
 
+Saved plans use native DataFusion operators. The default
+[Causal bundle](../../crates/araphor-analysis/src/package/builtin.rs) contains
+the Wasm Causal component. Its calls use
+[WasmExecution](../../crates/araphor-package-runtime/src/wasm.rs).
+Native shared-library loading is outside this incident path. Matched release
+pairs show no incident gain from retaining native libraries. That experiment
+is removed from production. Read the current worklist for its evidence.
+
 ## Reading order
 
 1. [Public Data exports](../../crates/araphor-data/src/analysis/mod.rs) select the

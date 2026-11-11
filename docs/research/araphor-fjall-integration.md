@@ -73,6 +73,22 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- A native shared-library preparation experiment is **Not applied**. Matched
+  release pairs show no measured incident gain. The unchanged production source
+  measures 49.939–91.869 ms from collector receipt to durable creation. The
+  experiment measures 49.799–88.833 ms. The paired DuckDB control measures
+  335.300–610.966 ms. Each run has 18 collector inputs, 16,384 bulk rows, and
+  three durable creations. Source inspection confirms that `causal_bundle`
+  selects the Wasm Causal component. Shared-library loading is outside this
+  incident path. The experiment is removed from production. Its patch, tests,
+  and review text remain under
+  `output/araphor-fjall-migration-20261110/native-preparation-unapplied`.
+  Read `native-prepare-comparison.json` and the before/after build records in
+  the same evidence directory. Five stale Wasm runtime fixture calls now pass
+  the absent host explicitly. The fixture array matches its four actual
+  components. All 20 existing Wasm runtime cases pass in 15.68 seconds after
+  the experiment is removed. These fixture repairs establish no latency gain.
+
 - Data storage quota removal and native backup fixture retirement are **Done**
   for the focused source boundary. The final native run passes 8 backup cases,
   3 crash cases, 6 lifecycle cases, 99 managed cases, 4 notification cases, and

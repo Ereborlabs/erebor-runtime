@@ -236,6 +236,7 @@ async fn prepared_owner_keeps_identity() -> TestResult {
                 None,
                 Some(prepared.clone()),
                 None,
+                None,
                 (),
             )
             .await
@@ -271,6 +272,7 @@ async fn prepared_owner_keeps_identity() -> TestResult {
             &workers,
             None,
             Some(prepared),
+            None,
             None,
             (),
         )

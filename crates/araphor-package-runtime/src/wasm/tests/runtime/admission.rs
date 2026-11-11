@@ -75,6 +75,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
             None,
             Some(prepared.clone()),
             wrong,
+            None,
             (),
         )
         .await
@@ -142,6 +143,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
             None,
             Some(prepared.clone()),
             admitted,
+            None,
             lease,
         )
         .await?;
@@ -168,6 +170,7 @@ async fn owned_admission_binds_runtime() -> TestResult {
             None,
             Some(prepared),
             admitted,
+            None,
             (),
         )
         .await
