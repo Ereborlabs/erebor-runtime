@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::mpsc;
@@ -47,8 +48,19 @@ pub(super) struct GuestState {
     host_calls: usize,
     host_limit: Option<usize>,
     limited: bool,
+    timing: GraphTiming,
     #[cfg(any(test, feature = "test-fixtures"))]
     entered: Option<GuestEntry>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct GraphTiming {
+    reads: usize,
+    stages: usize,
+    read: Duration,
+    stage: Duration,
+    read_service: Duration,
+    stage_service: Duration,
 }
 
 pub struct HostTransaction(pub(crate) Arc<dyn sdk::InvocationService + Send + Sync>);
@@ -74,6 +86,7 @@ impl GuestState {
             host_calls: 0,
             host_limit: quota.host_calls,
             limited: false,
+            timing: GraphTiming::default(),
             #[cfg(any(test, feature = "test-fixtures"))]
             entered: None,
         }
@@ -91,69 +104,81 @@ impl bindings::araphor::analysis::graph::HostTransaction for GuestState {
         name: String,
         arguments: types::Dataset,
     ) -> wasmtime::Result<std::result::Result<types::Input, types::EvaluationError>> {
-        self.check_host()?;
-        self.transfer.take();
-        let host = &self.table.get(&resource)?.0;
+        let started = Instant::now();
         let result = (|| {
-            let arguments = sdk::wire::Dataset::from(arguments);
-            let schema = host.argument_schema(&name)?;
-            let transfer = host.reserve_transfer()?;
-            let lifted = arguments
-                .arrow_ipc
-                .capacity()
-                .checked_add(arguments.name.capacity())
-                .and_then(|bytes| bytes.checked_add(name.capacity()))
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
-                .ok_or_else(|| {
-                    sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted arguments")
-                })?;
-            let available = transfer
-                .bytes
-                .map(|bytes| {
-                    bytes.checked_sub(lifted).ok_or_else(|| {
+            self.check_host()?;
+            self.transfer.take();
+            let host = &self.table.get(&resource)?.0;
+            let result = (|| {
+                let arguments = sdk::wire::Dataset::from(arguments);
+                let schema = host.argument_schema(&name)?;
+                let transfer = host.reserve_transfer()?;
+                let lifted = arguments
+                    .arrow_ipc
+                    .capacity()
+                    .checked_add(arguments.name.capacity())
+                    .and_then(|bytes| bytes.checked_add(name.capacity()))
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
+                    .ok_or_else(|| {
                         sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted arguments")
+                    })?;
+                let available = transfer
+                    .bytes
+                    .map(|bytes| {
+                        bytes.checked_sub(lifted).ok_or_else(|| {
+                            sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted arguments")
+                        })
                     })
-                })
-                .transpose()?;
-            let arguments = sdk::wire::Dataset::decode_ipc_bounded(
-                &arguments.name,
-                &arguments.arrow_ipc,
-                Some(&schema),
-                available,
-            )?;
-            let input = host.read(&name, &arguments)?;
-            let schema = input
-                .data
-                .batches
-                .first()
-                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "Graph read schema"))?
-                .schema();
-            let scratch = input.data.batches.iter().try_fold(0usize, |bytes, batch| {
-                Ok::<_, sdk::Error>(bytes.max(sdk::wire::Dataset::encoding_scratch(batch)?))
-            })?;
-            let retained = arguments
-                .allocated_bytes()
-                .checked_add(scratch)
-                .and_then(|bytes| bytes.checked_add(input.allocated_bytes()))
-                .and_then(|bytes| bytes.checked_add(lifted))
-                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "Graph transfer"))?;
-            let remaining = transfer.bytes.map(|bytes| bytes.saturating_sub(retained));
-            let result = sdk::wire::Input {
-                data: sdk::wire::Dataset::encode_bounded(&input.data, &schema, remaining)?,
-                revision: input.revision,
-                coverage: input.coverage,
-            }
-            .into();
-            Ok::<_, sdk::Error>((result, transfer))
+                    .transpose()?;
+                let arguments = sdk::wire::Dataset::decode_ipc_bounded(
+                    &arguments.name,
+                    &arguments.arrow_ipc,
+                    Some(&schema),
+                    available,
+                )?;
+                let called = Instant::now();
+                let input = host.read(&name, &arguments);
+                self.timing.read_service =
+                    self.timing.read_service.saturating_add(called.elapsed());
+                let input = input?;
+                let schema = input
+                    .data
+                    .batches
+                    .first()
+                    .ok_or_else(|| {
+                        sdk::Error::contract(sdk::ErrorCode::Invalid, "Graph read schema")
+                    })?
+                    .schema();
+                let scratch = input.data.batches.iter().try_fold(0usize, |bytes, batch| {
+                    Ok::<_, sdk::Error>(bytes.max(sdk::wire::Dataset::encoding_scratch(batch)?))
+                })?;
+                let retained = arguments
+                    .allocated_bytes()
+                    .checked_add(scratch)
+                    .and_then(|bytes| bytes.checked_add(input.allocated_bytes()))
+                    .and_then(|bytes| bytes.checked_add(lifted))
+                    .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "Graph transfer"))?;
+                let remaining = transfer.bytes.map(|bytes| bytes.saturating_sub(retained));
+                let result = sdk::wire::Input {
+                    data: sdk::wire::Dataset::encode_bounded(&input.data, &schema, remaining)?,
+                    revision: input.revision,
+                    coverage: input.coverage,
+                }
+                .into();
+                Ok::<_, sdk::Error>((result, transfer))
+            })();
+            self.control.check().map_err(wasmtime::Error::new)?;
+            Ok(match result {
+                Ok((result, transfer)) => {
+                    self.transfer = Some(transfer);
+                    Ok(result)
+                }
+                Err(error) => Err(sdk::wire::EvaluationError::from(error).into()),
+            })
         })();
-        self.control.check().map_err(wasmtime::Error::new)?;
-        Ok(match result {
-            Ok((result, transfer)) => {
-                self.transfer = Some(transfer);
-                Ok(result)
-            }
-            Err(error) => Err(sdk::wire::EvaluationError::from(error).into()),
-        })
+        self.timing.reads = self.timing.reads.saturating_add(1);
+        self.timing.read = self.timing.read.saturating_add(started.elapsed());
+        result
     }
 
     fn stage(
@@ -161,39 +186,49 @@ impl bindings::araphor::analysis::graph::HostTransaction for GuestState {
         resource: Resource<HostTransaction>,
         commands: types::Dataset,
     ) -> wasmtime::Result<std::result::Result<(), types::EvaluationError>> {
-        self.check_host()?;
-        self.transfer.take();
-        let host = &self.table.get(&resource)?.0;
+        let started = Instant::now();
         let result = (|| {
-            let commands = sdk::wire::Dataset::from(commands);
-            let schema = host.command_schema(&commands.name)?;
-            let transfer = host.reserve_transfer()?;
-            let lifted = commands
-                .arrow_ipc
-                .capacity()
-                .checked_add(commands.name.capacity())
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
-                .ok_or_else(|| {
-                    sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted commands")
-                })?;
-            let available = transfer
-                .bytes
-                .map(|bytes| {
-                    bytes.checked_sub(lifted).ok_or_else(|| {
+            self.check_host()?;
+            self.transfer.take();
+            let host = &self.table.get(&resource)?.0;
+            let result = (|| {
+                let commands = sdk::wire::Dataset::from(commands);
+                let schema = host.command_schema(&commands.name)?;
+                let transfer = host.reserve_transfer()?;
+                let lifted = commands
+                    .arrow_ipc
+                    .capacity()
+                    .checked_add(commands.name.capacity())
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
+                    .ok_or_else(|| {
                         sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted commands")
+                    })?;
+                let available = transfer
+                    .bytes
+                    .map(|bytes| {
+                        bytes.checked_sub(lifted).ok_or_else(|| {
+                            sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted commands")
+                        })
                     })
-                })
-                .transpose()?;
-            let commands = sdk::wire::Dataset::decode_ipc_bounded(
-                &commands.name,
-                &commands.arrow_ipc,
-                Some(&schema),
-                available,
-            )?;
-            host.stage(&commands)
+                    .transpose()?;
+                let commands = sdk::wire::Dataset::decode_ipc_bounded(
+                    &commands.name,
+                    &commands.arrow_ipc,
+                    Some(&schema),
+                    available,
+                )?;
+                let called = Instant::now();
+                let result = host.stage(&commands);
+                self.timing.stage_service =
+                    self.timing.stage_service.saturating_add(called.elapsed());
+                result
+            })();
+            self.control.check().map_err(wasmtime::Error::new)?;
+            Ok(result.map_err(|error| sdk::wire::EvaluationError::from(error).into()))
         })();
-        self.control.check().map_err(wasmtime::Error::new)?;
-        Ok(result.map_err(|error| sdk::wire::EvaluationError::from(error).into()))
+        self.timing.stages = self.timing.stages.saturating_add(1);
+        self.timing.stage = self.timing.stage.saturating_add(started.elapsed());
+        result
     }
 
     fn drop(&mut self, resource: Resource<HostTransaction>) -> wasmtime::Result<()> {
@@ -339,6 +374,7 @@ impl super::WasmExecution {
         admission: Option<EvaluationPermit>,
         host: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
     ) -> Result<types::Output> {
+        let started = Instant::now();
         control.check()?;
         let _permit = match (admission, &self.evaluations) {
             (Some(permit), Some(capacity)) if Arc::ptr_eq(permit.0.semaphore(), capacity) => {
@@ -398,49 +434,78 @@ impl super::WasmExecution {
             }
         });
         let _watch = EpochWatch::new(self.engine.clone(), watched)?;
-        let result = prepared
-            .component()
-            .instantiate(&mut store)
-            .and_then(|instance| {
-                instance.araphor_analysis_analysis().call_evaluate(
-                    &mut store,
-                    &input,
-                    graph
-                        .as_ref()
-                        .map(|resource| Resource::new_borrow(resource.rep())),
-                )
-            });
-        let result = result.map_err(|source| {
-            let code = if store.data().limited
-                || matches!(
-                    source.downcast_ref::<wasmtime::Trap>(),
-                    Some(wasmtime::Trap::OutOfFuel | wasmtime::Trap::StackOverflow)
-                )
-                // Wasmtime 49 keeps this lifting limit error type private.
-                || source.root_cause().to_string()
-                    == concat!(
-                        "too much data is being copied between the host and the guest: ",
-                        "fuel allocated for hostcalls has been exhausted"
-                    ) {
-                Code::Limit
-            } else {
-                Code::Incomplete
-            };
-            crate::PackageWasmSnafu {
-                code,
-                operation: "component evaluation",
-            }
-            .into_error(wasmtime::Error::new(
-                EvaluationFailureSnafu {
-                    _pin: prepared.clone(),
-                }
-                .into_error(source),
-            ))
+        let setup = Instant::now();
+        let result = prepared.component().instantiate(&mut store);
+        let instantiated = Instant::now();
+        let result = result.and_then(|instance| {
+            instance.araphor_analysis_analysis().call_evaluate(
+                &mut store,
+                &input,
+                graph
+                    .as_ref()
+                    .map(|resource| Resource::new_borrow(resource.rep())),
+            )
         });
-        store.data().control.check()?;
-        result?.map_err(|error| {
-            let wire = sdk::wire::EvaluationError::from(error);
-            crate::AnalysisContractSnafu.into_error(sdk::Error::contract(wire.code, wire.field))
-        })
+        let called = Instant::now();
+        let result: Result<_> = (|| {
+            let result = result.map_err(|source| {
+                let code = if store.data().limited
+                    || matches!(
+                        source.downcast_ref::<wasmtime::Trap>(),
+                        Some(wasmtime::Trap::OutOfFuel | wasmtime::Trap::StackOverflow)
+                    )
+                    // Wasmtime 49 keeps this lifting limit error type private.
+                    || source.root_cause().to_string()
+                        == concat!(
+                            "too much data is being copied between the host and the guest: ",
+                            "fuel allocated for hostcalls has been exhausted"
+                        ) {
+                    Code::Limit
+                } else {
+                    Code::Incomplete
+                };
+                crate::PackageWasmSnafu {
+                    code,
+                    operation: "component evaluation",
+                }
+                .into_error(wasmtime::Error::new(
+                    EvaluationFailureSnafu {
+                        _pin: prepared.clone(),
+                    }
+                    .into_error(source),
+                ))
+            });
+            store.data().control.check()?;
+            result?.map_err(|error| {
+                let wire = sdk::wire::EvaluationError::from(error);
+                crate::AnalysisContractSnafu.into_error(sdk::Error::contract(wire.code, wire.field))
+            })
+        })();
+        let checked = Instant::now();
+        let graph_time = store.data().timing;
+        drop(_watch);
+        let stopped = Instant::now();
+        drop(store);
+        let completed = Instant::now();
+        erebor_telemetry::debug!(
+            stage = "component_run_timing",
+            export = %input.export_name,
+            setup_s = setup.duration_since(started).as_secs_f64(),
+            instantiate_s = instantiated.duration_since(setup).as_secs_f64(),
+            call_s = called.duration_since(instantiated).as_secs_f64(),
+            check_s = checked.duration_since(called).as_secs_f64(),
+            watch_drop_s = stopped.duration_since(checked).as_secs_f64(),
+            store_drop_s = completed.duration_since(stopped).as_secs_f64(),
+            graph_reads = graph_time.reads,
+            graph_stages = graph_time.stages,
+            read_s = graph_time.read.as_secs_f64(),
+            stage_s = graph_time.stage.as_secs_f64(),
+            read_service_s = graph_time.read_service.as_secs_f64(),
+            stage_service_s = graph_time.stage_service.as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
+            success = result.is_ok(),
+            "Component execution timing completed"
+        );
+        result
     }
 }

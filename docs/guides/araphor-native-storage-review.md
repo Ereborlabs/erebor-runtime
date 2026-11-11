@@ -97,6 +97,17 @@ not load property chunks. Selected properties retain the normal validation path.
 
 ## Package evaluation
 
+[Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs)
+passes the current tracing subscriber into its blocking worker.
+[WasmExecution](../../crates/araphor-package-runtime/src/wasm.rs) reports wire
+intervals. [GuestState](../../crates/araphor-package-runtime/src/wasm/execution.rs)
+counts Graph calls and sums callback and native service durations. One event
+reports those totals after the component call and cleanup. No payload is logged.
+The unchanged diagnostic incident passes. All 31 Wasm runtime cases pass
+serially. An earlier parallel cancellation case times out before guest entry;
+the exact unchanged rerun passes. Its cause remains unproved. Diagnostic timing
+does not establish an end-to-end gain.
+
 [Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) sends the owned evaluation and host service to its existing blocking worker.
   -> [Package::check_evaluation](../../crates/araphor-analysis-sdk/src/validation.rs) checks the immutable descriptor and current input once at the host boundary.
   -> [HostAccess::bind](../../crates/araphor-package-runtime/src/host.rs) obtains Graph capability from that checked model.

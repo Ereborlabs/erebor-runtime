@@ -273,7 +273,9 @@ impl Runtime {
             complete: false,
         };
         let (send, receive) = tokio::sync::oneshot::channel();
+        let dispatch = erebor_telemetry::tracing::dispatcher::get_default(Clone::clone);
         let mut worker = tokio::task::spawn_blocking(move || {
+            let _dispatch = erebor_telemetry::tracing::dispatcher::set_default(&dispatch);
             let _worker_token = worker_token;
             // Keep the slot until the worker releases its exchange memory.
             let _admission = admission.as_ref().map(wasm::EvaluationPermit::retain);

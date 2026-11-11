@@ -73,6 +73,22 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Aggregate component timers now separate wire checks, encoding, invocation,
+  decoding, instantiation, guest calls, and cleanup. Graph callbacks also report
+  their native service intervals. The unchanged diagnostic incident passes in
+  2.24 seconds. Median guest calls measure 5.988 ms for `detect` and 6.423 ms
+  for `index`. Median Graph callback time measures 1.204 ms for detection
+  staging and 1.506 ms for index reads. Detection makes no Graph reads.
+  These measurements include guest wire and runtime work; the remaining time
+  is not a pure analysis measurement. The 31 Wasm runtime cases pass serially
+  in 34.38 seconds. An earlier parallel run times out before guest entry in
+  `dropped_runtime_future_retains_worker_until_completion`; its unchanged exact
+  rerun and serial suite pass. The cause is not established. Read
+  `graph-callback-breakdown.json`, `graph-callback-runtime.log`, and
+  `component-phases-runtime.log` under
+  `output/araphor-fjall-migration-20261110`. These timers establish attribution,
+  not a performance gain.
+
 - The processor history SQL fixture is removed. Its native replacement checks
   exactly four same-key versions through historical snapshots. Registration,
   two results, and retirement preserve context watermarks and result bodies.

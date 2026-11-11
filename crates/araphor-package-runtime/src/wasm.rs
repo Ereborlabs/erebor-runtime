@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex, TryLockError};
+use std::time::Instant;
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
@@ -261,20 +262,36 @@ impl WasmExecution {
         admission: Option<EvaluationPermit>,
         host: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
     ) -> Result<sdk::Output> {
+        let started = Instant::now();
         control.check()?;
         let checked = descriptor
             .check_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
         let host = crate::host::HostAccess::bind(&checked, host)?;
+        let checked_at = Instant::now();
         let input = checked.encode().context(crate::AnalysisContractSnafu)?;
         control.check()?;
+        let encoded = Instant::now();
         let output =
             self.invoke_reserved(prepared, input.into(), control, copy_bytes, admission, host)?;
+        let invoked = Instant::now();
         let output = sdk::wire::Output::from(output);
         let decoded = output
             .decode_checked(&checked, copy_bytes)
             .context(crate::AnalysisContractSnafu)?;
         control.check()?;
+        let completed = Instant::now();
+        erebor_telemetry::debug!(
+            stage = "component_wire_timing",
+            package_id = %descriptor.id,
+            export = %evaluation.export,
+            check_s = checked_at.duration_since(started).as_secs_f64(),
+            encode_s = encoded.duration_since(checked_at).as_secs_f64(),
+            invoke_s = invoked.duration_since(encoded).as_secs_f64(),
+            decode_s = completed.duration_since(invoked).as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
+            "Component wire timing completed"
+        );
         Ok(decoded)
     }
 }
