@@ -29,7 +29,7 @@ for clone, release, and offline wake proof.
 clock for a deadline; an idle wait with no deadline waits for an event.
 The 19 affected Query contracts and 15 native integration cases pass.
 Complete unit qualification remains open:
-404 Query cases pass, 40 fail, and five are ignored. The Data unit target still
+412 Query cases pass, 32 fail, and five are ignored. The Data unit target still
 has old fixture compile failures. Read the current worklist for exact evidence.
 
 [Notification extraction](../../crates/araphor-data/src/analysis/native/extraction/notification.rs)
@@ -37,8 +37,16 @@ checks source presence before it reads scoped state and routes. A metadata
 request with no output columns must still compute the next deadline and retain
 its context references. The existing `obligation_source_deadline` case checks
 that behavior, exact byte counts, scoped exclusion, acknowledgement, and the
-maximum timestamp. Four native notification owner cases also pass. Two Query
-deadline cases still fail the output-batch contract; their assertions remain.
+maximum timestamp. Four native notification owner cases also pass. The three
+Query deadline cases pass with exact native replacement values.
+
+Read the [native result contract](araphor-retained-execution-review.md#native-result-delivery-after-a-commit)
+before reviewing the fixture ports. Executed replacements return native rows
+even when those rows equal a previous result. The five delivery cases now check
+their exact values. Bare-clock and unrelated-source paths that do not execute
+keep their `None` assertions. The source stream case also checks metadata before
+EOF, metadata release at EOF, and borrowed-buffer protection after EOF.
+No output hash, equality suppression, or stream wrapper is added.
 
 The five unused SQL storage files and five empty legacy package modules are
 removed. The two `ResolvedInput` SQL files remain active DataFusion queries.

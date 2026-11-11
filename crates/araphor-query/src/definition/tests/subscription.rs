@@ -136,7 +136,10 @@ async fn package_follow_retains_each_call() -> TestResult {
     assert_eq!(fixture.engine.store().meta()?, before);
     fixture.context(2)?;
     let unchanged = next(&mut stream).await?;
-    assert!(unchanged.batches.is_none());
+    assert_eq!(
+        values(unchanged.batches.as_deref().ok_or("replacement output")?)?,
+        [3]
+    );
     assert_eq!(unchanged.calls.len(), 1);
     assert!(!Arc::ptr_eq(old, &unchanged.calls[&id]));
     fixture.event(2)?;

@@ -565,7 +565,10 @@ async fn scalar_clock_guard() -> TestResult {
             let after = fixture.engine.store().meta()?;
             let changed = next(&mut stream).await?;
             if sql == scalar {
-                assert!(changed.batches.is_none());
+                assert_eq!(
+                    values(changed.batches.as_deref().ok_or("scalar replacement")?)?,
+                    [1]
+                );
             } else {
                 assert_eq!(
                     values(changed.batches.as_deref().ok_or("source output")?)?,

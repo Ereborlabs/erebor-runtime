@@ -73,6 +73,22 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Seven Query fixtures now use the existing native delivery and lifecycle
+  contracts. Five cases check exact replacement rows after an execution.
+  Commit `fcc271e42` already removed content-hash suppression; these cases had
+  retained the old `None` expectation. Bare-clock, unrelated-source, and other
+  no-execution assertions stay unchanged. The cancellation case registers its
+  Gate provider through Session for both tenants. The EOF case checks that
+  DataFusion releases source metadata at EOF while a borrowed Arrow buffer
+  keeps its charge until release. No production wrapper is added.
+  Eight focused cases pass in 0.52 seconds, including the notification metadata
+  deadline case. The complete Query unit run now passes 412 cases, fails 32,
+  and ignores five in 46.27 seconds. Read `query-native-fixture-contracts.log`
+  and `query-native-fixture-final.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for these seven fixture ports; Not done for complete unit
+  qualification**. The unchanged incident is not rerun for this fixture change.
+
 - Native notification extraction now distinguishes an absent source from a
   requested source with no output columns. Metadata reads use the same scoped
   state, route, finding, and timer code as row reads. No new timer or SQL
@@ -83,9 +99,11 @@ Current evidence:
   lookups, route identity, and recovery checks. Read
   `native-notification-deadlines.log` and `native-notification-owner-final.log`
   under `output/araphor-fjall-migration-20261110`.
-  The two other Query deadline cases now receive their overdue update but
-  still fail the `batches.is_none()` contract. Their assertions remain.
-  Result: **Not done for complete notification Query qualification**.
+  The first run of the two other Query deadline cases exposed stale
+  `batches.is_none()` assertions. The fixture ports above now check the exact
+  native values and pass. Result: **Done for notification metadata extraction
+  and these three Query deadline cases**. Complete Query qualification remains
+  **Not done**.
   This correction establishes no incident latency gain.
 
 - The complete Query unit target now compiles. Six calls to removed SQL APIs

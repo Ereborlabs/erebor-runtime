@@ -1567,9 +1567,12 @@ async fn cancellation_stops_native_producers() {
     };
     let (plan, sources) = gate.plan(&fixture.engine).await;
     let control = control();
-    let session = fixture
+    let mut session = fixture
         .engine
         .session(AnalysisSelectionV1::new([1; 16], vec![]), &control, 1)
+        .unwrap();
+    session
+        .register_table("gate", Arc::new(gate.clone()))
         .unwrap();
     let (snapshot, mut stream) = session
         .stream(&plan, &sources, Read::Snapshot)
@@ -1580,7 +1583,7 @@ async fn cancellation_stops_native_producers() {
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await
         .unwrap();
-    let idle = fixture
+    let mut idle = fixture
         .engine
         .session(
             AnalysisSelectionV1::new([2; 16], vec![]),
@@ -1588,6 +1591,7 @@ async fn cancellation_stops_native_producers() {
             1,
         )
         .unwrap();
+    idle.register_table("gate", Arc::new(gate.clone())).unwrap();
     assert!(matches!(
         idle.stream(&plan, &sources, Read::Snapshot).await,
         Err(Error::Busy {

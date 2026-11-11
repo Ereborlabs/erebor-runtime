@@ -2162,7 +2162,7 @@ async fn moving_window_nanoseconds() {
     let retained = next(&mut subscription).await;
     assert!(retained.clock_changed);
     assert!(retained.completed_windows.is_empty());
-    assert!(retained.batches.is_none());
+    assert_eq!(values(&retained, 0), [ScalarValue::Int64(Some(1))]);
     assert_eq!(
         retained.snapshot.selection.received_from,
         Bound::Included(1_000_000_000)
@@ -2280,7 +2280,7 @@ async fn unused_notification_deadline() {
     clock.set(100);
     let completed = next(&mut subscription).await;
     assert!(completed.clock_changed);
-    assert!(completed.batches.is_none());
+    assert_eq!(values(&completed, 0), [ScalarValue::Int64(Some(7))]);
     assert_eq!(completed.evaluated_utc_ns, 100);
     assert_eq!(completed.snapshot.next_change, None);
     assert_eq!(fixture.store.meta().unwrap(), before);

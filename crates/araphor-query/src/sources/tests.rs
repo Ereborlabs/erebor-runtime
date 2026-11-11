@@ -834,9 +834,11 @@ async fn native_stream_keeps_metadata() -> TestResult {
     let borrowed = batch.column(0).to_data().buffers()[0].clone();
     assert!(retained > borrowed.capacity());
     drop(batch);
-    assert!(stream.try_next().await?.is_none());
     assert!(weak.upgrade().is_some());
     assert_eq!(charged()?, retained);
+    assert!(stream.try_next().await?.is_none());
+    assert!(weak.upgrade().is_none());
+    assert_eq!(charged()?, borrowed.capacity());
     drop(stream);
     assert!(weak.upgrade().is_none());
     assert_eq!(charged()?, borrowed.capacity());

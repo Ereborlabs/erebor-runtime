@@ -58,7 +58,7 @@ async fn model_notification_deadlines() -> TestResult {
         assert!(overdue.clock_changed);
         assert_eq!(overdue.evaluated_utc_ns, 100);
         assert_eq!(overdue.snapshot.next_change, None);
-        assert!(overdue.batches.is_none());
+        assert_eq!(values(&overdue, 0), [ScalarValue::UInt64(Some(7))]);
         assert_eq!(overdue.calls.len(), 1);
         let changed = overdue.calls.values().next().ok_or("deadline model call")?;
         assert_eq!(changed.evaluation().context.time_utc_ns, 100);
