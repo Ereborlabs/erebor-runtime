@@ -1,0 +1,15 @@
+{
+  "source_parent": "bbb27398224fe7633127d3819b78ce26e69a6e73",
+  "sha256": {
+    "crates/araphor-analysis-builtins/src/causal/claims.rs": "0bf441b7bb77c947a4a44b7302d7a6f2e67544aa07a329f56d4ef7b0be0aee82",
+    "crates/araphor-analysis-builtins/src/causal/coverage.rs": "ad16d501e20ce8eb734145e8776d562ad6798e02124912b7ae0a4efd83e89dfb",
+    "crates/araphor-analysis-builtins/src/causal/descriptor.rs": "1570419df16f730532d2a683d11eb0f28f2ff5a1c184fa4c318132c9f9d63725",
+    "crates/araphor-analysis-builtins/src/causal/index.rs": "1d125b7098a53fcd075d695509b9f320e24ba3eef240eec4a3c54fe81a6ba3f4",
+    "crates/araphor-analysis-builtins/src/causal/io.rs": "c1cdcf1bbc22e8b33c0ac9b48f56ea6c524877506263d4680db3d5bb3e41a76e",
+    "crates/araphor-analysis-builtins/src/causal/state.rs": "8f6746afdee44ba3575d704fef233175470236e961a5a32f78554bd226ee456e",
+    "crates/araphor-query/tests/native_execution/graph.rs": "d4bf7380578b354f4138b02e493ed7546055633692c86a8a44aef8592e715107",
+    "crates/araphor-query/tests/native_execution/publication.rs": "cb092d4fe25c54e0bea31c2ea0ac12dc4f17e2d22b3351343ce7bf0c06880627",
+    "crates/araphor-query/tests/native_execution/graph/frontier.rs": "dce0d71bcd430817080bae47dc39dd7d4776ab380eaf5f5c72ce8ad311114972"
+  },
+  "patch_sha256": "5da2d0a8d402fffe28aeb872af773b518558a044df5f58b51dc77261d559ac40"
+}

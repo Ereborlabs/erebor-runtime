@@ -2,7 +2,12 @@ use std::collections::BTreeSet;
 
 use snafu::ResultExt as _;
 
-use super::{context::ContextRecord, managed::References, records::Records, NativeStore};
+use super::{
+    context::ContextRecord,
+    managed::{RawPin, References},
+    records::Records,
+    NativeStore,
+};
 use crate::analysis::raw::{RawIdentity, RawJournal};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, WitnessUsageV1};
 
@@ -35,16 +40,11 @@ impl Witnesses {
             let (key, value) = entry.context(NativeStorageSnafu {
                 operation: "read witness references",
             })?;
-            if key.len() != References::RAW.len() + 16 || value.len() != 24 {
-                return NativeStateSnafu {
-                    field: "witness reference",
-                }
-                .fail();
-            }
-            if NativeStore::number(&value[8..16])? <= now {
+            let pin = RawPin::decode(&key, &value)?;
+            if pin.expires <= now {
                 continue;
             }
-            let id = NativeStore::number(&value[..8])?;
+            let id = pin.segment;
             let segment = raw.segments.get(&id).ok_or_else(|| {
                 NativeStateSnafu {
                     field: "live witness segment",
@@ -72,8 +72,30 @@ impl Witnesses {
                             .build()
                         })?;
             }
-            if exact {
-                records.insert((id, NativeStore::number(&value[16..])?));
+            for (first, last) in pin.ranges {
+                let mut cursor = first;
+                loop {
+                    let (entry, slot) = raw.locate(&segment.source, cursor, revision)?;
+                    if entry.reference.id != id {
+                        return NativeStateSnafu {
+                            field: "witness segment identity",
+                        }
+                        .fail();
+                    }
+                    let end = entry.commit.spans[slot].last;
+                    if end >= last {
+                        break;
+                    }
+                    cursor = end.checked_add(1).ok_or_else(|| {
+                        NativeStateSnafu {
+                            field: "witness range bounds",
+                        }
+                        .build()
+                    })?;
+                }
+                if exact {
+                    records.extend((first..=last).map(|cursor| (id, cursor)));
+                }
             }
         }
         let mut contexts = BTreeSet::new();

@@ -1,10 +1,16 @@
 use super::{results::StoredResult, Records};
 use crate::analysis::PackageResultRefV1;
-use crate :: analysis :: { managed :: PreparedMemory , native :: { context :: ContextRecord , DataWrite } } ;
+use crate::analysis::{
+    managed::PreparedMemory,
+    native::{context::ContextRecord, DataWrite},
+};
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1, PackageErrorCodeV1 as Code, Result};
 use snafu::ResultExt as _;
 
+mod pins;
 mod read;
+
+pub(in crate::analysis::native) use pins::RawPin;
 
 pub(in crate::analysis::native) struct References;
 
@@ -12,7 +18,8 @@ impl References {
     pub(in crate::analysis::native) const RAW: &'static [u8] = b"\0data/ref/raw/";
     pub(in crate::analysis::native) const SEGMENT: &'static [u8] = b"\0data/ref/segment/";
     pub(super) const CONTEXT: &'static [u8] = b"\0data/ref/context/";
-    pub(in crate::analysis::native) const CONTEXT_OWNER: &'static [u8] = b"\0data/ref/context-owner/";
+    pub(in crate::analysis::native) const CONTEXT_OWNER: &'static [u8] =
+        b"\0data/ref/context-owner/";
     pub(super) const DEPENDENCY: &'static [u8] = b"\0data/ref/dependency/";
     pub(super) const ORIGIN: &'static [u8] = b"\0data/ref/origin/";
     pub(super) const IMPORT: &'static [u8] = b"\0data/ref/import/";
@@ -39,27 +46,27 @@ impl DataWrite<'_> {
         evidence: (&[AnalysisWitnessV1], &[u64]),
         memory: &mut PreparedMemory<'_>,
     ) -> Result<()> {
-        for (ordinal, witness) in witnesses.iter().enumerate() {
-            memory.charge(256)?;
-            let position = evidence
-                .0
-                .binary_search_by(|value| {
-                    (&value.identity, value.cursor).cmp(&(&witness.identity, witness.cursor))
-                })
-                .map_err(|_| Code::Invalid.error("managed call witness segment"))?;
-            let segment = *evidence
-                .1
-                .get(position)
-                .ok_or_else(|| Code::Invalid.error("managed call witness segment"))?;
-            let ordinal = ordinal as u64;
-            self.transaction.insert(
-                References::key(References::RAW, &[result, ordinal]),
-                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes(), witness.cursor.to_be_bytes()].concat(),
-            );
-            self.transaction.insert(
-                References::key(References::SEGMENT, &[segment, result, ordinal]),
-                witness.expires_utc_ns.to_be_bytes(),
-            );
+        let pins = RawPin::collect(
+            result,
+            witnesses.iter().map(|witness| {
+                let position = evidence
+                    .0
+                    .binary_search_by(|value| {
+                        (&value.identity, value.cursor).cmp(&(&witness.identity, witness.cursor))
+                    })
+                    .map_err(|_| Code::Invalid.error("managed call witness segment"))?;
+                let segment = *evidence
+                    .1
+                    .get(position)
+                    .ok_or_else(|| Code::Invalid.error("managed call witness segment"))?;
+                Ok((segment, witness.expires_utc_ns, witness.cursor))
+            }),
+            &mut |bytes| memory.charge(bytes),
+        )?;
+        for pin in pins {
+            self.transaction.insert(pin.key(), pin.value()?);
+            self.transaction
+                .insert(pin.reverse(), pin.expires.to_be_bytes());
         }
         let mut imported = 0;
         for reference in contexts {
@@ -266,15 +273,17 @@ impl crate::analysis::native::NativeStore {
         expected: &mut std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
         let segments = self.recover_witnesses(witnesses, revision - 1)?;
-        for (ordinal, (witness, segment)) in witnesses.iter().zip(segments).enumerate() {
-            expected.insert(
-                References::key(References::RAW, &[id, ordinal as u64]),
-                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes(), witness.cursor.to_be_bytes()].concat(),
-            );
-            expected.insert(
-                References::key(References::SEGMENT, &[segment, id, ordinal as u64]),
-                witness.expires_utc_ns.to_be_bytes().to_vec(),
-            );
+        let pins = RawPin::collect(
+            id,
+            witnesses
+                .iter()
+                .zip(segments)
+                .map(|(witness, segment)| Ok((segment, witness.expires_utc_ns, witness.cursor))),
+            &mut |_| Ok(()),
+        )?;
+        for pin in pins {
+            expected.insert(pin.key(), pin.value()?);
+            expected.insert(pin.reverse(), pin.expires.to_be_bytes().to_vec());
         }
         for reference in contexts {
             let context =

@@ -69,9 +69,64 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs with prepared descriptor reuse measure durable creation at 42.151–71.520 ms. The measured gain against DuckDB is 7.89 to 9.80 fold. The 100-fold target is not met. |
+| Performance | The latest stable native control measures durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
 
 Current evidence:
+
+- Native raw witness pins now use one group for each result, original segment,
+  and expiry. Each group contains exact adjacent cursor ranges. Sparse holes
+  and different expiries remain separate. Managed and typed result records
+  retain their full exact witness lists. Atomic publication, reverse pins,
+  current read authority, exact usage, and whole-segment retention remain.
+  Recovery uses the same group builder and checks the complete index.
+  Usage checks original segment bounds before it expands a compact range.
+  Native format 11 rejects format 10; no automatic conversion is added.
+  The affected native targets pass 126 managed, 18 raw, eight backup, six input,
+  six lifecycle, and six store cases. Eighteen native Query cases also pass.
+  The three new pin cases check sparse values, mixed expiry, duplicate result
+  owners, exact usage, compaction, history, backup, restore, raw expiry, reopen,
+  and strict format rejection. Six corruption modes reject malformed bounds,
+  overlapping or adjacent ranges, extra values, missing groups, and missing
+  reverse pins. Read `grouped-pins-contracts.log`,
+  `grouped-pins-final-native.log`, `grouped-pins-final-store.log`, and
+  `grouped-pins-final-query.log` under
+  `output/araphor-fjall-migration-20261110`.
+
+- The unapplied Causal index draft replaces the old business edges with shared claim
+  identities and exact origin-record links. A third native change pair supplies
+  inserted and removed canonical record keys. Equal coverage headers no longer
+  start source traversal. Real report, gap, and floor changes still do so.
+  Before and after audit keys remain in the traversal before owner removal.
+  The default definition and incident source remain unchanged.
+  The real Wasm frontier cases pass for late canonical arrival with unchanged
+  coverage, an audit-only lease contradiction across actors, unrelated-record
+  isolation, physical raw expiry, and reopen. These are index proofs, not a
+  separate full Detect contradiction and repair proof.
+  The first matched draft pairs pass the complete unchanged incident but
+  regress the final creation from 75.121–82.023 ms to 116.330–125.002 ms.
+  Bulk reference staging increases to 22.204–68.589 ms. The final managed sync
+  increases from 4.034–6.444 ms to 28.194–31.463 ms. Final notification batch
+  writes increase from 4.506–5.100 ms to 19.540–22.974 ms. The draft is not
+  committed as a performance improvement. Grouped native pins address the
+  measured reference amplification. The combined candidate passes both later
+  matched incident runs. First creation measures 46.082–47.212 ms; creation
+  after bulk input measures 98.712–117.841 ms; final creation measures
+  77.173–81.716 ms. Public receipt measures 54.647–56.141 ms,
+  112.097–130.767 ms, and 92.462–97.973 ms for those three notifications.
+  Whole-test time measures 2.73–2.84 seconds. Stable native controls measure
+  creation at 43.115–51.855 ms, 62.308–64.630 ms, and 75.696–86.277 ms;
+  whole-test time measures 2.21–2.34 seconds. The combined draft still regresses
+  after bulk input. The package source and its three new Query fixture files
+  are restored to the last committed implementation. The complete reversible
+  patch is in the [handoff artifact](../plans/araphor-execution-handoff/causal-canonical-inputs-review.md).
+  Its source hash record and reapplication check are preserved. Generic grouped native pins remain
+  active. Their restored-package timing is not measured. The user directs
+  completion of migration and fixture retirement before more latency work.
+  Read `grouped-pins-build.json` and `grouped-pins-comparison.json` for the
+  latest paired source states and all measurements.
+  Read `causal-incidence-build.json`, `causal-incidence-comparison.json`,
+  `causal-incidence-stages.json`, and `causal-incidence-final-query.log`
+  in the same evidence directory.
 
 - The two managed binary-storage SQL fixtures have native replacements. The
   large case retains the original small instance, 17 MiB definition description,

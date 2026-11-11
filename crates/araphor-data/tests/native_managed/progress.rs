@@ -6,6 +6,9 @@ use araphor_data::{
 #[path = "progress/profile.rs"]
 mod profile;
 
+#[path = "progress/pins.rs"]
+mod pins;
+
 #[cfg(feature = "test-fixtures")]
 #[path = "progress/history.rs"]
 mod history;
@@ -32,13 +35,11 @@ fn processor_lifecycle() -> TestResult {
     let store = NativeStore::open(&root)?;
     let scope = scope();
     let before = store.view()?.revision();
-    assert!(
-        store
-            .register_processor_guarded(&scope, ProcessorClassV1::Required, 1, || Err(
-                Code::Denied.error("guard")
-            ))
-            .is_err()
-    );
+    assert!(store
+        .register_processor_guarded(&scope, ProcessorClassV1::Required, 1, || Err(
+            Code::Denied.error("guard")
+        ))
+        .is_err());
     assert_eq!(store.view()?.revision(), before);
     store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
     assert!(store.processor_result(&scope)?.is_none());

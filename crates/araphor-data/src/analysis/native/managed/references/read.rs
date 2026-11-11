@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::analysis::native::{DataView, NativeStore};
@@ -66,61 +66,69 @@ impl DataView {
                 std::iter::empty::<&AnalysisContextRefV1>(),
             )?,
         )?;
+        let mut expected = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
+        let mut unresolved = Vec::new();
+        for witness in witnesses {
+            charge(0)?;
+            let stream = witness.identity.key();
+            let segment = self
+                .raw
+                .ranges
+                .range((stream.clone(), 0)..=(stream, witness.cursor))
+                .next_back()
+                .and_then(|(_, &(revision, slot))| {
+                    let entry = &self.raw.entries[&revision];
+                    (entry.identity == witness.identity
+                        && revision <= self.revision
+                        && entry.commit.spans[slot].last >= witness.cursor)
+                        .then_some(entry.reference.id)
+                });
+            if let Some(segment) = segment {
+                expected
+                    .entry((segment, witness.expires_utc_ns))
+                    .or_default()
+                    .insert(witness.cursor);
+            } else {
+                unresolved.push(witness.expires_utc_ns);
+            }
+        }
         let prefix = References::key(References::RAW, &[result]);
-        let mut present = BTreeSet::new();
         for entry in self.snapshot.prefix(&prefix) {
             charge(0)?;
             let (key, value) = entry.context(crate::NativeStorageSnafu {
                 operation: "read managed witness pins",
             })?;
-            if key.len() != prefix.len() + 8 || value.len() != 24 {
-                return Err(Code::Invalid.error("managed witness pin value"));
+            let pin = RawPin::decode(&key, &value)?;
+            let cursors = expected
+                .get_mut(&(pin.segment, pin.expires))
+                .ok_or_else(|| Code::Invalid.error("managed witness pin value"))?;
+            for (first, last) in &pin.ranges {
+                if cursors.range(*first..=*last).count() as u128 != u128::from(last - first) + 1 {
+                    return Err(Code::Invalid.error("managed witness pin value"));
+                }
+                for cursor in *first..=*last {
+                    cursors.remove(&cursor);
+                }
             }
-            let ordinal = usize::try_from(NativeStore::number(&key[prefix.len()..])?)
-                .map_err(|_| Code::Invalid.error("extra managed witness pin"))?;
-            let witness = witnesses
-                .get(ordinal)
-                .ok_or_else(|| Code::Invalid.error("extra managed witness pin"))?;
-            let segment = NativeStore::number(&value[..8])?;
-            let expires = NativeStore::number(&value[8..16])?;
-            let cursor = NativeStore::number(&value[16..])?;
-            let stream = witness.identity.key();
-            let live = self
-                .raw
-                .ranges
-                .range((stream.clone(), 0)..=(stream, witness.cursor))
-                .next_back()
-                .is_some_and(|(_, &(revision, slot))| {
-                    let entry = &self.raw.entries[&revision];
-                    entry.identity == witness.identity
-                        && revision <= self.revision
-                        && entry.reference.id == segment
-                        && entry.commit.spans[slot].last >= witness.cursor
-                });
-            let reverse = Records::read(
-                &References::key(References::SEGMENT, &[segment, result, ordinal as u64]),
-                &self.snapshot,
-            )?;
-            if witness.expires_utc_ns != expires
-                || witness.cursor != cursor
-                || !live
-                || reverse
-                    .map(|value| NativeStore::number(&value))
-                    .transpose()?
-                    != Some(expires)
+            let reverse = Records::read(&pin.reverse(), &self.snapshot)?;
+            if reverse
+                .map(|value| NativeStore::number(&value))
+                .transpose()?
+                != Some(pin.expires)
             {
                 return Err(Code::Invalid.error("managed witness pin value"));
             }
-            present.insert(ordinal);
         }
-        if present.len() != witnesses.len() {
+        if expected.values().any(|cursors| !cursors.is_empty()) || !unresolved.is_empty() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| Code::Invalid.error("source witness expiry clock"))?
                 .as_nanos();
-            if witnesses.iter().enumerate().any(|(ordinal, witness)| {
-                !present.contains(&ordinal) && u128::from(witness.expires_utc_ns) > now
-            }) {
+            if expected
+                .iter()
+                .any(|((_, expires), cursors)| !cursors.is_empty() && u128::from(*expires) > now)
+                || unresolved.iter().any(|expires| u128::from(*expires) > now)
+            {
                 return Err(Code::Missing.error("managed source witness binding"));
             }
         }

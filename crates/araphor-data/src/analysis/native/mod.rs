@@ -248,7 +248,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 10u64.to_be_bytes());
+            tx.insert(FORMAT, 11u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -350,7 +350,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 10 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 11 {
             return NativeStateSnafu {
                 field: "format version",
             }

@@ -135,6 +135,45 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Unapplied Causal index experiment
+
+The Causal claim/origin index and canonical change-pair experiment is preserved
+in the [unapplied artifact](../plans/araphor-execution-handoff/causal-canonical-inputs-review.md).
+The patch passes its functional cases but regresses notification latency after
+bulk input. The package source is restored to its last committed implementation.
+The generic grouped pin implementation below remains active. Performance work
+is deferred until the remaining migration and fixture retirement are complete.
+
+## Grouped raw witness pins
+
+[DataWrite::stage_result_references](../../crates/araphor-data/src/analysis/native/managed/references.rs) receives exact witnesses and their resolved original segments.
+  -> [RawPin::collect](../../crates/araphor-data/src/analysis/native/managed/references/pins.rs) groups cursor ranges by result, segment, and expiry.
+  -> [DataWrite::commit_locked](../../crates/araphor-data/src/analysis/native/mod.rs) commits the groups, reverse pins, results, Graph, and progress in one native batch.
+  -> [DataView::check_result_pins](../../crates/araphor-data/src/analysis/native/managed/references/read.rs) checks exact declared cursor membership and the reverse key.
+  -> [Witnesses::read](../../crates/araphor-data/src/analysis/native/witnesses.rs) checks ranges against original segment spans before it expands cursors for exact usage.
+  -> [NativeStore::validate_result_references](../../crates/araphor-data/src/analysis/native/managed/references.rs) rebuilds the same groups from retained result metadata during recovery.
+
+The RAW key contains result, segment, and expiry. Its value contains sorted,
+disjoint cursor ranges. The SEGMENT key contains segment, result, and expiry.
+Its value repeats the expiry. Sparse holes and different expiries remain
+separate. Exact witness lists remain in managed and typed result records.
+No raw payload copy is added. Retention still takes the maximum expiry for each
+whole segment. Live reads retain the existing allowance for missing expired
+pins. Recovery requires the exact complete index.
+
+Native format 11 rejects older formats. The representation adds no conversion
+path. The [pin cases](../../crates/araphor-data/tests/native_managed/progress/pins.rs)
+check mixed expiry, sparse ranges, exact usage across duplicate result owners,
+history, compaction, backup, restore, raw expiry, and reopen. Six corruption
+cases reject invalid bounds, overlap, adjacent ranges, extra cursors, missing
+groups, and missing reverse pins. The strict store case requires format 11 and
+rejects format 10.
+
+The grouped pin candidate passes 170 native Data cases. The combined package
+experiment also passes 18 Query cases. Its package changes are now unapplied.
+The restored package and grouped pins have no separate timing result. Read the
+current worklist for exact evidence and remaining qualification.
+
 ## Managed binary storage
 
 [StorageFixture](../../crates/araphor-data/tests/native_managed/storage.rs) uses the public native managed APIs and the original source, parameter, evidence, reason, and checkpoint model.
@@ -266,9 +305,10 @@ performance proof remain **Not done**.
 
 ## Package-row replacement
 
-The current replacement uses native format 10. It rejects format 9 before Data reads
-package rows. This is a changed durable format; no automatic conversion is
-provided. The cutover qualification below used format 9.
+The package-row replacement introduced native format 10. Grouped witness pins
+now require format 11. Data rejects older formats before it reads package rows.
+No automatic conversion is provided. The cutover qualification below used
+format 9.
 
 [PackageRecord](../../crates/araphor-data/src/analysis/native/packages/mod.rs)
 stores immutable metadata in `P`. The original artifact bytes occur once under
@@ -409,8 +449,9 @@ The user removes Data storage quotas on 2026-11-10. The source has no
 [StorageUsageV1](../../crates/araphor-data/src/analysis/capacity.rs) reports file
 bytes, allocated bytes, and available filesystem bytes. It does not reject an
 operation at a configured threshold. [RevisionCounts](../../crates/araphor-data/src/analysis/native/capacity.rs)
-remain integrity metadata and are checked during recovery. Physical format 10
-remains valid. Actual I/O errors still stop an uncertain owner.
+remain integrity metadata and are checked during recovery. The quota removal
+preserves physical format 10. Grouped witness pins now require format 11.
+Actual I/O errors still stop an uncertain owner.
 
 [Trace authority](../../crates/araphor-data/src/analysis/native/admission.rs)
 checks store readiness and current request state. [Query](../../crates/araphor-query/src/execution.rs)
