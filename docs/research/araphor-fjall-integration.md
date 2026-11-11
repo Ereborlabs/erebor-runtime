@@ -73,6 +73,21 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Native notification extraction now distinguishes an absent source from a
+  requested source with no output columns. Metadata reads use the same scoped
+  state, route, finding, and timer code as row reads. No new timer or SQL
+  projection is added. `obligation_source_deadline` passes its exact metadata
+  byte and context checks, scoped exclusion, acknowledgement, changed finding
+  revision, and maximum timestamp cases. Four native notification owner cases
+  also pass; they retain Pending, batch rollback, current and historical
+  lookups, route identity, and recovery checks. Read
+  `native-notification-deadlines.log` and `native-notification-owner-final.log`
+  under `output/araphor-fjall-migration-20261110`.
+  The two other Query deadline cases now receive their overdue update but
+  still fail the `batches.is_none()` contract. Their assertions remain.
+  Result: **Not done for complete notification Query qualification**.
+  This correction establishes no incident latency gain.
+
 - The complete Query unit target now compiles. Six calls to removed SQL APIs
   have native replacements in five fixture locations. Typed profile publication
   uses a real admitted managed package and the normal atomic Data boundary.

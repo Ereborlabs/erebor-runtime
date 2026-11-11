@@ -32,6 +32,14 @@ Complete unit qualification remains open:
 404 Query cases pass, 40 fail, and five are ignored. The Data unit target still
 has old fixture compile failures. Read the current worklist for exact evidence.
 
+[Notification extraction](../../crates/araphor-data/src/analysis/native/extraction/notification.rs)
+checks source presence before it reads scoped state and routes. A metadata
+request with no output columns must still compute the next deadline and retain
+its context references. The existing `obligation_source_deadline` case checks
+that behavior, exact byte counts, scoped exclusion, acknowledgement, and the
+maximum timestamp. Four native notification owner cases also pass. Two Query
+deadline cases still fail the output-batch contract; their assertions remain.
+
 The five unused SQL storage files and five empty legacy package modules are
 removed. The two `ResolvedInput` SQL files remain active DataFusion queries.
 Historical package review links use the verified DuckDB control source revision.

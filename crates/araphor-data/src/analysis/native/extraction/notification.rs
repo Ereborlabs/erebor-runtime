@@ -114,7 +114,7 @@ impl NativeStore {
         capture: &mut Capture<'_>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        if read.projected("notifications").is_none() {
+        if !read.requests.contains_key("notifications") {
             return Ok(());
         }
         let states = self.notification_rows(view, selection, output, control)?;
