@@ -73,6 +73,28 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Derived Query input receipts now bind the exact pruned selection and the
+  revisions of materialized parent inputs. The old native receipt could give
+  different bounded inputs one ID. It could also keep a child ID unchanged
+  after a supplied parent revision changed. One private JSON metadata frame
+  now includes the existing native identity fields, selection, and sorted
+  unique parent owner, ID, and optional window values. No rows or query plan
+  are serialized. Full-identity forwarding stays unchanged. Existing evaluation
+  limits and metadata reservations cover the retained revision string.
+  The unchanged scope and supplied-parent regressions pass. The expanded parent
+  case checks owner, ID, window source, window bounds, absent window, and
+  identical repetition. Four focused cases pass in 0.25 seconds. All 15 native
+  Query integration cases pass in 9.53 seconds, including saved-plan execution,
+  atomic Graph and consumed progress, offline input, and restart.
+  The complete Query unit run passes 414 cases, fails 30, and ignores five in
+  45.35 seconds. Both original identity failures are closed.
+  Read `native-input-identity-expanded.log` and
+  `native-input-identity-integration.log`, plus
+  `native-input-identity-unit-final.log`, under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for the two input identity omissions**. Complete migration
+  qualification and incident performance remain **Not done**.
+
 - Seven Query fixtures now use the existing native delivery and lifecycle
   contracts. Five cases check exact replacement rows after an execution.
   Commit `fcc271e42` already removed content-hash suppression; these cases had

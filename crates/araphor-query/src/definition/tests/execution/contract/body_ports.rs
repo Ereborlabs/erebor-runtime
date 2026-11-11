@@ -134,15 +134,38 @@ async fn body_port_metadata() -> TestResult {
     };
     drop(initial);
     let mut previous = None;
-    for id in ["first", "second"] {
-        supplied[0].revision = sdk::Revision {
-            owner: "external-local".into(),
-            id: id.into(),
-            window: Some(sdk::SourceWindow {
-                source: vec![9],
-                start_utc_ns: 1,
-                end_utc_ns: 2,
+    let window = sdk::SourceWindow {
+        source: vec![9],
+        start_utc_ns: 1,
+        end_utc_ns: 2,
+    };
+    for (owner, id, window) in [
+        ("external-local", "first", Some(window.clone())),
+        ("external-local", "second", Some(window.clone())),
+        ("external-other", "second", Some(window.clone())),
+        (
+            "external-other",
+            "second",
+            Some(sdk::SourceWindow {
+                source: vec![10],
+                ..window.clone()
             }),
+        ),
+        (
+            "external-other",
+            "second",
+            Some(sdk::SourceWindow {
+                source: vec![10],
+                start_utc_ns: 2,
+                end_utc_ns: 3,
+            }),
+        ),
+        ("external-other", "second", None),
+    ] {
+        supplied[0].revision = sdk::Revision {
+            owner: owner.into(),
+            id: id.into(),
+            window,
         };
         let mut request = invocation("body-supplied");
         request.inputs.insert(outer_id, supplied.clone());
@@ -164,6 +187,17 @@ async fn body_port_metadata() -> TestResult {
         previous = Some(child.revision.clone());
         assert!(output.snapshot.witnesses.is_empty());
         assert!(output.snapshot.page.extraction.sources.is_empty());
+        assert_eq!(fixture.engine.store().meta()?, meta);
+        let expected = child.revision.clone();
+        drop(output);
+        let mut repeated = invocation("body-supplied");
+        repeated.inputs.insert(outer_id, supplied.clone());
+        let output = session.execute_definition(&prepared, repeated).await?;
+        body_states(&output, 1)?;
+        assert_eq!(
+            output.calls[&inner_id].evaluation().inputs[0].revision,
+            expected
+        );
         assert_eq!(fixture.engine.store().meta()?, meta);
     }
     drop(supplied);

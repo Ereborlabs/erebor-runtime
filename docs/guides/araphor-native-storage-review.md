@@ -20,6 +20,15 @@ Query removes registered local declarations before Data checks durable owners.
 Complete event reads retain witnesses when no event column remains.
 [Input identity](../../crates/araphor-query/src/inputs/receipt.rs) binds catalog
 reads to the captured owner flags. It does not use an unrelated Data head.
+Derived IDs also bind the exact pruned selection and the revisions of
+materialized parent inputs. One private metadata frame preserves native view,
+call, time, seed, invocation, and optional-value distinctions. Parent revisions
+use canonical order. No row or query plan is serialized. Full-identity
+forwarding remains unchanged. Existing evaluation accounting covers the
+retained ID. Read the supplied-parent owner/window/repeat case in
+[body port metadata](../../crates/araphor-query/src/definition/tests/execution/contract/body_ports.rs)
+and the bounded-selection case in
+[model source lifetimes](../../crates/araphor-query/src/definition/tests/execution/contract/model.rs).
 [Input replay](../../crates/araphor-data/src/analysis/native/inputs/replay.rs)
 owns the live handle's budget leases. The durable consumer keeps its log
 positions when those handles close. Read the
@@ -29,7 +38,7 @@ for clone, release, and offline wake proof.
 clock for a deadline; an idle wait with no deadline waits for an event.
 The 19 affected Query contracts and 15 native integration cases pass.
 Complete unit qualification remains open:
-412 Query cases pass, 32 fail, and five are ignored. The Data unit target still
+414 Query cases pass, 30 fail, and five are ignored. The Data unit target still
 has old fixture compile failures. Read the current worklist for exact evidence.
 
 [Notification extraction](../../crates/araphor-data/src/analysis/native/extraction/notification.rs)

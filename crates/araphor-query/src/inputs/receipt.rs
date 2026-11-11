@@ -485,27 +485,51 @@ impl Inputs {
         let generation = snapshot
             .managed()
             .map_or(0, |capture| capture.instance().generation);
-        let catalog = if has("catalog") {
-            format!(
-                ":{}:{}:{}",
-                u8::from(snapshot.page.extraction.discovery_enabled),
-                u8::from(snapshot.page.extraction.graph_enabled),
-                u8::from(snapshot.page.extraction.notification_enabled),
-            )
-        } else {
-            String::new()
-        };
+        let catalog = has("catalog").then_some((
+            snapshot.page.extraction.discovery_enabled,
+            snapshot.page.extraction.graph_enabled,
+            snapshot.page.extraction.notification_enabled,
+        ));
+        let mut parents = inherited
+            .iter()
+            .map(|input| {
+                let revision = &input.revision;
+                (
+                    revision.owner.as_str(),
+                    revision.id.as_str(),
+                    revision.window.as_ref().map(|window| {
+                        (
+                            window.source.as_slice(),
+                            window.start_utc_ns,
+                            window.end_utc_ns,
+                        )
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        parents.sort_unstable();
+        parents.dedup();
+        let id = serde_json::to_string(&(
+            meta.store_uuid,
+            meta.schema_version,
+            meta.recovery_epoch,
+            generation,
+            call,
+            scope.slot,
+            version,
+            time,
+            seed,
+            invocation,
+            catalog,
+            &scope.selection,
+            parents,
+        ))
+        .map_err(|source| crate::Error::Sql {
+            source: datafusion::common::DataFusionError::External(Box::new(source)),
+        })?;
         let revision = sdk::Revision {
             owner: "araphor-query.Inputs".into(),
-            id: format!(
-                "{}:{}:{}:{generation}:{call}:{}:{version}:{time}:{}:{}:{invocation}{catalog}",
-                meta.store_uuid,
-                meta.schema_version,
-                meta.recovery_epoch,
-                scope.slot,
-                u8::from(seed.is_some()),
-                seed.unwrap_or(0),
-            ),
+            id,
             window,
         };
         Ok(sdk::Input {
