@@ -3731,7 +3731,7 @@ is **Not done**. All legacy lifecycle source and tests remain.
 | No execution at artifact admission | [Shared test assertion](https://github.com/Ereborlabs/erebor-runtime/blob/8e2ecd1d28593b03596a856e153bd0a30ba7e6fd/crates/araphor-data/src/analysis/mod.rs), [image tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests/image.rs), and [definition tests](https://github.com/Ereborlabs/erebor-runtime/blob/8e2ecd1d28593b03596a856e153bd0a30ba7e6fd/crates/araphor-data/src/analysis/definitions/tests.rs). |
 | Ordinary and version-switch crash cuts | [Native publication crash matrix](../../crates/araphor-data/src/analysis/managed/tests.rs). |
 | Exact stored selected dependencies | [Native edge fault matrix](../../crates/araphor-data/src/analysis/managed/tests/output.rs). |
-| Generic and native retained evidence | [Cardinality, pins, expiry, and history](../../crates/araphor-data/src/analysis/managed/tests/retention.rs). |
+| Generic and native retained evidence | [Cardinality, pins, expiry, and history](https://github.com/Ereborlabs/erebor-runtime/blob/69b7a4b12f1d1f0b8b61cfa37730949ed48e7026/crates/araphor-data/src/analysis/managed/tests/retention.rs). |
 | Large metadata and Arrow payloads | [Native quota, rollback, retry, backup, and accounting tests](../../crates/araphor-data/src/analysis/managed/tests/storage.rs). |
 
 The proof has 25 distinct passing test cases across split runs: two paired

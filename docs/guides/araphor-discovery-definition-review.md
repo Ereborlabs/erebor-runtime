@@ -3744,7 +3744,7 @@ use two published steps. A replacement dependency is a valid stored
 ID and revision from the same call. The test thus checks the selected manifest
 against the ledger, as well as ordinary missing and wrong-revision cases.
 
-[Retained provenance](../../crates/araphor-data/src/analysis/managed/tests/retention.rs)
+[Retained provenance](https://github.com/Ereborlabs/erebor-runtime/blob/69b7a4b12f1d1f0b8b61cfa37730949ed48e7026/crates/araphor-data/src/analysis/managed/tests/retention.rs)
 keeps the real generic result producer before native capture and publication.
 The shared reference and evidence helpers receive one vector with 65 repeated
 IDs. References keep their order; evidence is deduplicated. The existing

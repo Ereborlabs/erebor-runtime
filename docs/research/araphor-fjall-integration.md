@@ -88,6 +88,49 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Six native cases replace the complete saved-input replay and retained
+  provenance families. The five replay cases preserve the historical trace
+  cut, current read revocation, payload-free reference lookup, both calls,
+  all four input rounds, empty batches, source windows, coverage, exact saved
+  context, atomic publication, and three X/U corruption cases. The private
+  fixture can declare the original auxiliary input. Its default model is
+  unchanged. Continuation uses the original parameters through `hydrate_prior`;
+  Data does not archive those parameters.
+
+  The retention case keeps 8,193 events, 257 contexts, the generic producer,
+  both managed calls, and the Selected result. Scoped extraction checks exact
+  witness and context vectors. Captured native views replace the removed
+  repeated-ID batch helpers. The case keeps 65 point reads, foreign scope,
+  no-write checks, exact grouped cursor ranges, expiry 100, reverse pins,
+  instance removal, blocked retention at times 20 and 21, physical removal
+  at time 101, history, and reopen.
+
+  The native case first reports 8,193 retained events after it removes all
+  8,193 payload records. `DataView::source_status` counts original ranges
+  without checking the existing expiry revision. Its range filter now uses
+  the same revision rule as `RawIndex::source_state`. Current views report
+  zero after expiry; saved pre-expiry views report 8,193, also after reopen.
+  Accepted pending ranges remain included. Original log metadata is retained.
+  No archive, scan, public API, or retention policy is added.
+
+  All six replacements pass in 2.10 seconds. The final focused Data run passes
+  203 managed, 24 raw, six lifecycle, eight backup, three raw-index, eight
+  store, and 31 package cases. Read `native-replay-baseline-runtime.log`,
+  `native-replay-retention-count-scope.log`, `native-replay-fixed.log`, and
+  `native-replay-final-data.log` under
+  `output/araphor-fjall-migration-20261110`. The earlier context and scope
+  failures are fixture mapping errors; the count failure is a production
+  defect. All 15 native Query integration cases pass in 9.17 seconds.
+  Formatting of changed Rust files and the release library check without
+  default features pass. The Data unit target still does not compile or run:
+  its compilation reports 345 diagnostics, down from 369. Read
+  `native-replay-final-query.log`, `native-replay-final-default.log`, and
+  `native-replay-final-unit.log` in the same evidence directory.
+  The two old SQL test files and their module declarations are removed.
+  Result: **Done for these six replacements and the retained-count correction**.
+  Complete migration qualification and incident performance remain **Not done**.
+  No new incident timing is measured.
+
 - Ten native cases replace the complete ordinary source-frame family. They
   retain the two-call Selected package fixture. Existing Graph-destination
   cases do not replace these checks. The cases preserve guarded publication,

@@ -12,6 +12,10 @@ mod calls;
 mod control;
 #[path = "storage/output.rs"]
 mod output;
+#[path = "storage/replay.rs"]
+mod replay;
+#[path = "storage/retention.rs"]
+mod retention;
 #[path = "storage/source.rs"]
 mod source;
 #[path = "storage/terminal.rs"]
@@ -60,6 +64,16 @@ impl StorageFixture {
         description: String,
         selection: AnalysisSelectionV1,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_model(store, id, description, selection, false)
+    }
+
+    fn new_model(
+        store: &NativeStore,
+        id: &str,
+        description: String,
+        selection: AnalysisSelectionV1,
+        extra: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let scalar = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let mut rows = sdk::Port::new("rows", scalar.clone());
         rows.evidence_required = true;
@@ -68,6 +82,11 @@ impl StorageFixture {
             vec![sdk::Port::new("source", scalar.clone())],
             vec![rows],
         );
+        if extra {
+            model
+                .inputs
+                .push(sdk::Port::new("aux", scalar.clone()).into());
+        }
         model.parameters = sdk::Schema::new(vec![sdk::Field::new(
             "increment",
             sdk::DataType::UInt64,
@@ -102,13 +121,28 @@ impl StorageFixture {
             digest: image.digest().into(),
         };
         let sql = r#"SELECT * FROM "managed-fixture"."r1".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 2) a CROSS JOIN "managed-fixture"."r1".count(source => (SELECT 1::BIGINT UNSIGNED AS value), increment => 3) b"#;
+        let sql = if extra {
+            sql.replace(
+                "), increment",
+                "), aux => (SELECT 0::BIGINT UNSIGNED AS value WHERE false), increment",
+            )
+        } else {
+            sql.to_owned()
+        };
+        let auxiliary = if extra {
+            ", aux => (SELECT 0::BIGINT UNSIGNED AS value WHERE false)"
+        } else {
+            ""
+        };
         let definition = ResolvedDefinition::new(
             Definition {
                 name: "independent-calls".into(),
                 description,
                 labels: BTreeMap::new(),
                 program: Program::Sql {
-                    source: Source::Inline { inline: sql.into() },
+                    source: Source::Inline {
+                        inline: sql.clone(),
+                    },
                 },
             },
             sql.into(),
@@ -118,7 +152,7 @@ impl StorageFixture {
         let fixture = Fixture { spec: ManagedSpec {
             destination: ManagedDestination::Selected, tenant: [1; 16], id: id.into(), definition,
             manifest: ManagedManifest { format: 1, planner: "datafusion-55/sql-call-1".into(), definition: revision, selected_schema: model.outputs[0].schema.clone(),
-                calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall { image: pin.clone(), package: image.bundle().root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value), increment => {increment}")], dependencies: Default::default() })).collect(),
+                calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall { image: pin.clone(), package: image.bundle().root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value){auxiliary}, increment => {increment}")], dependencies: Default::default() })).collect(),
             },
         }, grant: PackageGrantV1 { principal: "fixture".into(), revision: 1, selection, expires_utc_ns: None, authorization_id: Some("definition-grant".into()) } };
         Ok(Self {
@@ -128,6 +162,14 @@ impl StorageFixture {
     }
 
     fn capture(&self, store: &NativeStore) -> Result<ManagedCapture, Box<dyn std::error::Error>> {
+        self.capture_rebuild(store, false)
+    }
+
+    fn capture_rebuild(
+        &self,
+        store: &NativeStore,
+        rebuild: bool,
+    ) -> Result<ManagedCapture, Box<dyn std::error::Error>> {
         let instance = self.current(store)?;
         let requests = BTreeMap::new();
         let page = store.read_managed_tables_filtered(
@@ -135,7 +177,7 @@ impl StorageFixture {
             &ManagedRead {
                 instance,
                 expected: None,
-                rebuild: false,
+                rebuild,
                 follow: false,
                 completed: None,
                 execution: None,
@@ -175,7 +217,7 @@ impl StorageFixture {
     }
 
     fn evaluation(&self, request: &ManagedRequest, call: u64) -> sdk::Result<sdk::Evaluation> {
-        Ok(sdk::Evaluation {
+        let mut evaluation = sdk::Evaluation {
             export: "count".into(),
             inputs: vec![sdk::Input {
                 data: sdk::Dataset {
@@ -203,7 +245,25 @@ impl StorageFixture {
                 time_utc_ns: request.time_utc_ns as i64,
                 seed: request.seed,
             },
-        })
+        };
+        if self.model.inputs.len() > 1 {
+            evaluation.inputs.push(sdk::Input {
+                data: sdk::Dataset {
+                    name: "aux".into(),
+                    batches: Vec::new(),
+                },
+                revision: sdk::Revision {
+                    owner: "fixture".into(),
+                    id: format!("aux-{call}"),
+                    window: None,
+                },
+                coverage: sdk::Coverage {
+                    state: sdk::CoverageState::Complete,
+                    limits: Vec::new(),
+                },
+            });
+        }
+        Ok(evaluation)
     }
 
     fn output(&self, value: u64) -> sdk::Result<sdk::Output> {

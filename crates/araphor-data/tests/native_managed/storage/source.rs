@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-fn identity() -> araphor_data::EvidenceIntakeIdentityV1 {
+pub(super) fn identity() -> araphor_data::EvidenceIntakeIdentityV1 {
     araphor_data::EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],
         node_id: "node-a".into(),
@@ -24,7 +24,7 @@ fn identity() -> araphor_data::EvidenceIntakeIdentityV1 {
     }
 }
 
-fn request(id: &str) -> ManagedRequest {
+pub(super) fn request(id: &str) -> ManagedRequest {
     ManagedRequest {
         id: id.into(),
         time_utc_ns: 10,

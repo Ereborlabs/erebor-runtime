@@ -27,8 +27,6 @@ mod input;
 mod journal;
 mod memory;
 mod metadata;
-mod replay;
-mod retention;
 mod version;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;

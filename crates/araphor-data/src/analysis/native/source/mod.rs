@@ -304,7 +304,14 @@ impl DataView {
             .raw
             .ranges
             .range((key.clone(), 0)..=(key, u64::MAX))
-            .filter(|(_, (revision, _))| *revision <= self.revision)
+            .filter(|(_, (revision, _))| {
+                *revision <= self.revision
+                    && self
+                        .raw
+                        .expired
+                        .get(&self.raw.entries[revision].reference.id)
+                        .is_none_or(|expired| expired.revision > self.revision)
+            })
             .map(|(_, &(revision, slot))| {
                 let span = &self.raw.entries[&revision].commit.spans[slot];
                 span.last - span.first + 1

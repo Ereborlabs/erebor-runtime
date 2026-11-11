@@ -585,7 +585,7 @@ result as a new success. A continuation package can still receive the last
 successful output to compute its next result.
 
 Read the [SDK continuation tests](../../crates/araphor-analysis-sdk/src/tests/continuation.rs),
-[Data replay tests](../../crates/araphor-data/src/analysis/managed/tests/replay.rs),
+[Data replay tests](https://github.com/Ereborlabs/erebor-runtime/blob/69b7a4b12f1d1f0b8b61cfa37730949ed48e7026/crates/araphor-data/src/analysis/managed/tests/replay.rs),
 [Query continuation tests](../../crates/araphor-query/src/definition/tests/execution/continuation.rs),
 [qualification tests](../../crates/araphor-analysis/src/qualification/tests/sql.rs),
 and [Graph history tests](../../crates/araphor-analysis/src/graph/native/tests/managed/history.rs).

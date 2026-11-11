@@ -4,6 +4,40 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [saved-input cases](../../crates/araphor-data/tests/native_managed/storage/replay.rs),
+[trace case](../../crates/araphor-data/tests/native_managed/storage/replay/trace.rs),
+[corruption case](../../crates/araphor-data/tests/native_managed/storage/replay/corruption.rs),
+and [large retained-provenance case](../../crates/araphor-data/tests/native_managed/storage/retention.rs)
+with [source status](../../crates/araphor-data/src/analysis/native/source/mod.rs)
+and [grouped reference pins](../../crates/araphor-data/src/analysis/native/managed/references/pins.rs).
+These six cases replace their complete old SQL families. Replay preserves
+historical trace rows and current revocation, exact saved input metadata,
+payload-free references, atomic call publication, checkpoint state, and actual
+X/U corruption. The private fixture retains its default model and can declare
+the original auxiliary input. `hydrate_prior` receives the original parameters;
+Data does not archive them.
+
+The provenance case keeps 8,193 witnesses, 257 contexts, the generic producer,
+both calls, and the Selected result. Supported scoped extraction checks exact
+provenance. Native record reads check the full cursor union, expiry 100,
+reverse pins, and context-reference counts. Captured views preserve 65 point
+reads and no-write checks. Removal and reopen must keep retention blocked at
+times 20 and 21. Time 101 removes all payload records and their files. Metadata
+and result history remain exact after expiry and reopen.
+
+This case exposes an incorrect retained count. Source status previously counts
+all original spans through its view revision, including expired payloads. Its
+existing span filter now checks the saved expiry revision, as `source_state`
+already does. Current status reports zero after expiry; saved pre-expiry cuts
+report 8,193. Pending spans remain included. No new archive, scan, API, or
+retention policy is added. All six cases pass. The final focused Data run passes
+283 cases. All 15 native Query integration cases pass in 9.17 seconds.
+Formatting of changed Rust files and the release library check without default
+features pass. The Data unit target reports 345 compile diagnostics, down from
+369; it still does not compile or run. Read the `native-replay-*` evidence under
+`output/araphor-fjall-migration-20261110`. Complete migration qualification and
+incident performance remain open.
+
 Read the [ordinary source fixture](../../crates/araphor-data/tests/native_managed/storage/source.rs),
 [frame cases](../../crates/araphor-data/tests/native_managed/storage/source/frames.rs),
 [retention cases](../../crates/araphor-data/tests/native_managed/storage/source/retention.rs),
