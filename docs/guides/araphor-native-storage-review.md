@@ -135,6 +135,26 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Managed binary storage
+
+[StorageFixture](../../crates/araphor-data/tests/native_managed/storage.rs) uses the public native managed APIs and the original source, parameter, evidence, reason, and checkpoint model.
+  -> [managed_binary_envelopes](../../crates/araphor-data/tests/native_managed/storage.rs) reads binary instance, version, and attempt records and checks the complete captured contract.
+  -> [large_contract_preserves_bytes](../../crates/araphor-data/tests/native_managed/storage.rs) retains the small baseline instance and publishes the original large values through two independent calls.
+  -> [NativeStore::commit_managed](../../crates/araphor-data/src/analysis/native/managed/commit.rs) rolls back rejected publication without advancing Data, the journal, call heads, results, or checkpoints.
+  -> [NativeStore::backup](../../crates/araphor-data/src/analysis/native/backup/mod.rs) creates the owned backup used for reopen and restore checks.
+
+The large values remain a 17 MiB definition description and a 16 MiB plus one
+byte reason. Checkpoint values remain two and three. Native result packets
+retain checkpoints and provenance. They do not add an output archive.
+The cases check exact definition bytes, result and dependency identities,
+historical reads, retries, backup, reopen, and restore. Sixty-five point reads
+check reference stability. Foreign-tenant reads reject. The unused SQL batch
+wrapper and its ordering mechanics are retired. No replacement wrapper is added.
+
+The two focused cases pass in 19.34 seconds. The final affected targets pass
+123 managed cases in 29.68 seconds and six lifecycle cases. Other legacy Data
+unit fixtures remain unported. Read the current worklist for the exact evidence.
+
 ## Prepared descriptor reuse
 
 [NativeStore::prepare_managed](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) reads each returned call's current descriptor.

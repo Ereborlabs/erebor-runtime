@@ -29,7 +29,6 @@ mod replay;
 mod retention;
 mod source;
 mod status;
-mod storage;
 mod terminal;
 mod version;
 

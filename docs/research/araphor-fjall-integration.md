@@ -64,7 +64,7 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Owner | Current work and completion proof |
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
-| Fixture retirement | The context, catalogue, image, backup, and profile SQL families have native replacements. Native profile cases preserve typed publication, contexts, state, history, notices, raw expiry, and Arrow values. Other Data unit fixtures still need native ports. Quota-only cases are removed by user instruction. |
+| Fixture retirement | The context, catalogue, image, backup, profile, and managed binary-storage SQL families have native replacements. Native cases preserve typed publication, large records, rollback, backup, contexts, state, history, notices, raw expiry, and Arrow values. Other Data unit fixtures still need native ports. Quota-only cases are removed by user instruction. |
 | Storage lifecycle | Data storage quotas are removed. Keep usage reporting, retention, collection, and checkpoint/restore integrity. Recovery preserves acknowledged raw input and distinguishes a failed raw append from a poisoned native engine. Complete qualification remains open. |
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
@@ -72,6 +72,22 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Performance | Matched release runs with prepared descriptor reuse measure durable creation at 42.151–71.520 ms. The measured gain against DuckDB is 7.89 to 9.80 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- The two managed binary-storage SQL fixtures have native replacements. The
+  large case retains the original small instance, 17 MiB definition description,
+  16 MiB plus one byte reason, two independent calls, and checkpoint values
+  two and three. Rejected publication preserves the pending attempt, instance,
+  call heads, Data revision, and journal head. No result or checkpoint leaks.
+  The native cases check binary envelopes, exact definition bytes, dependency
+  identities, public result reads, historical reads, completed retries, reopen,
+  backup, and restore. Sixty-five point-reference reads check stable identity
+  and foreign-tenant rejection. They do not claim parity with the removed
+  batch-wrapper ordering mechanism. The old batch wrappers had no production
+  callers. No wrapper API or second output archive is restored.
+  The final focused run passes 123 managed cases in 29.68 seconds and six
+  lifecycle cases. Read `managed-storage-second.log` and
+  `managed-storage-final-native.log` under
+  `output/araphor-fjall-migration-20261110`. Other obsolete Data fixtures remain.
 
 - Managed preparation retains the descriptor bytes with the parsed contract.
   Publication reads the current descriptor under the Data writer. Equal bytes

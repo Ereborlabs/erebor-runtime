@@ -29,6 +29,8 @@ mod publication;
 mod read;
 #[path = "native_managed/source.rs"]
 mod source;
+#[path = "native_managed/storage.rs"]
+mod storage;
 
 struct Fixture {
     spec: ManagedSpec,
