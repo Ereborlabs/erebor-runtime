@@ -1,7 +1,15 @@
 use super::*;
 
+#[path = "profile/contracts.rs"]
+mod contracts;
 #[path = "profile/gaps.rs"]
 mod gaps;
+#[path = "profile/native.rs"]
+mod native;
+#[path = "profile/notices.rs"]
+mod notices;
+#[path = "profile/state.rs"]
+mod state;
 use araphor_data::{
     analysis::{
         native::{ManagedCommit, ManagedReturn},
@@ -56,20 +64,28 @@ fn profile(name: &str) -> DiscoveryProfileV1 {
 fn instance(
     store: &NativeStore,
 ) -> Result<(ManagedInstance, sdk::Model), Box<dyn std::error::Error>> {
-    let mut fixture = Fixture::new(store, [1; 16], "profile", false)?;
-    fixture.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
+    instance_for(store, &profile("first").scope.identity)
+}
+
+fn instance_for(
+    store: &NativeStore,
+    source: &araphor_data::EvidenceIntakeIdentityV1,
+) -> Result<(ManagedInstance, sdk::Model), Box<dyn std::error::Error>> {
+    let tenant = source.tenant_id;
+    let mut fixture = Fixture::new(store, tenant, "profile", false)?;
+    fixture.grant.selection = AnalysisSelectionV1::tenant(tenant);
     fixture.spec.destination = ManagedDestination::DiscoveryProfile {
-        source: profile("first").scope.identity,
+        source: source.clone(),
         call: 10,
         output: "rows".into(),
     };
     let admitted = fixture.admit(store)?;
     let instance =
-        store.set_managed_running([1; 16], "profile", admitted.lifecycle, true, || Ok(()))?;
+        store.set_managed_running(tenant, "profile", admitted.lifecycle, true, || Ok(()))?;
     let descriptor = store
         .view()?
         .package_revision(
-            [1; 16],
+            tenant,
             "managed-count",
             "1",
             &AnalysisReadControl::default(),
@@ -116,7 +132,16 @@ fn capture(
     tables: &[&str],
     follow: bool,
 ) -> araphor_data::Result<araphor_data::ManagedCapture> {
-    let resume = store.managed_resume([1; 16], "profile", &AnalysisReadControl::default())?;
+    capture_for(store, [1; 16], tables, follow)
+}
+
+fn capture_for(
+    store: &NativeStore,
+    tenant: [u8; 16],
+    tables: &[&str],
+    follow: bool,
+) -> araphor_data::Result<araphor_data::ManagedCapture> {
+    let resume = store.managed_resume(tenant, "profile", &AnalysisReadControl::default())?;
     let requests: araphor_data::AnalysisTableRequests = tables
         .iter()
         .copied()
@@ -168,6 +193,20 @@ fn attempt(store: &NativeStore, name: &str) -> araphor_data::Result<araphor_data
         &super::super::attempts::request(name, true),
         || Ok(()),
     )
+}
+
+fn state_attempt(
+    store: &NativeStore,
+    source: &araphor_data::EvidenceIntakeIdentityV1,
+    name: &str,
+) -> araphor_data::Result<(araphor_data::ManagedCapture, araphor_data::ManagedAttempt)> {
+    let captured = capture_for(store, source.tenant_id, &["discovery_state"], false)?;
+    let attempt = store.register_managed_attempt(
+        &captured,
+        &super::super::attempts::request(name, true),
+        || Ok(()),
+    )?;
+    Ok((captured, attempt))
 }
 
 fn publish(

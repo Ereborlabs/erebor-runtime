@@ -1,46 +1,61 @@
-use std::collections::BTreeMap;
-
-use araphor_analysis_sdk :: arrow_array :: { BinaryArray , BooleanArray , RecordBatch , StringArray , UInt32Array , UInt64Array } ;
-use prost::Message as _;
-
 use super::*;
-use crate :: { AnalysisExtractLimits , AnalysisReadControl , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , AnalysisWitnessV1 , CoverageCounters , CoverageInterval , CoverageReport , DiscoveryInputManifestV1 , Selection , ValidatedCoverageV1 } ;
+use araphor_data::{
+    AnalysisExtractLimits, AnalysisReadModeV1, AnalysisTableRead, CoverageCounters,
+    CoverageInterval, CoverageReport, DiscoveryInputManifestV1, Selection, ValidatedCoverageV1,
+    ValidatedEvidenceBatchV1,
+};
+use prost::Message as _;
+use sdk::arrow_array::{
+    BinaryArray, BooleanArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
+};
 
-#[test]
-fn profile_native_fields() -> TestResult {
+pub(super) fn sample() -> Result<DiscoveryProfileV1, Box<dyn std::error::Error>> {
     let baseline: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../../discovery/validation/tests/fixtures/atoms.json"
+        "../../../../src/discovery/validation/tests/fixtures/atoms.json"
     ))?;
-    let mut profile = profile();
+    let mut profile = profile("profile-a");
+    profile.interval_id = "interval-a".into();
     profile.snapshot = serde_json::from_value(baseline["original"]["snapshot"].clone())?;
-    let manifest = DiscoveryInputManifestV1::try_from(
-        include_bytes!("../../../../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
-    )?;
     profile.scope.identity = profile.snapshot.coverage[0].stream.clone();
-    profile.coverage_revision = 1;
-    profile.validate()?;
-    let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("analysis"))?;
-    store.register_discovery_owner();
-    store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    Ok(profile)
+}
+
+pub(super) fn append(store: &NativeStore, profile: &DiscoveryProfileV1) -> TestResult {
+    let manifest = DiscoveryInputManifestV1::try_from(
+        include_bytes!("../../../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+    )?;
     let records = manifest
         .records
         .iter()
         .map(|record| (record.id.durable_cursor, record))
         .collect::<BTreeMap<_, _>>();
-    for (cursor, record) in &records {
+    for (cursor, record) in records {
         store.accept_validated_batch(
             profile.scope.identity.clone(),
             ValidatedEvidenceBatchV1 {
                 cpu_id: record.id.cpu_id,
-                first_cursor: *cursor,
-                last_cursor: *cursor,
-                intake_utc_ns: *cursor,
+                first_cursor: cursor,
+                last_cursor: cursor,
+                intake_utc_ns: cursor,
                 frame_ends: vec![record.wire_record.len()],
                 framed_records: record.wire_record.clone().into(),
             },
         )?;
     }
+    Ok(())
+}
+
+#[test]
+fn profile_native_fields() -> TestResult {
+    let mut profile = sample()?;
+    profile.coverage_revision = 1;
+    profile.validate()?;
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open(&directory.path().join("analysis"))?;
+    store.register_discovery_owner();
+    let (_, model) = instance_for(&store, &profile.scope.identity)?;
+    store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    append(&store, &profile)?;
     let covered = &profile.snapshot.coverage[0];
     store.accept_validated_coverage(ValidatedCoverageV1 {
         identity: profile.scope.identity.clone(),
@@ -71,24 +86,21 @@ fn profile_native_fields() -> TestResult {
         }
         .encode_to_vec(),
     })?;
-    let mut input = commit(&profile);
-    input.consumed_cursor = 3;
-    input.witnesses = records
-        .keys()
-        .map(|cursor| AnalysisWitnessV1 {
-            identity: profile.scope.identity.clone().into(),
-            cursor: *cursor,
-            expires_utc_ns: 1_000_000_000_000,
-        })
-        .collect();
-    let receipt =
-        store.commit_working_profile(input, PreparedProfile::new(profile.clone())?, None)?;
+    let (_, attempt) = state_attempt(&store, &profile.scope.identity, "native-fields")?;
+    let (_, receipt) = publish(
+        &store,
+        &attempt,
+        &model,
+        Some(packet(profile.clone(), None, None, 0, 3)?),
+        false,
+    )?;
+    let receipt = receipt.ok_or("profile receipt")?;
     let mut selection = AnalysisSelectionV1::new(
         profile.scope.identity.tenant_id,
         vec![profile.scope.identity.clone()],
     );
     selection.select_profiles(Selection::Exact(vec![profile.profile_id.clone()]))?;
-    let schema = &crate::AnalysisStore::table_schemas()["behaviors"];
+    let schema = &araphor_data::AnalysisStore::table_schemas()["behaviors"];
     let columns = BTreeMap::from([(
         "behaviors".to_owned(),
         Some((0..schema.fields().len()).collect()),

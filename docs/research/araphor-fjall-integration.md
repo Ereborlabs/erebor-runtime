@@ -64,7 +64,7 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Owner | Current work and completion proof |
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
-| Fixture retirement | The context, catalogue, image, and backup SQL families have native replacements. Eight native backup cases preserve the applicable recovery and integrity assertions. Quota-only cases are removed by user instruction. Remaining Data unit fixtures still need native ports. |
+| Fixture retirement | The context, catalogue, image, backup, and profile SQL families have native replacements. Native profile cases preserve typed publication, contexts, state, history, notices, raw expiry, and Arrow values. Other Data unit fixtures still need native ports. Quota-only cases are removed by user instruction. |
 | Storage lifecycle | Data storage quotas are removed. Keep usage reporting, retention, collection, and checkpoint/restore integrity. Recovery preserves acknowledged raw input and distinguishes a failed raw append from a poisoned native engine. Complete qualification remains open. |
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
@@ -72,6 +72,29 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Performance | Matched release runs with direct finding relation construction measure durable creation at 44.157–82.437 ms. The measured gain against DuckDB is 7.34 to 9.87 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- The complete legacy profile SQL fixture family is removed. Ten native cases
+  replace the remaining root, captured-context, state, notice, and Arrow cases.
+  The original atom snapshot, manifest, source identity, and Arrow assertions
+  remain. Cancellation and rejected changes preserve Data revision, original
+  journal position, context rows, and processor heads. The changed-context case
+  uses a valid new profile and succeeds with the unchanged context on the same
+  attempt. Completed admission retries write nothing. Failed attempts finish
+  through the normal lifecycle before stable reopen checks.
+  Native sealing advances the current head. The state case then creates a new
+  live interval and repairs the older sealed interval. The newer history cannot
+  replace the live head. Notice rows preserve independent interval values and
+  historical cuts. A new managed publication can write its own receipt while
+  it leaves the Notice revision unchanged. DataFusion package SQL owns notice
+  threshold selection; the removed Data threshold API is not restored.
+  The unused private `ProfileWrite` enum is removed. Typed profile APIs remain.
+  After removal, `cargo test --offline --release -p araphor-data --features
+  test-fixtures --test native_managed --test native_lifecycle --
+  --test-threads=1` passes 118 managed cases in 13.00 seconds and six lifecycle
+  cases in 0.29 seconds. Read `profile-contracts-final-native.log` under
+  `output/araphor-fjall-migration-20261110`. Result: **Done for profile fixture
+  retirement**. This change establishes no additional incident latency gain.
+  Other obsolete fixtures and complete qualification remain **Not done**.
 
 - Causal constructs its required finding relation directly. The previous
   factory constructs four domain relations and discards three. The replacement
@@ -112,8 +135,9 @@ Current evidence:
   cases in 2.34 seconds and six lifecycle cases in 0.14 seconds. Read
   `profile-gap-before-valid.log`, `profile-gap-verified-proof.log`, and
   `profile-gap-final-native.log` under
-  `output/araphor-fjall-migration-20261110`. Ten other legacy profile cases
-  remain. This parity change establishes no incident latency gain over the
+  `output/araphor-fjall-migration-20261110`. At that qualification, ten other
+  legacy profile cases remained. The later grouped port above replaces those
+  cases. This parity change establishes no incident latency gain over the
   preceding native source. Both current production incident pairs pass with
   unchanged test and definition hashes. Creation measures 47.035–83.606 ms;
   public receipt measures 55.053–99.452 ms. Whole-test time is 2.10–2.12 seconds.

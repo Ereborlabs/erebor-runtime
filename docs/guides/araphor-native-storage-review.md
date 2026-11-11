@@ -377,12 +377,42 @@ Eight [native gap cases](../../crates/araphor-data/tests/native_managed/progress
 pass, including later expiry, exact head conflicts, cancellation, and stamped
 corruption. The final native managed suite passes 108 cases in 2.34 seconds.
 Six native lifecycle cases pass in 0.14 seconds. The four legacy SQL gap cases
-are removed. Result: **Done for these gap contracts**. Ten other legacy profile
-cases and the complete replacement remain **Not done**. Both current production
+are removed. Result: **Done for these gap contracts**. At that source state,
+ten other legacy profile cases remained. The grouped port below replaces those
+cases. The complete replacement remains **Not done**. Both recorded production
 incident pairs pass. Durable creation measures 47.035–83.606 ms; public receipt
 measures 55.053–99.452 ms. Whole-test time is 2.10–2.12 seconds. The paired gain
 against DuckDB is 7.01–8.04 fold. This parity change establishes no latency gain
 over the preceding native source. The 100-fold target remains **Not done**.
+
+The remaining profile SQL family is removed after ten native cases pass.
+[Publication contracts](../../crates/araphor-data/tests/native_managed/progress/profile/contracts.rs)
+check two canceled updates, exact JSON and stored request fields, completed
+admission retries, invalid historical changes, and captured contexts. The
+changed-context negative uses a valid new profile. Its unchanged-context retry
+succeeds on the same attempt. Failed publications preserve Data and journal
+positions.
+[State cases](../../crates/araphor-data/tests/native_managed/progress/profile/state.rs)
+check bootstrap state, foreign tenant exclusion, exact references, projection
+without body decode, cumulative gaps, three-record raw expiry, compaction,
+and reopen. A repair to an older sealed interval preserves the current live
+head. The original
+[Arrow case](../../crates/araphor-data/tests/native_managed/progress/profile/native.rs)
+keeps the atom snapshot, manifest, stream identity, nested values, nullability,
+source counts, result reference, and evidence witnesses.
+[Notice cases](../../crates/araphor-data/tests/native_managed/progress/profile/notices.rs)
+check exact per-interval values, immutable result bytes, monotonic notice
+revisions, and historical cuts. A new managed publication retains its own
+receipt even when the Notice row stays equal. Production
+[DataFusion predicates](../../crates/araphor-analysis/src/package/builtin.rs)
+own threshold selection. The removed Data notice-selection API is not restored;
+the existing Analysis threshold cases are not new passing evidence.
+
+The final focused native run passes 118 managed cases in 13.00 seconds and six
+lifecycle cases in 0.29 seconds. The old test root, four child files, test module
+declaration, and unused private `ProfileWrite` enum are removed. Typed profile
+validation and public managed publication remain. Result: **Done for profile
+fixture retirement**. No additional incident gain follows from this port.
 
 [Processor history](../../crates/araphor-data/tests/native_managed/progress/history.rs)
 walks the same processor key backward through native snapshots. Each stored

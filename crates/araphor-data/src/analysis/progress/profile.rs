@@ -1,8 +1,7 @@
-
 use snafu::ResultExt as _;
 
-use super :: { AnalysisResultCommitV1 , ProgressWrite , MAX_RESULT_BYTES } ;
-use crate :: { DiscoveryEncodingSnafu , DiscoveryProfileV1 , Result } ;
+use super::{AnalysisResultCommitV1, MAX_RESULT_BYTES};
+use crate::{DiscoveryEncodingSnafu, DiscoveryProfileV1, Result};
 
 mod replay;
 
@@ -20,11 +19,6 @@ pub struct ProfileCommit {
     pub previous: Option<super::super::PackageResultRefV1>,
     pub head: Option<super::super::PackageResultRefV1>,
     pub notice: Option<(u64, u64)>,
-}
-
-enum ProfileWrite {
-    Result(ProgressWrite, Option<super::super::PackageResultRefV1>),
-    Notice(bool),
 }
 
 impl PreparedProfile {
@@ -156,8 +150,3 @@ impl PreparedProfile {
         Ok(output.bytes)
     }
 }
-
-
-
-#[cfg(test)]
-mod tests;
