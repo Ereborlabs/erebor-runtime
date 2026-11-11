@@ -7,7 +7,7 @@ use araphor_data::{
     AnalysisResultCommitV1, AnalysisSelectionV1, AnalysisStore, AnalysisTableRead,
     AnalysisWitnessV1, EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1,
     PackageErrorCodeV1 as Code, ProcessorClassV1, ProcessorScopeV1, RetentionLimitsV1,
-    StorageLimitsV1, StorePositionV1, ValidatedEvidenceBatchV1,
+    StorePositionV1, ValidatedEvidenceBatchV1,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -53,10 +53,17 @@ fn result(scope: &ProcessorScopeV1, expected: u64, consumed: u64) -> AnalysisRes
 fn required_backlog_bytes() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
-    let limits = RetentionLimitsV1 { raw_max_age_ns: None, raw_max_bytes: Some(10) };
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let limits = RetentionLimitsV1 {
+        raw_max_age_ns: None,
+        raw_max_bytes: Some(10),
+    };
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
     let source = identity();
-    let slow = ProcessorScopeV1 { processor_id: "slow".into(), method_version: 1, identity: source.clone() };
+    let slow = ProcessorScopeV1 {
+        processor_id: "slow".into(),
+        method_version: 1,
+        identity: source.clone(),
+    };
     let mut fast = slow.clone();
     fast.processor_id = "fast".into();
     let mut other = slow.clone();
@@ -65,31 +72,62 @@ fn required_backlog_bytes() -> TestResult {
     store.register_processor(&slow, ProcessorClassV1::Required, 1)?;
     store.register_processor(&fast, ProcessorClassV1::Required, 1)?;
     store.register_processor(&other, ProcessorClassV1::Required, 1)?;
-    store.accept_validated_batch(source.clone(), ValidatedEvidenceBatchV1 {
-        cpu_id: 7, first_cursor: 1, last_cursor: 2, intake_utc_ns: 100,
-        framed_records: vec![1; 7].into(), frame_ends: vec![2, 7],
-    })?;
+    store.accept_validated_batch(
+        source.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 7,
+            first_cursor: 1,
+            last_cursor: 2,
+            intake_utc_ns: 100,
+            framed_records: vec![1; 7].into(),
+            frame_ends: vec![2, 7],
+        },
+    )?;
     store.accept_validated_batch(other.identity.clone(), batch(1))?;
-    assert!(matches!(store.accept_validated_batch(source.clone(), batch(3)), Err(araphor_data::Error::ProtectedInputCapacity { resource: "bytes", .. })));
+    assert!(matches!(
+        store.accept_validated_batch(source.clone(), batch(3)),
+        Err(araphor_data::Error::ProtectedInputCapacity {
+            resource: "bytes",
+            ..
+        })
+    ));
     store.commit_result(&result(&slow, 0, 1))?;
     store.commit_result(&result(&fast, 0, 2))?;
-    assert!(store.accept_validated_batch(source.clone(), batch(3)).is_err());
-    store.set_commit_hook(AnalysisCommitStage::BeforeResultCommit, || Err(Code::Denied.error("rollback")))?;
+    assert!(store
+        .accept_validated_batch(source.clone(), batch(3))
+        .is_err());
+    store.set_commit_hook(AnalysisCommitStage::BeforeResultCommit, || {
+        Err(Code::Denied.error("rollback"))
+    })?;
     assert!(store.commit_result(&result(&slow, 1, 2)).is_err());
-    assert!(store.accept_validated_batch(source.clone(), batch(3)).is_err());
+    assert!(store
+        .accept_validated_batch(source.clone(), batch(3))
+        .is_err());
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
-    assert!(store.accept_validated_batch(source.clone(), batch(3)).is_err());
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
+    assert!(store
+        .accept_validated_batch(source.clone(), batch(3))
+        .is_err());
     store.commit_result(&result(&slow, 1, 2))?;
     store.accept_validated_batch(source.clone(), batch(3))?;
     let mut late = slow.clone();
     late.processor_id = "late".into();
-    store.register_processor_guarded(&late, ProcessorClassV1::Required, 1, || Err(Code::Denied.error("registration rollback"))).expect_err("guarded registration");
+    store
+        .register_processor_guarded(&late, ProcessorClassV1::Required, 1, || {
+            Err(Code::Denied.error("registration rollback"))
+        })
+        .expect_err("guarded registration");
     store.accept_validated_batch(source.clone(), batch(4))?;
     store.register_processor(&late, ProcessorClassV1::Required, 1)?;
-    assert!(store.accept_validated_batch(source.clone(), batch(5)).is_err());
+    assert!(store
+        .accept_validated_batch(source.clone(), batch(5))
+        .is_err());
     store.retire_required(&araphor_data::ProcessorRetirementV1 {
-        scope: late, change_id: "retire".into(), reason: "Retire the old consumer.".into(), expected_cursor: 0, cutoff_cursor: 4,
+        scope: late,
+        change_id: "retire".into(),
+        reason: "Retire the old consumer.".into(),
+        expected_cursor: 0,
+        cutoff_cursor: 4,
     })?;
     store.commit_result(&result(&other, 0, 1))?;
     store.accept_validated_batch(source, batch(5))?;
@@ -100,27 +138,50 @@ fn required_backlog_bytes() -> TestResult {
 fn required_backlog_age() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
-    let limits = RetentionLimitsV1 { raw_max_age_ns: Some(50), raw_max_bytes: None };
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let limits = RetentionLimitsV1 {
+        raw_max_age_ns: Some(50),
+        raw_max_bytes: None,
+    };
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
     let source = identity();
-    let scope = ProcessorScopeV1 { processor_id: "age".into(), method_version: 1, identity: source.clone() };
+    let scope = ProcessorScopeV1 {
+        processor_id: "age".into(),
+        method_version: 1,
+        identity: source.clone(),
+    };
     store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
     let mut input = batch(3);
     input.intake_utc_ns = 10;
-    assert_eq!(store.accept_validated_batch(source.clone(), input)?, EvidenceStoreOutcomeV1::Pending);
+    assert_eq!(
+        store.accept_validated_batch(source.clone(), input)?,
+        EvidenceStoreOutcomeV1::Pending
+    );
     store.accept_validated_batch(source.clone(), batch(1))?;
     let mut input = batch(2);
     input.intake_utc_ns = 120;
     store.accept_validated_batch(source.clone(), input.clone())?;
     let mut next = batch(4);
     next.intake_utc_ns = 120;
-    assert!(matches!(store.accept_validated_batch(source.clone(), next.clone()), Err(araphor_data::Error::ProtectedInputCapacity { resource: "age", .. })));
-    assert_eq!(store.accept_validated_batch(source.clone(), input)?, EvidenceStoreOutcomeV1::Accepted);
+    assert!(matches!(
+        store.accept_validated_batch(source.clone(), next.clone()),
+        Err(araphor_data::Error::ProtectedInputCapacity {
+            resource: "age",
+            ..
+        })
+    ));
+    assert_eq!(
+        store.accept_validated_batch(source.clone(), input)?,
+        EvidenceStoreOutcomeV1::Accepted
+    );
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
-    assert!(store.accept_validated_batch(source.clone(), next.clone()).is_err());
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
+    assert!(store
+        .accept_validated_batch(source.clone(), next.clone())
+        .is_err());
     store.commit_result(&result(&scope, 0, 1))?;
-    assert!(store.accept_validated_batch(source.clone(), next.clone()).is_err());
+    assert!(store
+        .accept_validated_batch(source.clone(), next.clone())
+        .is_err());
     store.commit_result(&result(&scope, 1, 3))?;
     store.accept_validated_batch(source, next)?;
     Ok(())
@@ -129,16 +190,34 @@ fn required_backlog_age() -> TestResult {
 #[test]
 fn retired_backlog_expires() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(directory.path().join("data"),
-        RetentionLimitsV1 { raw_max_age_ns: Some(50), raw_max_bytes: Some(3) }, Default::default())?;
+    let store = AnalysisStore::open_with_retention(
+        directory.path().join("data"),
+        RetentionLimitsV1 {
+            raw_max_age_ns: Some(50),
+            raw_max_bytes: Some(3),
+        },
+    )?;
     let source = identity();
-    let mut scope = ProcessorScopeV1 { processor_id: "old".into(), method_version: 1, identity: source.clone() };
+    let mut scope = ProcessorScopeV1 {
+        processor_id: "old".into(),
+        method_version: 1,
+        identity: source.clone(),
+    };
     store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
     store.accept_validated_batch(source.clone(), batch(1))?;
     store.retire_required(&araphor_data::ProcessorRetirementV1 {
-        scope: scope.clone(), change_id: "retire".into(), reason: "Retire the old consumer.".into(), expected_cursor: 0, cutoff_cursor: 1,
+        scope: scope.clone(),
+        change_id: "retire".into(),
+        reason: "Retire the old consumer.".into(),
+        expected_cursor: 0,
+        cutoff_cursor: 1,
     })?;
-    assert_eq!(araphor_data::EvidenceRetentionOwner::new(&store).retain(&source, 151)?.removed_records, 1);
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&store)
+            .retain(&source, 151)?
+            .removed_records,
+        1
+    );
     scope.processor_id = "new".into();
     store.register_processor(&scope, ProcessorClassV1::Required, 2)?;
     let mut input = batch(2);
@@ -148,34 +227,38 @@ fn retired_backlog_expires() -> TestResult {
 }
 
 #[test]
-fn capacity_keeps_maintenance() -> TestResult {
+fn retirement_keeps_maintenance() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
-    let retention = RetentionLimitsV1 { raw_max_age_ns: Some(1), raw_max_bytes: None };
-    let store = AnalysisStore::open_with_limits(&root, retention, Default::default())?;
+    let retention = RetentionLimitsV1 {
+        raw_max_age_ns: Some(1),
+        raw_max_bytes: None,
+    };
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     let source = identity();
-    let scope = ProcessorScopeV1 { processor_id: "required".into(), method_version: 1, identity: source.clone() };
+    let scope = ProcessorScopeV1 {
+        processor_id: "required".into(),
+        method_version: 1,
+        identity: source.clone(),
+    };
     store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
     store.accept_validated_batch(source.clone(), batch(1))?;
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, retention, StorageLimitsV1 {
-        storage_entries: Some(0), ..Default::default()
-    })?;
-    let before = store.meta()?;
-    let mut other = scope.clone();
-    other.processor_id = "other".into();
-    assert!(matches!(store.register_processor(&other, ProcessorClassV1::Optional, 1),
-        Err(araphor_data::Error::StorageCapacity { resource: "storage entries", .. })));
-    assert_eq!(store.meta()?, before);
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     store.retire_required(&araphor_data::ProcessorRetirementV1 {
-        scope, change_id: "retire".into(), reason: "Release the old input.".into(), expected_cursor: 0, cutoff_cursor: 1,
+        scope,
+        change_id: "retire".into(),
+        reason: "Release the old input.".into(),
+        expected_cursor: 0,
+        cutoff_cursor: 1,
     })?;
-    assert_eq!(araphor_data::EvidenceRetentionOwner::new(&store).retain(&source, 102)?.removed_records, 1);
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&store)
+            .retain(&source, 102)?
+            .removed_records,
+        1
+    );
     store.checkpoint()?;
-    let before = store.meta()?;
-    assert!(matches!(store.backup(&root.join("backups").join("refused")), Err(araphor_data::Error::StorageCapacity { .. })));
-    assert!(!root.join("backups").exists());
-    assert_eq!(store.meta()?, before);
     assert!(store.storage_health()?.write_ready);
     Ok(())
 }
@@ -216,11 +299,6 @@ fn durable_raw_recovery_and_backup() -> TestResult {
     assert_eq!(store.meta()?, before);
     assert_eq!(manifest.commit_revision, before.commit_revision);
     assert!(!manifest.database_files.is_empty());
-    let refused = directory.path().join("refused-restore");
-    assert!(AnalysisStore::restore_with_limits(&backup, &refused, StorageLimitsV1 {
-        storage_entries: Some(0), ..Default::default()
-    }).is_err());
-    assert!(!refused.exists());
     let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
     let meta = restored.meta()?;
     assert_eq!(meta.store_uuid, before.store_uuid);
@@ -245,29 +323,16 @@ fn durable_raw_recovery_and_backup() -> TestResult {
 }
 
 #[test]
-fn witness_admission_and_expiry_changes() -> TestResult {
+fn witness_expiry_changes() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
     let retention = RetentionLimitsV1 {
         raw_max_age_ns: Some(1),
         raw_max_bytes: None,
     };
-    let store = AnalysisStore::open_with_limits(
-        &root,
-        retention,
-        StorageLimitsV1 {
-            source_entries: Some(1),
-            ..Default::default()
-        },
-    )?;
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(1))?;
-    let mut foreign = source.clone();
-    foreign.node_id = "node-b".into();
-    assert!(store
-        .accept_validated_batch(foreign.clone(), batch(1))
-        .is_err());
-    assert!(store.source_receipt(&foreign)?.is_none());
     let scope = ProcessorScopeV1 {
         processor_id: "retained".into(),
         method_version: 1,
@@ -323,20 +388,9 @@ fn witness_admission_and_expiry_changes() -> TestResult {
     assert_eq!(usage.charged_bytes, usage.segment_bytes);
     assert_eq!(usage.extra_segment_bytes + 3, usage.segment_bytes);
     drop(store);
-    let store = AnalysisStore::open_with_limits(
-        &root,
-        retention,
-        StorageLimitsV1 {
-            witness_max_bytes: Some(usage.charged_bytes - 1),
-            ..Default::default()
-        },
-    )?;
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     assert_eq!(store.commit_result(&result)?, receipt);
     let before = store.meta()?;
-    assert!(store
-        .accept_validated_batch(source.clone(), batch(2))
-        .is_err());
-    assert_eq!(store.meta()?, before);
     let owner = araphor_data::EvidenceRetentionOwner::new(&store);
     assert_eq!(owner.retain(&source, 199)?.removed_records, 0);
     let expired = owner.retain(&source, 201)?;

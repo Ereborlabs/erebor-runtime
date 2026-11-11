@@ -1,5 +1,9 @@
 use super::*;
-use crate :: { AnalysisContextKeyV1 , ContextSensitivityV1 , NotificationFindingRefV1 , NotificationKeyV1 , NotificationPriorityV1 , NotificationRouteRefV1 , NotificationSinkHealthV1 , UnconfirmedNotificationConcernV1 } ;
+use crate::{
+    AnalysisContextKeyV1, ContextSensitivityV1, NotificationFindingRefV1, NotificationKeyV1,
+    NotificationPriorityV1, NotificationRouteRefV1, NotificationSinkHealthV1,
+    UnconfirmedNotificationConcernV1,
+};
 
 enum Subject<'a> {
     Finding(&'a str, Option<&'a str>),
@@ -124,14 +128,8 @@ fn control_notification_scoped_heads() -> std::result::Result<(), Box<dyn std::e
 #[test]
 fn control_notification_scoped_concerns() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
-        directory.path().join("analysis"),
-        Default::default(),
-        crate::StorageLimitsV1 {
-            notification_routes: Some(32),
-            ..Default::default()
-        },
-    )?;
+    let store =
+        AnalysisStore::open_with_retention(directory.path().join("analysis"), Default::default())?;
     let tenant = [1; 16];
     let concern = [7; 16];
     let version = context(tenant, 1, 1, Subject::Concern(concern, "human"))?;
@@ -156,7 +154,7 @@ fn control_notification_scoped_concerns() -> std::result::Result<(), Box<dyn std
         store
             .notification_states(tenant, NotificationLookup::Finding("same", None))?
             .len(),
-        34
+        39
     );
     Ok(())
 }
@@ -181,14 +179,7 @@ fn notification_lookup_is_unbounded() -> std::result::Result<(), Box<dyn std::er
         40
     );
     drop(store);
-    let store = AnalysisStore::open_with_limits(
-        path,
-        Default::default(),
-        crate::StorageLimitsV1 {
-            notification_routes: Some(usize::MAX),
-            ..Default::default()
-        },
-    )?;
+    let store = AnalysisStore::open_with_retention(path, Default::default())?;
     assert_eq!(
         store
             .notification_states([1; 16], NotificationLookup::Finding("same", None))?

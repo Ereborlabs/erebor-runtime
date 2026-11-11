@@ -1,12 +1,11 @@
-use std::os::unix::fs::DirBuilderExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 
 use super::*;
 
 #[derive(Clone, Copy)]
 enum IntakeFault<'a> {
-    Quota,
     FullDisk(&'a Path),
-    CommitLimit,
+    ExportLimit,
     SegmentLimit,
 }
 
@@ -319,13 +318,12 @@ async fn data_commit_failure() -> Result<()> {
                 .spawn()?;
             let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
             assert_eq!(exit.code(), Some(73));
-            let data = AnalysisStore::open_with_limits(
+            let data = AnalysisStore::open_with_retention(
                 &root,
                 araphor_data::RetentionLimitsV1 {
                     raw_max_age_ns: result.then_some(24 * HOUR),
                     ..Default::default()
                 },
-                Default::default(),
             )?;
             if kind == "metadata" {
                 assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
@@ -686,7 +684,7 @@ impl DataStoreQualification {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let health = data.storage_health()?;
-                if health.write_ready && health.retention_healthy && health.intake_capacity {
+                if health.write_ready && health.retention_healthy {
                     break Ok::<_, Box<dyn StdError>>(());
                 }
                 changes.changed().await?;
@@ -706,7 +704,7 @@ impl DataStoreQualification {
             IntakeFault::FullDisk(root) => Some(root),
             _ => None,
         };
-        let native = matches!(fault, IntakeFault::CommitLimit | IntakeFault::SegmentLimit);
+        let native = matches!(fault, IntakeFault::ExportLimit | IntakeFault::SegmentLimit);
         let directory = match disk {
             Some(root) => {
                 assert_eq!(root.parent(), Some(Path::new("/tmp")));
@@ -727,7 +725,6 @@ impl DataStoreQualification {
         let tls = MtlsFixture::new(false)?;
         let mut config = tls.configuration()?;
         config.evidence_directory = directory.path().join("evidence");
-        config.data_storage.disk_max_bytes = Some(GIB);
         let parts = config.into_parts()?;
         assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
         let data = parts.control.analysis_store().ok_or("data owner absent")?;
@@ -786,26 +783,21 @@ impl DataStoreQualification {
         let backup_path = backup_root.join("saved");
         let managed = directory.path().join("evidence/analysis/backups/saved");
         let manifest = data.backup(&managed)?;
-        fs::DirBuilder::new().mode(0o700).create(&backup_path)?;
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(backup_path.join("segments"))?;
-        fs::copy(
-            managed.join("manifest.json"),
-            backup_path.join("manifest.json"),
-        )?;
-        for file in &manifest.database_files {
-            let relative = PathBuf::from("fjall").join(&file.file_name);
-            let target = backup_path.join(&relative);
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(target.parent().ok_or("checkpoint parent absent")?)?;
-            fs::copy(managed.join(relative), target)?;
-        }
-        for segment in &manifest.segments {
-            let file = format!("segments/{}", segment.file_name);
-            fs::copy(managed.join(&file), backup_path.join(&file))?;
+        let mut pending = vec![(managed.clone(), backup_path.clone())];
+        while let Some((source, target)) = pending.pop() {
+            let metadata = fs::symlink_metadata(&source)?;
+            if metadata.is_dir() {
+                fs::DirBuilder::new().mode(0o700).create(&target)?;
+                for entry in fs::read_dir(&source)? {
+                    let entry = entry?;
+                    pending.push((entry.path(), target.join(entry.file_name())));
+                }
+            } else if metadata.is_file() {
+                fs::copy(&source, &target)?;
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+            } else {
+                return Err("backup fixture contains a non-file entry".into());
+            }
         }
         let saved = AnalysisStore::restore(&backup_path, &backup_root.join("source"))?;
         let saved_meta = saved.meta()?;
@@ -834,52 +826,50 @@ impl DataStoreQualification {
             padding.seek(SeekFrom::End(0))?;
             assert!(matches!(padding.write_all(b"full"),
                 Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
-            assert!(matches!(
-                EvidenceRetentionOwner::new(&data).step(START),
-                Err(araphor_data::Error::StorageCapacity {
-                    resource: "filesystem reserve",
-                    ..
-                })
-            ));
-            assert!(!data.retention_healthy());
-        } else if !native {
-            padding.set_len(GIB)?;
         }
         let full = data.storage_health()?;
-        assert_eq!(full.intake_capacity, native);
-        assert_eq!(full.maintenance_capacity, disk.is_none());
+        assert!(full.write_ready);
         let allocated = padding.metadata()?.blocks() * 512;
         if disk.is_some() {
             assert!(allocated > GIB / 2);
             let destination = directory.path().join("evidence/analysis/backups/blocked");
+            let error = data
+                .backup(&destination)
+                .err()
+                .ok_or("full filesystem backup succeeded")?;
             assert!(matches!(
-                data.backup(&destination),
-                Err(araphor_data::Error::StorageCapacity {
-                    resource: "filesystem reserve",
-                    ..
-                })
+                error,
+                araphor_data::Error::Io { .. } | araphor_data::Error::NativeStorage { .. }
             ));
+            assert!(
+                error.to_string().contains("No space left on device"),
+                "{error}"
+            );
             assert!(!destination.exists());
             assert!(!destination.join("manifest.json").exists());
+            assert!(data.storage_health()?.write_ready);
+            assert_eq!(data.meta()?, before);
             assert_eq!(saved.meta()?, saved_meta);
             assert_eq!(saved.read_page(&identity, 1)?.records.len(), 1);
+            let error = AnalysisStore::restore(&backup_path, &restore_root)
+                .err()
+                .ok_or("full filesystem restore succeeded")?;
             assert!(matches!(
-                AnalysisStore::restore(&backup_path, &restore_root),
-                Err(araphor_data::Error::StorageCapacity {
-                    resource: "copy reserve",
-                    ..
-                })
+                error,
+                araphor_data::Error::Io { .. } | araphor_data::Error::NativeStorage { .. }
             ));
+            assert!(
+                error.to_string().contains("No space left on device"),
+                "{error}"
+            );
             assert!(restore_root.join("restore.pending").is_file());
-            assert!(!restore_root.join("fjall").exists());
-            assert_eq!(fs::read_dir(&restore_root)?.count(), 2);
             assert!(restore_root.join("analysis.lock").is_file());
             assert!(matches!(
                 AnalysisStore::open(&restore_root),
                 Err(araphor_data::Error::AnalysisState { reason, .. })
                     if reason.contains("restore is incomplete")
             ));
-            assert!(!restore_root.join("fjall").exists());
+            assert!(AnalysisStore::restore(&backup_path, &restore_root).is_err());
         }
         let _signal = if native {
             Some(tokio::signal::unix::signal(
@@ -902,18 +892,29 @@ impl DataStoreQualification {
             Ok(tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?)
         }
         .await;
-        let catalogue = matches!(fault, IntakeFault::CommitLimit).then(|| data.checkpoint());
+        let failed = directory.path().join("evidence/analysis/backups/failed");
+        let checkpoint = matches!(fault, IntakeFault::ExportLimit).then(|| data.backup(&failed));
         if native {
             setrlimit(Resource::Fsize, prior)?;
         }
-        if let Some(catalogue) = catalogue {
+        if let Some(checkpoint) = checkpoint {
             let NodeControlMessage::EvidenceAck(ack) = received?? else {
                 return Err("raw acceptance did not return its ACK".into());
             };
             assert_eq!(ack.contiguous_cursor, 2);
             observations.acknowledge_evidence(ack)?;
             assert_eq!(observations.pending_evidence_records(), 0);
-            assert!(catalogue.is_err());
+            let error = checkpoint
+                .err()
+                .ok_or("file-size-limited checkpoint export succeeded")?;
+            assert!(matches!(
+                error,
+                araphor_data::Error::Io { .. } | araphor_data::Error::NativeStorage { .. }
+            ));
+            assert!(error.to_string().contains("File too large"), "{error}");
+            assert!(!failed.exists());
+            assert!(data.storage_health()?.write_ready);
+            assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
             assert!(changed.has_changed()?);
             assert_eq!(
                 data.source_receipt(&identity)?
@@ -938,8 +939,8 @@ impl DataStoreQualification {
             println!(
                 "{}",
                 serde_json::json!({
-                    "case": "data-catalogue-recovery", "result": "PASS",
-                    "raw_ack_before_catalogue": true, "contiguous_cursor": 2,
+                    "case": "data-checkpoint-export-recovery", "result": "PASS",
+                    "raw_ack_before_export_failure": true, "contiguous_cursor": 2,
                     "proof_kind": "synthetic-mtls", "kernel_evidence": false,
                 })
             );
@@ -959,17 +960,23 @@ impl DataStoreQualification {
                 assert!(source.message().contains("commit Data write"), "{source}");
             }
         } else {
-            assert_eq!(source.code(), tonic::Code::ResourceExhausted);
+            assert_eq!(source.code(), tonic::Code::Unavailable);
+            assert!(
+                source.message().contains("No space left on device"),
+                "{source}"
+            );
         }
         assert_eq!(*changed.borrow(), before.commit_revision);
         assert_eq!(observations.pending_evidence_records(), 1);
-        assert_eq!(data.storage_health()?.write_ready, !native);
+        assert!(!data.storage_health()?.write_ready);
         connection.policy_inventory(None, Vec::new()).await?;
-        if native {
-            data.recover()?;
-            assert!(data.storage_health()?.write_ready);
-            assert!(changed.has_changed()?);
+        if disk.is_some() {
+            padding.set_len(0)?;
+            padding.sync_all()?;
         }
+        data.recover()?;
+        assert!(data.storage_health()?.write_ready);
+        assert!(changed.has_changed()?);
         assert_eq!(data.meta()?, before);
         assert_eq!(data.source_status(&identity)?, status);
         assert_eq!(
@@ -979,9 +986,6 @@ impl DataStoreQualification {
         connection.policy_inventory(None, Vec::new()).await?;
         padding.set_len(0)?;
         padding.sync_all()?;
-        if disk.is_some() {
-            data.recover()?;
-        }
         let restored = AnalysisStore::restore(&backup_path, &backup_root.join("retry"))?;
         assert_eq!(restored.meta()?, saved_meta);
         assert_eq!(restored.meta()?.commit_revision, manifest.commit_revision);
@@ -1020,8 +1024,8 @@ impl DataStoreQualification {
             serde_json::json!({
                 "case": "data-capacity-recovery", "result": "PASS",
                 "filesystem_full": disk.is_some(), "padding_allocated_bytes": allocated,
-                "native_commit_failure": native,
-                "copy_reserve_rejected": disk.is_some(),
+                "raw_append_failure": native,
+                "copy_io_rejected": disk.is_some(),
                 "rejected_health": full, "recovered_usage": data.storage_usage()?,
                 "source_identity": identity, "commit_revision": after.commit_revision,
                 "contiguous_cursor": 2, "retained_count": 2,
@@ -1030,14 +1034,6 @@ impl DataStoreQualification {
         );
         Ok(())
     }
-}
-
-#[tokio::test]
-async fn data_capacity_recovery() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    DataStoreQualification::new(directory.path().join("result"))
-        .capacity_recovery(IntakeFault::Quota)
-        .await
 }
 
 #[tokio::test]
@@ -1051,7 +1047,7 @@ async fn data_full_disk() -> Result<()> {
 
 #[tokio::test]
 async fn data_intake_failure() -> Result<()> {
-    for kind in ["segment", "metadata"] {
+    for kind in ["segment", "export"] {
         let mut child = tokio::process::Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
@@ -1074,7 +1070,7 @@ async fn data_intake_child() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let fault = match std::env::var("ARAPHOR_INTAKE_KIND")?.as_str() {
         "segment" => IntakeFault::SegmentLimit,
-        "metadata" => IntakeFault::CommitLimit,
+        "export" => IntakeFault::ExportLimit,
         _ => return Err("unknown intake fault".into()),
     };
     DataStoreQualification::new(directory.path().join("result"))
@@ -1417,123 +1413,5 @@ async fn data_retirement_startup() -> Result<()> {
     let data = parts.control.analysis_store().ok_or("data owner absent")?;
     assert_eq!(data.meta()?, before);
     assert_eq!(data.processor_retirement(&request.scope)?, Some(retirement));
-    Ok(())
-}
-
-#[tokio::test]
-async fn data_capacity_retry() -> Result<()> {
-    for seeded in [false, true] {
-        let tls = MtlsFixture::new(false)?;
-        let case = DataStoreQualification::new(tls.path().join("result"));
-        let observations = EffectObservationStore::durable(
-            8,
-            tls.path().join("wal"),
-            EvidenceWalLimits::default(),
-            ObservationCanonicalizer::new(
-                EvidenceIdV1::new(1, 2),
-                EvidenceIdV1::new(3, 4),
-                1,
-                [7; 16].into(),
-            )?,
-        )?;
-        if seeded {
-            let parts = tls.configuration()?.into_parts()?;
-            assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
-            let server = tls.start(parts.control).await?;
-            let mut connection = case.connect(&tls, &server).await?;
-            DataStoreQualification::record(&observations, 1);
-            connection
-                .send_evidence_batch(observations.next_evidence_batch().ok_or("batch absent")?)
-                .await?;
-            let ack = DataStoreQualification::ack(&mut connection).await?;
-            assert_eq!(ack.contiguous_cursor, 1);
-            observations.acknowledge_evidence(ack)?;
-            drop(connection);
-            server.shutdown().await?;
-            drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
-            drop(reopen_control_store(&tls.path().join("control-store")).await?);
-        }
-        let mut config = tls.configuration()?;
-        config.data_storage.policy_reserve_bytes = Some(u64::MAX / 4);
-        if seeded {
-            config.data_retention.raw_max_age_ns = Some(24 * HOUR);
-        }
-        let parts = config.into_parts()?;
-        assert!(parts.data_error.is_none());
-        let data = parts.control.analysis_store().ok_or("data owner absent")?;
-        if seeded {
-            assert!(matches!(
-                EvidenceRetentionOwner::new(&data).step(START),
-                Err(araphor_data::Error::StorageCapacity {
-                    resource: "filesystem reserve",
-                    ..
-                })
-            ));
-            assert!(!data.retention_healthy());
-        }
-        let before = data.meta()?;
-        let changed = data.subscribe_revision();
-        let server = tls.start(parts.control).await?;
-        let cursor = if seeded { 2 } else { 1 };
-        DataStoreQualification::record(&observations, cursor);
-        let batch = observations.next_evidence_batch().ok_or("batch absent")?;
-        let mut connection = case.connect(&tls, &server).await?;
-        connection.report_readiness(true, true).await?;
-        connection.send_evidence_batch(batch.clone()).await?;
-        let rejected =
-            tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
-        assert!(
-            matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::ResourceExhausted)
-        );
-        if seeded {
-            let snapshot = observations.coverage_snapshot().ok_or("coverage absent")?;
-            let interval = snapshot
-                .current_intervals()
-                .into_iter()
-                .next()
-                .ok_or("source coverage absent")?;
-            let coverage = connection.send_coverage_report(&snapshot, &interval).await;
-            assert!(
-                matches!(coverage, Err(mithril_node::Error::ControlRpc { source, .. })
-                    if source.code() == tonic::Code::ResourceExhausted)
-            );
-        }
-        assert_eq!(observations.pending_evidence_records(), 1);
-        assert_eq!(data.meta()?, before);
-        assert_eq!(*changed.borrow(), before.commit_revision);
-        connection.policy_inventory(None, Vec::new()).await?;
-        drop(connection);
-        server.shutdown().await?;
-        drop(data);
-        drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
-        drop(reopen_control_store(&tls.path().join("control-store")).await?);
-
-        let parts = tls.configuration()?.into_parts()?;
-        assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
-        let data = parts.control.analysis_store().ok_or("data owner absent")?;
-        let trust = parts.control.trust_bundle_owner().current()?;
-        let server = tls.start(parts.control).await?;
-        ControlServerFixture::wait_context(
-            &data,
-            &araphor_data::AnalysisContextKeyV1 {
-                tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-                owner_id: "mithril-control/trust".into(),
-                entity_key: b"trust".to_vec(),
-                lifetime_key: trust.bundle_digest.into_bytes(),
-                owner_revision: trust.generation,
-            },
-        )
-        .await?;
-        let baseline = data.meta()?.commit_revision;
-        let mut connection = case.connect(&tls, &server).await?;
-        connection.send_evidence_batch(batch).await?;
-        let ack = DataStoreQualification::ack(&mut connection).await?;
-        assert_eq!(ack.contiguous_cursor, cursor);
-        observations.acknowledge_evidence(ack)?;
-        assert_eq!(observations.pending_evidence_records(), 0);
-        assert_eq!(data.meta()?.commit_revision, baseline + 1);
-        drop(connection);
-        server.shutdown().await?;
-    }
     Ok(())
 }

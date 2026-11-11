@@ -2147,14 +2147,13 @@ fn trace_status(error: impl Into<crate::Error>) -> Status {
             araphor_data::Error::TraceInvalid { .. } => tonic::Code::InvalidArgument,
             araphor_data::Error::AnalysisConflict { .. } => tonic::Code::AlreadyExists,
             araphor_data::Error::RetainedRangeExpired { .. } => tonic::Code::OutOfRange,
-            araphor_data::Error::StorageCapacity { .. }
-            | araphor_data::Error::ProtectedInputCapacity { .. }
+            araphor_data::Error::ProtectedInputCapacity { .. }
             | araphor_data::Error::AnalysisBusy { .. } => tonic::Code::ResourceExhausted,
             araphor_data::Error::AnalysisReadCancelled { .. } => tonic::Code::Cancelled,
             araphor_data::Error::AnalysisReadDeadline { .. } => tonic::Code::DeadlineExceeded,
-            araphor_data::Error::AnalysisState { .. } | araphor_data::Error::NativeState { .. } | araphor_data::Error::Json { .. } => {
-                tonic::Code::DataLoss
-            }
+            araphor_data::Error::AnalysisState { .. }
+            | araphor_data::Error::NativeState { .. }
+            | araphor_data::Error::Json { .. } => tonic::Code::DataLoss,
             araphor_data::Error::RetentionUnavailable { .. }
             | araphor_data::Error::NativeStorage { .. }
             | araphor_data::Error::Io { .. } => tonic::Code::Unavailable,
@@ -3038,8 +3037,8 @@ mod tests {
                 tonic::Code::AlreadyExists,
             ),
             (
-                araphor_data::Error::StorageCapacity {
-                    resource: "diagnostic bytes",
+                araphor_data::Error::ProtectedInputCapacity {
+                    resource: "bytes",
                     location: snafu::Location::default(),
                 },
                 tonic::Code::ResourceExhausted,
@@ -3070,14 +3069,12 @@ mod tests {
         for (error, expected) in errors {
             assert_eq!(super::trace_status(error).code(), expected);
         }
-        let error = araphor_observability::Error::from(araphor_data::Error::StorageCapacity {
-            resource: "diagnostic bytes",
+        let error = araphor_observability::Error::from(araphor_data::Error::Io {
+            path: "diagnostic.segment".into(),
+            source: std::io::Error::from(std::io::ErrorKind::StorageFull),
             location: snafu::Location::default(),
         });
-        assert_eq!(
-            super::trace_status(error).code(),
-            tonic::Code::ResourceExhausted
-        );
+        assert_eq!(super::trace_status(error).code(), tonic::Code::Unavailable);
     }
 
     #[tokio::test]

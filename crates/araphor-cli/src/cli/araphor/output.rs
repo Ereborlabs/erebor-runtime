@@ -315,8 +315,11 @@ impl Output {
     }
 
     fn health(text: &mut String, health: &wire::QueryHealth) {
-        let _ = writeln!(text, "health\twrite_ready={}\tretention_healthy={}\tintake_capacity={}\tmaintenance_capacity={}",
-            health.write_ready, health.retention_healthy, health.intake_capacity, health.maintenance_capacity);
+        let _ = writeln!(
+            text,
+            "health\twrite_ready={}\tretention_healthy={}",
+            health.write_ready, health.retention_healthy
+        );
     }
 
     fn coverage(text: &mut String, items: &[wire::QueryCoverage]) {
@@ -614,7 +617,6 @@ mod tests {
         let suffix = "coverage\tstate=Gap\\n\tcpu=7\tnode=node\\n\tsource=01010101-0101-0101-0101-010101010101\tcontiguous=11\tfloor=5\texpired=[]\trecovery=[]\tpending=[SourceGap { first_cursor: 1, last_cursor: 3, commit_revision: 2 }]\n";
         let health = wire::QueryHealth {
             write_ready: true,
-            intake_capacity: true,
             ..Default::default()
         };
         let error = wire::QueryError {
@@ -631,7 +633,7 @@ mod tests {
             (
                 wire::query_frame::Payload::Health(health),
                 wire::trace_frame::Payload::Health(health),
-                "health\twrite_ready=true\tretention_healthy=false\tintake_capacity=true\tmaintenance_capacity=false\n",
+                "health\twrite_ready=true\tretention_healthy=false\n",
             ),
             (
                 wire::query_frame::Payload::Error(error.clone()),

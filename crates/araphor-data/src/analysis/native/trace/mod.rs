@@ -5,7 +5,10 @@ use snafu::ResultExt as _;
 
 use super::{records::Records, DataView, DataWrite, NativeStore};
 use crate::analysis::raw::{RawIdentity, RawReceipt, RawSource};
-use crate :: { NativeStateSnafu , NativeStorageSnafu , Result , TraceIntentPageV1 , TraceIntentV1 , TraceOutputReceiptV1 , TraceStateV1 } ;
+use crate::{
+    NativeStateSnafu, NativeStorageSnafu, Result, TraceIntentPageV1, TraceIntentV1,
+    TraceOutputReceiptV1, TraceStateV1,
+};
 
 mod raw;
 mod recovery;
@@ -369,8 +372,8 @@ impl DataWrite<'_> {
             .checked_mul(crate::analysis::quota::TRACE_RESERVE)
             .and_then(|added| raw.budget.trace_reserve.checked_add(added))
             .ok_or_else(|| {
-                crate::StorageCapacitySnafu {
-                    resource: "diagnostic physical reserve",
+                crate::NativeStateSnafu {
+                    field: "diagnostic byte reserve",
                 }
                 .build()
             })?;
@@ -380,35 +383,12 @@ impl DataWrite<'_> {
             .checked_mul(2)
             .and_then(|added| raw.budget.trace_slots.checked_add(added))
             .ok_or_else(|| {
-                crate::StorageCapacitySnafu {
-                    resource: "diagnostic storage entries",
+                crate::NativeStateSnafu {
+                    field: "diagnostic slot reserve",
                 }
                 .build()
             })?;
-        let limits = self.store.storage;
-        let usage = crate::StorageUsageV1::inspect(&self.store.root, 0, slots, Some(&raw), limits)?;
-        limits.check_append(usage, bytes)?;
         drop(raw);
-        if limits.diagnostic_sources.is_some() || limits.tenant_diagnostic_sources.is_some() {
-            let sources = || {
-                self.raw
-                    .sources
-                    .values()
-                    .filter(|source| source.receipt.evidence().is_none())
-            };
-            let total = sources()
-                .count()
-                .checked_add(intent.bindings.len())
-                .ok_or_else(|| {
-                    crate::StorageCapacitySnafu {
-                        resource: "diagnostic sources",
-                    }
-                    .build()
-                })?;
-            let scoped = sources().filter(|source| matches!(&source.receipt, RawReceipt::Diagnostic(receipt) if receipt.identity.tenant_id == intent.tenant_id))
-                .count().checked_add(intent.bindings.len()).ok_or_else(|| crate::StorageCapacitySnafu { resource: "tenant diagnostic sources" }.build())?;
-            limits.check_sources(total, scoped, true)?;
-        }
         let state = TraceStateV1 {
             tenant_id: intent.tenant_id,
             request_id: intent.request_id,

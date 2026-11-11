@@ -937,41 +937,6 @@ mod tests {
     }
 
     #[test]
-    fn control_context_retries_write() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let store = ControlStore::open(directory.path().join("control"))?;
-        let data = Arc::new(AnalysisStore::open_with_limits(
-            directory.path().join("data"),
-            Default::default(),
-            araphor_data::StorageLimitsV1 {
-                tenant_revisions: Some(0),
-                ..Default::default()
-            },
-        )?);
-        let allowed = [AllowedNodeIdentity {
-            node_id: "node-a".into(),
-            certificate_sha256: "a".repeat(64),
-            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
-        }];
-        store.install_trust_generation(TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "a".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        })?;
-        let mut owner = ControlContextOwner::new(store, data.clone(), &allowed)?;
-        for _ in 0..2 {
-            assert!(
-                matches!(owner.reconcile(), Err(crate::Error::DataStore { source, .. })
-                if matches!(*source, araphor_data::Error::StorageCapacity { .. }))
-            );
-            assert_eq!(owner.revision, None);
-            assert_eq!(data.meta()?.commit_revision, 0);
-        }
-        Ok(())
-    }
-
-    #[test]
     fn control_context_captured_revision() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path().join("control"))?;

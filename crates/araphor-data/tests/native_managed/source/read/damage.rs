@@ -212,20 +212,28 @@ fn source_scalar_scope_budget() -> TestResult {
         Some([schemas["graph_manifest"].index_of("snapshot")?].into()),
     )]
     .into();
-    assert!(matches!(
-        store.read_tables(
-            &selection,
-            AnalysisTableRead {
-                requests: &unsupported,
-                ..read
-            },
-            AnalysisExtractLimits::default(),
-            &control
+    let result = store.read_tables(
+        &selection,
+        AnalysisTableRead {
+            requests: &unsupported,
+            ..read
+        },
+        AnalysisExtractLimits::default(),
+        &control,
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(Error::Package {
+                code: Code::Missing,
+                field: "Source Graph snapshot",
+                ..
+            })
         ),
-        Err(Error::Package {
-            code: Code::Unsupported,
-            ..
-        })
-    ));
+        "snapshot projection: {:?}",
+        result
+            .as_ref()
+            .map(|page| page.tables.keys().collect::<Vec<_>>())
+    );
     Ok(())
 }

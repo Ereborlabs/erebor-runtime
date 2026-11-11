@@ -105,7 +105,6 @@ impl NativeStore {
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageBundle>> {
         control.check()?;
-        let _permit = self.reserve_reader()?;
         self.view()?
             .package_image(tenant, package, revision, control)
     }
@@ -117,7 +116,6 @@ impl NativeStore {
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageBundle>> {
         control.check()?;
-        let _permit = self.reserve_reader()?;
         self.view()?.retained_package_image(tenant, pin, control)
     }
 }

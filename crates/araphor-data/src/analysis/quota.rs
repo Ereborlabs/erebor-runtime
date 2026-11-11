@@ -1,6 +1,3 @@
-
-
-
 pub(super) const TRACE_RESERVE: u64 = 16 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct WitnessUsageV1 {
@@ -15,7 +12,12 @@ pub struct WitnessUsageV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisContextKeyV1 , AnalysisContextRefV1 , AnalysisContextVersionV1 , AnalysisResultCommitV1 , AnalysisWitnessV1 , ContextSensitivityV1 , EvidenceIntakeIdentityV1 , ProcessorClassV1 , ProcessorScopeV1 , StorageLimitsV1 , TraceBatchV1 , TraceFrameKindV1 , TraceFrameV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
+        AnalysisResultCommitV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceIntakeIdentityV1,
+        ProcessorClassV1, ProcessorScopeV1, TraceBatchV1, TraceFrameKindV1, TraceFrameV1,
+        ValidatedEvidenceBatchV1,
+    };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -36,14 +38,14 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_witness_limits() -> TestResult {
+    fn analysis_store_witness_usage() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let limits = super::super::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         };
-        let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let mut store = AnalysisStore::open_with_retention(&root, limits)?;
         let identity = EvidenceIntakeIdentityV1 {
             node_id: "n".repeat(128),
             ..crate::analysis::tests::identity()
@@ -89,18 +91,6 @@ mod tests {
             ..crate::analysis::tests::result(scope, "r".into())
         };
         let witness_bytes = file_bytes + context_bytes;
-        store.storage.witness_max_bytes = Some(witness_bytes - 1);
-        let before = store.meta()?;
-        assert!(matches!(
-            store.commit_result(&input),
-            Err(crate::Error::StorageCapacity {
-                resource: "tenant witness bytes",
-                ..
-            })
-        ));
-        assert_eq!(store.meta()?, before);
-        assert!(store.read_result([1; 16], "r")?.is_none());
-        store.storage.witness_max_bytes = Some(witness_bytes);
         let receipt = store.commit_result(&input)?;
         assert_eq!(store.commit_result(&input)?, receipt);
         let mut second = input;
@@ -108,18 +98,6 @@ mod tests {
         second.result_id = "s".into();
         store.commit_result(&second)?;
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
-        {
-            let reader = store.reader()?;
-            let plan: String = reader.get()?.query_row(
-                &format!("EXPLAIN {}", AnalysisStore::WITNESS_USAGE),
-                params![[1_u8; 16].as_slice(), 2_u64, [1_u8; 16].as_slice()],
-                |row| row.get(1),
-            )?;
-            assert!(
-                !plan.contains("DELIM_JOIN"),
-                "witness quota correlates each retained row:\n{plan}"
-            );
-        }
         for (tenant, now, expected) in [
             (1_u8, 2_u64, witness_bytes),
             (1, 100, context_bytes),
@@ -143,25 +121,7 @@ mod tests {
                 usage.referenced_bytes + usage.extra_segment_bytes,
                 usage.segment_bytes
             );
-            for limit in [expected.saturating_sub(1), expected] {
-                store.storage.witness_max_bytes = Some(limit);
-                let mut writer = store.writer()?;
-                let transaction = writer.get_mut()?.transaction()?;
-                let checked = store.check_witnesses(&transaction, [tenant; 16], now);
-                if limit < expected {
-                    assert!(matches!(
-                        checked,
-                        Err(crate::Error::StorageCapacity {
-                            resource: "tenant witness bytes",
-                            ..
-                        })
-                    ));
-                } else {
-                    checked?;
-                }
-            }
         }
-        store.storage.witness_max_bytes = Some(witness_bytes);
         let retention = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(
             retention.retain(&second.scope.identity, 3)?.removed_records,
@@ -176,7 +136,7 @@ mod tests {
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
         AnalysisStore::validate_state(store.writer()?.get()?, &store.root)?;
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
         AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         Ok(())
@@ -190,7 +150,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(32 * 1024 * 1024),
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let identity = EvidenceIntakeIdentityV1 {
             node_id: "n".into(),
             ..crate::analysis::tests::identity()
@@ -262,7 +222,7 @@ mod tests {
         assert_eq!(expired.referenced_bytes, 8192);
         assert_eq!(expired.segment_bytes, segment_bytes);
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         assert_eq!(store.witness_usage(identity.tenant_id, 100)?, expired);
         let owner = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(owner.retain(&identity, 100)?.removed_records, 0);
@@ -281,67 +241,11 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_revision_limits() -> TestResult {
-        let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open_with_limits(
-            directory.path().join("analysis"),
-            Default::default(),
-            StorageLimitsV1 {
-                retained_revisions: Some(4096),
-                tenant_revisions: Some(1024),
-                ..Default::default()
-            },
-        )?;
-        let mut writer = store.writer()?;
-        let transaction = writer.get_mut()?.transaction()?;
-        // Only relation counts are under test. The fixture transaction is not committed.
-        for tenant in 1_u8..=4 {
-            transaction.execute(
-                "INSERT INTO context_versions SELECT ?, 'p', 'e'::BLOB, 'l'::BLOB, i,
-                 1, NULL, 'tenant', 'b'::BLOB, 1,
-                 (HEX(?) || ':' || i::VARCHAR)::BLOB FROM range(1, 1025) t(i)",
-                params![[tenant; 16].as_slice(), [tenant; 16].as_slice()],
-            )?;
-            store.check_revision_limits(&transaction, [tenant; 16])?;
-        }
-        transaction.execute(
-            "INSERT INTO context_versions VALUES (?, 'p', 'e'::BLOB, 'l'::BLOB, 1025,
-             1, NULL, 'tenant', 'b'::BLOB, 1, 'quota-4-1025'::BLOB)",
-            params![[4_u8; 16].as_slice()],
-        )?;
-        assert!(matches!(
-            store.check_revision_limits(&transaction, [4; 16]),
-            Err(crate::Error::StorageCapacity {
-                resource: "tenant retained revisions",
-                ..
-            })
-        ));
-        assert!(matches!(
-            store.check_revision_limits(&transaction, [5; 16]),
-            Err(crate::Error::StorageCapacity {
-                resource: "global retained revisions",
-                ..
-            })
-        ));
-        transaction.rollback()?;
-        drop(writer);
-        assert_eq!(store.meta()?.commit_revision, 0);
-        Ok(())
-    }
-
-    #[test]
     fn raw_projection_keeps_terminal_reserves() -> TestResult {
         use super::super::raw::tests::{trace_intent, trace_terminal};
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let store = AnalysisStore::open_with_limits(
-            &root,
-            Default::default(),
-            StorageLimitsV1 {
-                witness_max_bytes: Some(1024 * 1024),
-                ..Default::default()
-            },
-        )?;
+        let store = AnalysisStore::open(&root)?;
         let intent = trace_intent()?;
         let identity = &intent.bindings[0].identity;
         store.accept_trace(&intent)?;
@@ -413,14 +317,23 @@ mod tests {
                 commit_revision, ('tenant2:' || HEX(version_key))::BLOB FROM context_versions",
             params![[2u8; 16].as_slice()],
         )?;
-        assert_eq!(AnalysisStore::revision_usage(&transaction, [2; 16])?, (2, 1));
+        assert_eq!(
+            AnalysisStore::revision_usage(&transaction, [2; 16])?,
+            (2, 1)
+        );
         transaction.execute(
             "DELETE FROM context_versions WHERE tenant_id = ?",
             params![[1u8; 16].as_slice()],
         )?;
-        assert_eq!(AnalysisStore::revision_usage(&transaction, [1; 16])?, (1, 0));
+        assert_eq!(
+            AnalysisStore::revision_usage(&transaction, [1; 16])?,
+            (1, 0)
+        );
         transaction.rollback()?;
-        assert_eq!(AnalysisStore::revision_usage(writer.get()?, [1; 16])?, before);
+        assert_eq!(
+            AnalysisStore::revision_usage(writer.get()?, [1; 16])?,
+            before
+        );
         AnalysisStore::validate_state(writer.get()?, &root)?;
         drop(writer);
         drop(store);

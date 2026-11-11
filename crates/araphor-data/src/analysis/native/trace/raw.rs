@@ -1,6 +1,11 @@
-use super :: { DataView , NativeStateSnafu , NativeStore , RawIdentity , RawReceipt , Records , Result , Traces } ;
+use super::{
+    DataView, NativeStateSnafu, NativeStore, RawIdentity, RawReceipt, Records, Result, Traces,
+};
 use crate::analysis::raw::{RawBatch, RawKind};
-use crate :: { AnalysisReadControl , EvidenceStoreOutcomeV1 , TraceBatchV1 , TraceIdentityV1 , TraceOutputPageV1 , TraceOutputReceiptV1 } ;
+use crate::{
+    AnalysisReadControl, EvidenceStoreOutcomeV1, TraceBatchV1, TraceIdentityV1, TraceOutputPageV1,
+    TraceOutputReceiptV1,
+};
 
 impl DataView {
     pub fn trace_receipt(
@@ -174,7 +179,6 @@ impl NativeStore {
     ) -> Result<TraceOutputPageV1> {
         identity.validate()?;
         let _maintenance = self.maintenance.read_until(control)?;
-        let _permit = self.reserve_reader()?;
         self.check_trace_binding(identity, control)?;
         if view.store_uuid != self.view()?.store_uuid {
             return NativeStateSnafu {

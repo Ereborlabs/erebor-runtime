@@ -100,8 +100,12 @@ impl DataStoreQualification {
             "the inspection output already exists",
         )?;
         self.check(
-            fs::symlink_metadata(root.join("fjall/version"))?.file_type().is_file()
-                && fs::symlink_metadata(root.join("fjall/keyspaces/0/current"))?.file_type().is_file(),
+            fs::symlink_metadata(root.join("fjall/version"))?
+                .file_type()
+                .is_file()
+                && fs::symlink_metadata(root.join("fjall/keyspaces/0/current"))?
+                    .file_type()
+                    .is_file(),
             "inspection requires an existing data file",
         )?;
         let data = AnalysisStore::open(root)?;
@@ -300,13 +304,12 @@ mod tests {
             serde_json::from_slice(&fs::read(recovered.output.join("result.json"))?)?;
         assert_eq!(current.sources[0].record_count, 301);
         assert_eq!(current.sources[0].last_cursor, 301);
-        let store = AnalysisStore::open_with_limits(
+        let store = AnalysisStore::open_with_retention(
             &root,
             araphor_data::RetentionLimitsV1 {
                 raw_max_age_ns: Some(24 * HOUR),
                 ..Default::default()
             },
-            Default::default(),
         )?;
         let mut read_bytes = MAX_INSPECT_BYTES;
         assert!(SourceProof::read(
@@ -344,9 +347,13 @@ impl DataStoreQualification {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => return Err(error.into()),
                 };
-                if metadata.is_dir() { pending.push(path); }
-                else if metadata.is_file() { files.push(path); }
-                else { return Err("native storage contains a non-file entry".into()); }
+                if metadata.is_dir() {
+                    pending.push(path);
+                } else if metadata.is_file() {
+                    files.push(path);
+                } else {
+                    return Err("native storage contains a non-file entry".into());
+                }
             }
         }
         files.sort_unstable();
@@ -358,9 +365,20 @@ impl DataStoreQualification {
         let mut journals = 0u64;
         for path in Self::native_paths(root)? {
             let bytes = Self::file_size(&path)?;
-            let name = path.file_name().and_then(|name| name.to_str()).ok_or("native file name")?;
-            let total = if path.parent() == Some(root.join("fjall").as_path()) && (name.ends_with(".jnl") || name.ends_with(".jnl.meta")) { &mut journals } else { &mut index };
-            *total = total.checked_add(bytes).ok_or("native file size overflow")?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("native file name")?;
+            let total = if path.parent() == Some(root.join("fjall").as_path())
+                && (name.ends_with(".jnl") || name.ends_with(".jnl.meta"))
+            {
+                &mut journals
+            } else {
+                &mut index
+            };
+            *total = total
+                .checked_add(bytes)
+                .ok_or("native file size overflow")?;
         }
         Ok((index, journals))
     }
@@ -374,11 +392,19 @@ impl DataStoreQualification {
             let mut bytes = 0u64;
             loop {
                 let count = file.read(&mut buffer)?;
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
                 digest.update(&buffer[..count]);
-                bytes = bytes.checked_add(count as u64).ok_or("native proof size overflow")?;
+                bytes = bytes
+                    .checked_add(count as u64)
+                    .ok_or("native proof size overflow")?;
             }
-            proof.push((path.strip_prefix(root)?.to_owned(), bytes, digest.finalize().into()));
+            proof.push((
+                path.strip_prefix(root)?.to_owned(),
+                bytes,
+                digest.finalize().into(),
+            ));
         }
         Ok(proof)
     }

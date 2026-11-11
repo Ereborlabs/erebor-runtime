@@ -1,6 +1,9 @@
 use super::{records::Records, DataView};
 use crate::analysis::raw::RawIdentity;
-use crate :: { AnalysisSourceReceiptV1 , AnalysisSourceStatusV1 , CoverageReportRef , EvidenceIntakeIdentityV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
+use crate::{
+    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, CoverageReportRef, EvidenceIntakeIdentityV1,
+    NativeStateSnafu, NativeStorageSnafu, Result,
+};
 use fjall::BranchSnapshot;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
@@ -17,7 +20,6 @@ impl super::NativeStore {
         source: [u8; 16],
         epoch: u64,
     ) -> Result<Option<EvidenceIntakeIdentityV1>> {
-        let _permit = self.reserve_reader()?;
         self.view()?.source_binding(tenant, node, source, epoch)
     }
 
@@ -25,7 +27,6 @@ impl super::NativeStore {
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
-        let _permit = self.reserve_reader()?;
         self.view()?.source_receipt(identity)
     }
 
@@ -33,16 +34,23 @@ impl super::NativeStore {
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceStatusV1>> {
-        let _permit = self.reserve_reader()?;
         self.view()?.source_status(identity)
     }
 
-    pub fn source_page(&self, tenant: [u8; 16], after: Option<&EvidenceIntakeIdentityV1>) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+    pub fn source_page(
+        &self,
+        tenant: [u8; 16],
+        after: Option<&EvidenceIntakeIdentityV1>,
+    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
         use std::ops::Bound::{Excluded, Included};
-        if tenant == [0; 16] || after.is_some_and(|source| source.tenant_id != tenant || !source.valid()) {
-            return crate::Error::reject_path(&self.root, "the source page tenant or cursor is invalid");
+        if tenant == [0; 16]
+            || after.is_some_and(|source| source.tenant_id != tenant || !source.valid())
+        {
+            return crate::Error::reject_path(
+                &self.root,
+                "the source page tenant or cursor is invalid",
+            );
         }
-        let _permit = self.reserve_reader()?;
         let view = self.view()?;
         let prefix = [b"\0".as_slice(), &tenant].concat();
         let first = after.map_or_else(|| Included(prefix.clone()), |source| Excluded(source.key()));
@@ -50,10 +58,23 @@ impl super::NativeStore {
             Some(next) => [b"\0".as_slice(), &next.to_be_bytes()].concat(),
             None => vec![1],
         };
-        view.raw.sources.range((first, Excluded(last)))
+        view.raw
+            .sources
+            .range((first, Excluded(last)))
             .take(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
-            .map(|(_, source)| source.receipt.evidence().map(|receipt| receipt.identity.clone())
-                .ok_or_else(|| NativeStateSnafu { field: "source page kind" }.build())).collect()
+            .map(|(_, source)| {
+                source
+                    .receipt
+                    .evidence()
+                    .map(|receipt| receipt.identity.clone())
+                    .ok_or_else(|| {
+                        NativeStateSnafu {
+                            field: "source page kind",
+                        }
+                        .build()
+                    })
+            })
+            .collect()
     }
 
     pub fn tenant_page(&self, after: Option<[u8; 16]>) -> Result<Vec<[u8; 16]>> {

@@ -100,10 +100,9 @@ impl Fixture {
             .stream
             .clone();
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open_with_limits(
+        let store = Arc::new(AnalysisStore::open_with_retention(
             directory.path().join("data"),
             retention,
-            Default::default(),
         )?);
         store.install_package_image(
             source.tenant_id,

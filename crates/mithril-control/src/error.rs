@@ -265,7 +265,6 @@ impl ErrorExt for Error {
                         | araphor_data::Error::TraceInvalid { .. }
                         | araphor_data::Error::AnalysisConflict { .. }
                         | araphor_data::Error::RetainedRangeExpired { .. }
-                        | araphor_data::Error::StorageCapacity { .. }
                         | araphor_data::Error::ProtectedInputCapacity { .. }
                         | araphor_data::Error::AnalysisBusy { .. }
                 ) =>
@@ -314,8 +313,7 @@ impl ErrorExt for Error {
             Self::DataStore { source, .. }
                 if matches!(
                     source.as_ref(),
-                    araphor_data::Error::StorageCapacity { .. }
-                        | araphor_data::Error::ProtectedInputCapacity { .. }
+                    araphor_data::Error::ProtectedInputCapacity { .. }
                         | araphor_data::Error::AnalysisBusy { .. }
                 ) =>
             {

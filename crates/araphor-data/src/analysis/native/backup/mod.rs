@@ -1,8 +1,9 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
     io::Write as _,
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
-    path::Path,
+    path::{Component, Path},
 };
 
 use snafu::ResultExt as _;
@@ -13,10 +14,8 @@ use crate::{
     NativeStorageSnafu, Result,
 };
 
-mod budget;
 mod files;
 mod restore;
-use budget::BackupBudget;
 
 impl NativeStore {
     pub fn checkpoint(&self) -> Result<()> {
@@ -29,7 +28,6 @@ impl NativeStore {
             .build()
         })?;
         self.check()?;
-        self.require_capacity(true)?;
         let _maintenance = self.maintenance.write().map_err(|_| {
             NativeStateSnafu {
                 field: "maintenance lock",
@@ -83,7 +81,6 @@ impl NativeStore {
             .build()
         })?;
         self.check()?;
-        self.require_capacity(true)?;
         let create_parent = match fs::symlink_metadata(parent) {
             Ok(_) => {
                 Self::private_directory(parent)?;
@@ -132,7 +129,7 @@ impl NativeStore {
         let reserve = raw.budget.trace_reserve;
         let slots = raw.budget.trace_slots;
         drop(raw);
-        let manifest = AnalysisBackupManifestV1 {
+        let mut manifest = AnalysisBackupManifestV1 {
             store_uuid: view.store_uuid.to_string(),
             schema_version: view.schema_version,
             recovery_epoch: view.recovery_epoch,
@@ -143,8 +140,6 @@ impl NativeStore {
             reserved_bytes: reserve,
             reserved_entries: slots,
         };
-        let mut budget = BackupBudget::new(self, manifest)?;
-        budget.check(3 + usize::from(create_parent))?;
         if create_parent {
             fs::DirBuilder::new()
                 .mode(0o700)
@@ -158,26 +153,32 @@ impl NativeStore {
             .tempdir_in(parent)
             .context(IoSnafu { path: parent })?;
         let engine = staged.path().join("fjall");
-        let mut denied = None;
-        let exported = self
-            .database
+        let mut inventory = BTreeMap::new();
+        self.database
             .checkpoint_with(&engine, |path, bytes| {
-                budget.admit(&engine, path, bytes).map_err(|error| {
-                    denied = Some(error);
-                    std::io::Error::other("checkpoint admission refused")
-                })
+                let name = path
+                    .strip_prefix(&engine)
+                    .map_err(|_| std::io::Error::other("checkpoint path is outside its root"))?;
+                if !name
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_)))
+                    || name.as_os_str().is_empty() && bytes.is_some()
+                    || inventory.insert(name.to_owned(), bytes).is_some()
+                {
+                    return Err(std::io::Error::other(
+                        "checkpoint inventory path is invalid or duplicated",
+                    ));
+                }
+                Ok(())
             })
             .inspect_err(|_| {
                 if self.database.inner().is_poisoned() {
                     self.poison();
                 }
-            });
-        if let Some(error) = denied {
-            return Err(error);
-        }
-        exported.context(NativeStorageSnafu {
-            operation: "export native checkpoint",
-        })?;
+            })
+            .context(NativeStorageSnafu {
+                operation: "export native checkpoint",
+            })?;
         #[cfg(any(test, feature = "test-fixtures"))]
         Self::crash_path(&self.root, "backup.exported");
         let database_files = Self::checkpoint_files(&engine, true)?;
@@ -190,31 +191,22 @@ impl NativeStore {
                 }
                 .build()
             })?;
-        budget
-            .manifest
-            .database_files
-            .sort_unstable_by(|left, right| left.file_name.cmp(&right.file_name));
         if database_files
             .iter()
-            .map(|file| (&file.file_name, file.bytes))
-            .ne(budget
-                .manifest
-                .database_files
+            .map(|file| (Path::new(&file.file_name), file.bytes))
+            .ne(inventory
                 .iter()
-                .map(|file| (&file.file_name, file.bytes)))
+                .filter_map(|(path, bytes)| bytes.map(|bytes| (path.as_path(), bytes))))
         {
             return NativeStateSnafu {
-                field: "checkpoint admission inventory",
+                field: "checkpoint inventory",
             }
             .fail();
         }
-        budget.check(2)?;
-        let mut manifest = budget.manifest;
         manifest.database_bytes = database_bytes;
         manifest.database_files = database_files;
         let path = staged.path().join("manifest.json");
         let encoded = serde_json::to_vec(&manifest).context(crate::JsonSnafu { path: &path })?;
-        self.storage.check_manifest(encoded.len() as u64)?;
         crate::analysis::raw::RawJournal::directory(staged.path())?;
         for segment in &manifest.segments {
             Self::copy_bundle_file(
@@ -236,15 +228,6 @@ impl NativeStore {
         Self::validate_bundle(&manifest, staged.path())?;
         Self::sync_directory(&staged.path().join("segments"))?;
         Self::sync_directory(staged.path())?;
-        let raw = self.raw.lock().map_err(|_| {
-            NativeStateSnafu {
-                field: "raw owner lock",
-            }
-            .build()
-        })?;
-        let usage = crate::StorageUsageV1::inspect(&self.root, 0, slots, Some(&raw), self.storage)?;
-        self.storage.check_append(usage, reserve)?;
-        drop(raw);
         #[cfg(any(test, feature = "test-fixtures"))]
         Self::crash_path(&self.root, "backup.synced");
         rustix::fs::renameat_with(

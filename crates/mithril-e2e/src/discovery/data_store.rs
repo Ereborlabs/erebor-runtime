@@ -492,9 +492,15 @@ impl DataStoreQualification {
         let root = tls.path().join("evidence/analysis");
         {
             let data = AnalysisStore::open(&root)?;
-            data.register_processor(&araphor_data::ProcessorScopeV1 {
-                processor_id: "startup-proof".into(), method_version: 1, identity: identity.clone(),
-            }, araphor_data::ProcessorClassV1::Required, 1)?;
+            data.register_processor(
+                &araphor_data::ProcessorScopeV1 {
+                    processor_id: "startup-proof".into(),
+                    method_version: 1,
+                    identity: identity.clone(),
+                },
+                araphor_data::ProcessorClassV1::Required,
+                1,
+            )?;
         }
         let database = root.join("fjall/version");
         let pending = root.join("restore.pending");
@@ -669,11 +675,7 @@ impl DataStoreQualification {
             raw_max_age_ns: Some(24 * HOUR),
             ..Default::default()
         };
-        let data = Arc::new(AnalysisStore::open_with_limits(
-            &data_root,
-            retention,
-            Default::default(),
-        )?);
+        let data = Arc::new(AnalysisStore::open_with_retention(&data_root, retention)?);
         let stale_path = backup_root.join("stale");
         data.backup(&stale_path)?;
         let intake = EvidenceIntakeOwner::new(control.clone(), data.clone(), clock.clone())?;
@@ -1229,7 +1231,7 @@ impl DataStoreQualification {
             root,
             "the stopped server to release its data lease",
             Duration::from_secs(5),
-            || match AnalysisStore::open_with_limits(root, retention, Default::default()) {
+            || match AnalysisStore::open_with_retention(root, retention) {
                 Err(araphor_data::Error::AnalysisState { reason, .. })
                     if reason.starts_with("the analysis writer is already owned:") =>
                 {

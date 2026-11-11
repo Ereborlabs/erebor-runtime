@@ -48,7 +48,7 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
     fs::remove_file(&path)?;
     fs::rename(retained, &path)?;
     let mut trust = TrustCache::load(fixture.path())?;
-    for capacity in [Some(1), None] {
+    {
         let store = wait_for_async(
             &path,
             "the stopped Control server to release its store lease",
@@ -57,13 +57,8 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
             || "the stopped server still owns `owner.lock`".to_owned(),
         )
         .await?;
-        let data = Arc::new(araphor_data::AnalysisStore::open_with_limits(
+        let data = Arc::new(araphor_data::AnalysisStore::open(
             store.root().join("analysis"),
-            Default::default(),
-            araphor_data::StorageLimitsV1 {
-                source_entries: capacity.map(|_| 0),
-                ..Default::default()
-            },
         )?);
         let intake =
             EvidenceIntakeOwner::new(store.clone(), data.clone(), Arc::new(SystemIntakeClock))?;
@@ -74,34 +69,26 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
         connection.send_evidence_group(vec![batch.clone()]).await?;
         let message = timeout(wait, connection.next_message())
             .await
-            .map_err(|error| format!("capacity {capacity:?} response at {path:?}: {error}"))?;
-        if capacity == Some(1) {
-            assert!(message.is_err(), "Control acknowledged beyond capacity");
-            assert_eq!(intake.contiguous_cursor(&identity)?, 0);
-            assert!(data.source_receipt(&identity)?.is_none());
-            assert_eq!(wal.pending_evidence_records(), 2);
-            assert_eq!(wal.next_evidence_batch().as_ref(), Some(&batch));
-        } else {
-            let NodeControlMessage::EvidenceAck(ack) = message? else {
-                return Err("restored Control returned no acknowledgement".into());
-            };
-            assert_eq!(ack.contiguous_cursor, 2);
-            assert_eq!(intake.contiguous_cursor(&identity)?, 2);
-            let accepted = data.read_page(&identity, 1)?;
-            assert_eq!(accepted.records.len(), 2);
-            assert_eq!(
-                accepted
-                    .records
-                    .iter()
-                    .flat_map(|record| record.framed_record.iter().copied())
-                    .collect::<Vec<_>>(),
-                mithril_control::EvidenceBatch::from(batch.clone())
-                    .framed_records
-                    .to_vec()
-            );
-            assert!(wal.acknowledge_evidence(ack)?);
-            assert_eq!(wal.pending_evidence_records(), 0);
-        }
+            .map_err(|error| format!("response at {path:?}: {error}"))?;
+        let NodeControlMessage::EvidenceAck(ack) = message? else {
+            return Err("restored Control returned no acknowledgement".into());
+        };
+        assert_eq!(ack.contiguous_cursor, 2);
+        assert_eq!(intake.contiguous_cursor(&identity)?, 2);
+        let accepted = data.read_page(&identity, 1)?;
+        assert_eq!(accepted.records.len(), 2);
+        assert_eq!(
+            accepted
+                .records
+                .iter()
+                .flat_map(|record| record.framed_record.iter().copied())
+                .collect::<Vec<_>>(),
+            mithril_control::EvidenceBatch::from(batch.clone())
+                .framed_records
+                .to_vec()
+        );
+        assert!(wal.acknowledge_evidence(ack)?);
+        assert_eq!(wal.pending_evidence_records(), 0);
         assert!(!store.root().join("evidence/segments-v2").exists());
         drop(connection);
         server.shutdown().await?;

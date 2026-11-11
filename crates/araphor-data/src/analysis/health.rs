@@ -1,21 +1,20 @@
-
 use serde::Serialize;
 
-use super :: { AnalysisGapV1 , ProcessorClassV1 , StorageUsageV1 } ;
+use super::{AnalysisGapV1, ProcessorClassV1, StorageUsageV1};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct StorageHealthV1 {
     pub write_ready: bool,
     pub retention_healthy: bool,
-    pub intake_capacity: bool,
-    pub maintenance_capacity: bool,
     pub usage: StorageUsageV1,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisResultCommitV1 , EvidenceRetentionOwner , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisResultCommitV1, EvidenceRetentionOwner, RetentionLimitsV1, ValidatedEvidenceBatchV1,
+    };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -38,7 +37,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(100),
         };
-        let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let mut store = AnalysisStore::open_with_retention(&root, limits)?;
         let required = scope();
         assert!(store.processor_health(&required)?.is_none());
         store.register_processor(&required, ProcessorClassV1::Required, 1)?;
@@ -120,19 +119,15 @@ mod tests {
                 .contiguous_cursor,
             1
         );
-        store.storage.policy_reserve_bytes = Some(u64::MAX / 4);
         let capacity = store.storage_health()?;
         assert!(capacity.retention_healthy);
-        assert!(!capacity.intake_capacity && !capacity.maintenance_capacity);
-        store.storage = Default::default();
         store
             .retention_healthy
             .store(false, std::sync::atomic::Ordering::Release);
         let capacity = store.storage_health()?;
         assert!(!capacity.retention_healthy);
-        assert!(capacity.intake_capacity && capacity.maintenance_capacity);
         drop(store);
-        let reopened = AnalysisStore::open_with_limits(root, limits, Default::default())?;
+        let reopened = AnalysisStore::open_with_retention(root, limits)?;
         assert_eq!(reopened.recovery_gaps(&required.identity, 0)?, gap);
         assert_eq!(
             reopened
@@ -191,5 +186,3 @@ pub struct ProcessorHealthV1 {
     pub incomplete: bool,
     pub read_revision: u64,
 }
-
-

@@ -1,9 +1,7 @@
-
 use serde::{Deserialize, Serialize};
 
-use super :: { AnalysisContextKeyV1 } ;
-use crate :: { AnalysisStreamIdentityV1 , Result } ;
-
+use super::AnalysisContextKeyV1;
+use crate::{AnalysisStreamIdentityV1, Result};
 
 #[cfg(test)]
 mod history;
@@ -255,12 +253,13 @@ impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisContextVersionV1 , ContextSensitivityV1 , EvidenceStoreOutcomeV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisContextVersionV1, ContextSensitivityV1, EvidenceStoreOutcomeV1,
+        ValidatedEvidenceBatchV1,
+    };
 
     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
@@ -439,7 +438,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let scope = ProcessorScopeV1 {
             processor_id: "guarded-processor".into(),
             method_version: 1,
@@ -495,7 +494,7 @@ mod tests {
         assert_eq!(store.meta()?, committed);
         assert!(!notices.has_changed()?);
         drop(store);
-        let reopened = AnalysisStore::open_with_limits(root, limits, Default::default())?;
+        let reopened = AnalysisStore::open_with_retention(root, limits)?;
         assert_eq!(reopened.processor_gaps(&scope, 0)?, [gap]);
         assert_eq!(reopened.resume_optional(&scope)?, None);
         assert_eq!(reopened.meta()?, committed);
@@ -701,7 +700,7 @@ mod tests {
             raw_max_age_ns: Some(100),
             raw_max_bytes: Some(64 * 1024 * 1024),
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let evidence = identity(1);
         store.accept_validated_batch(
             evidence.clone(),
@@ -810,7 +809,7 @@ mod tests {
         assert_eq!(retained.retained_floor, 0);
         drop(store);
 
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         assert_eq!(store.commit_result(&input)?, receipt);
         assert_eq!(
             store.read_result([1; 16], "mixed-result")?,

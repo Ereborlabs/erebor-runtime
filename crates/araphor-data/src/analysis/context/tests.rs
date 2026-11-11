@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn context_guard_rolls_back() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -526,74 +525,6 @@ fn context_batch_history() -> TestResult {
     assert_eq!(store.context_version(&first.key)?, Some(first));
     assert_eq!(store.context_version(&second.key)?, Some(second));
     assert_eq!(store.meta()?.commit_revision, 1);
-    Ok(())
-}
-
-#[test]
-fn context_body_quota() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let root = directory.path().join("analysis");
-    let store = AnalysisStore::open(&root)?;
-    let mut large = context_value(1, 1);
-    large.body = vec![1; 32 * 1024 + 1];
-    assert_eq!(store.commit_context(&large)?, 1);
-    assert_eq!(store.context_version(&large.key)?, Some(large.clone()));
-    drop(store);
-    let store = AnalysisStore::open_with_limits(
-        &root,
-        Default::default(),
-        crate::StorageLimitsV1 {
-            context_max_bytes: Some(0),
-            ..Default::default()
-        },
-    )?;
-    let changes = store.subscribe_revision();
-    assert_eq!(store.commit_context_checked(&large, 0)?, 1);
-    assert!(!changes.has_changed()?);
-    let fresh = context_value(2, 1);
-    assert!(matches!(
-        store.commit_context(&fresh),
-        Err(crate::Error::StorageCapacity {
-            resource: "context version bytes",
-            ..
-        })
-    ));
-    assert_eq!(store.meta()?.commit_revision, 1);
-    assert!(!changes.has_changed()?);
-    drop(store);
-    let store = AnalysisStore::open_with_limits(
-        &root,
-        Default::default(),
-        crate::StorageLimitsV1 {
-            context_max_bytes: Some(3),
-            ..Default::default()
-        },
-    )?;
-    let changes = store.subscribe_revision();
-    let mut exact = fresh.clone();
-    exact.body = vec![2; 3];
-    let mut oversized = context_value(3, 1);
-    oversized.body = vec![3; 4];
-    assert!(matches!(
-        store.commit_contexts(&[exact.clone(), oversized.clone()]),
-        Err(crate::Error::StorageCapacity {
-            resource: "context version bytes",
-            ..
-        })
-    ));
-    assert!(store.context_version(&exact.key)?.is_none());
-    assert!(store.context_version(&oversized.key)?.is_none());
-    assert_eq!(store.meta()?.commit_revision, 1);
-    assert!(!changes.has_changed()?);
-    assert_eq!(store.commit_context(&exact)?, 2);
-    let mut empty = oversized;
-    empty.body.clear();
-    assert!(matches!(
-        store.commit_context(&empty),
-        Err(crate::Error::AnalysisState { .. })
-    ));
-    assert_eq!(store.context_version(&exact.key)?, Some(exact));
-    assert_eq!(store.meta()?.commit_revision, 2);
     Ok(())
 }
 

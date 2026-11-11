@@ -3,7 +3,11 @@ use std::collections::BTreeMap;
 use araphor_analysis_sdk::arrow_array::{RecordBatch, StringArray};
 
 use super::*;
-use crate :: { AnalysisExtractLimits , AnalysisPositionPageV1 , AnalysisReadControl , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , DiscoveryInputManifestV1 , DiscoverySnapshotRowV1 , DiscoveryStateRowV1 , EvidenceRetentionOwner , RetentionLimitsV1 } ;
+use crate::{
+    AnalysisExtractLimits, AnalysisPositionPageV1, AnalysisReadControl, AnalysisReadModeV1,
+    AnalysisSelectionV1, AnalysisTableRead, DiscoveryInputManifestV1, DiscoverySnapshotRowV1,
+    DiscoveryStateRowV1, EvidenceRetentionOwner, RetentionLimitsV1,
+};
 
 fn read_state(
     store: &AnalysisStore,
@@ -225,13 +229,12 @@ fn state_uses_current_head() -> TestResult {
 #[test]
 fn state_survives_raw_retention() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         directory.path().join("data"),
         RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     let baseline: serde_json::Value = serde_json::from_slice(include_bytes!(
         "../../../../discovery/validation/tests/fixtures/atoms.json"
@@ -306,13 +309,12 @@ fn state_survives_raw_retention() -> TestResult {
 #[test]
 fn state_keeps_bootstrap_gap() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         directory.path().join("data"),
         RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     let mut profile = profile();
     store.accept_validated_batch(

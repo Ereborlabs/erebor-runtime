@@ -87,13 +87,12 @@ async fn retention_disabled_stays_idle() -> TestResult {
 #[tokio::test]
 async fn retention_waits_for_expiry() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let data = Arc::new(AnalysisStore::open_with_limits(
+    let data = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("analysis"),
         RetentionLimitsV1 {
             raw_max_age_ns: Some(60_000_000_000),
             ..Default::default()
         },
-        Default::default(),
     )?);
     append(&data)?;
     let clock = RetentionClock::new();
@@ -128,13 +127,12 @@ async fn retention_waits_for_expiry() -> TestResult {
 #[tokio::test]
 async fn retention_waits_for_repair() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let data = Arc::new(AnalysisStore::open_with_limits(
+    let data = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("analysis"),
         RetentionLimitsV1 {
             raw_max_age_ns: Some(0),
             ..Default::default()
         },
-        Default::default(),
     )?);
     append(&data)?;
     let before = data.meta()?;
@@ -142,8 +140,9 @@ async fn retention_waits_for_repair() -> TestResult {
     let gate = reject.clone();
     data.set_commit_hook(AnalysisCommitStage::BeforeRetentionCommit, move || {
         if gate.load(Ordering::Acquire) {
-            return Err(araphor_data::Error::StorageCapacity {
-                resource: "retention repair fixture",
+            return Err(araphor_data::Error::Io {
+                path: "retention repair fixture".into(),
+                source: std::io::Error::from_raw_os_error(libc::ENOSPC),
                 location: snafu::Location::default(),
             });
         }

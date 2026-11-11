@@ -55,10 +55,9 @@ impl Fixture {
         }
         .with_computed_bundle_digest();
         let store = ControlStore::open(directory.path().join("control"))?;
-        let data = Arc::new(araphor_data::AnalysisStore::open_with_limits(
+        let data = Arc::new(araphor_data::AnalysisStore::open_with_retention(
             directory.path().join("analysis"),
             retention,
-            Default::default(),
         )?);
         let control = ControlPlane::from_intake(
             Vec::new(),

@@ -228,13 +228,6 @@ impl NotificationCycle<'_, '_> {
         mut state: NotificationObligationV1,
         states: &mut Vec<NotificationObligationV1>,
     ) -> Result<()> {
-        NotificationErrorCodeV1::Limit.require(
-            self.store
-                .storage_limits()
-                .notification_routes
-                .is_none_or(|limit| states.len() <= limit),
-            "related obligation count",
-        )?;
         self.save(&mut state)?;
         states.push(state);
         Ok(())

@@ -1,5 +1,7 @@
 use super::*;
-use crate :: { AnalysisCommitStage , EvidenceRetentionOwner , ProcessorRetirementV1 , RetentionLimitsV1 } ;
+use crate::{
+    AnalysisCommitStage, EvidenceRetentionOwner, ProcessorRetirementV1, RetentionLimitsV1,
+};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -34,7 +36,7 @@ fn processor_versions_commit_once() -> TestResult {
         raw_max_age_ns: Some(1),
         raw_max_bytes: None,
     };
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
     let scope = ProcessorScopeV1 {
         processor_id: "history".into(),
         method_version: 1,
@@ -154,7 +156,7 @@ fn processor_versions_commit_once() -> TestResult {
     );
     AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
     assert_eq!(versions(&store)?, expected);
     let mut writer = store.writer()?;
     for mutation in [

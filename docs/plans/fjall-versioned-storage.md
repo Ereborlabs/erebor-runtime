@@ -193,6 +193,12 @@ history, branches, CDC, and compaction. The two focused LSM metadata checks
 passed. They check encoding parity and refusal before either metadata file is
 created. Data integration and the incident performance targets remain open.
 
+Data removes its storage quota policy by user instruction on 2026-11-10.
+The generic `checkpoint_with` API remains. Data now uses its callback to record
+and verify the expected output inventory. Data does not apply byte or entry
+admission in that callback. Engine history retention, branch metadata, checkpoint
+sync, and source-poison behavior remain unchanged.
+
 Before a history, branch, or CDC-retention promise, persist an incompatible
 database version marker atomically and durably. Old or feature-unaware openers
 must reject it before recovery cleanup. Native SST/WAL entry formats stay

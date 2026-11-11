@@ -1,5 +1,3 @@
-
-
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use araphor_analysis_sdk as sdk;
@@ -26,10 +24,12 @@ use sdk::arrow_array::{Array, UInt64Array};
 mod graph;
 #[path = "native_execution/publication.rs"]
 mod publication;
-#[path = "native_execution/version.rs"]
-mod version;
 #[path = "native_execution/resume.rs"]
 mod resume;
+#[path = "native_execution/trace.rs"]
+mod trace;
+#[path = "native_execution/version.rs"]
+mod version;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TENANT: [u8; 16] = [1; 16];

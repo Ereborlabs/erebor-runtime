@@ -32,13 +32,9 @@ fn history_keeps_saved_scope() -> TestResult {
     for reopen in [false, true] {
         if reopen {
             drop(store);
-            store = Arc::new(AnalysisStore::open_with_limits(
+            store = Arc::new(AnalysisStore::open_with_retention(
                 &root,
                 Default::default(),
-                crate::StorageLimitsV1 {
-                    reader_admissions: Some(2),
-                    ..Default::default()
-                },
             )?);
         }
         assert_eq!(fixture.current(&store)?, recreated);

@@ -34,15 +34,6 @@ impl NotificationRouter {
                 return Ok(());
             }
         }
-        NotificationErrorCodeV1::Limit.require(
-            prior.is_some()
-                || self
-                    .store
-                    .storage_limits()
-                    .notification_routes
-                    .is_none_or(|limit| routes.len() < limit),
-            "route count",
-        )?;
         let expected = prior.map_or(0, |route| route.policy.revision);
         NotificationErrorCodeV1::Conflict.require(
             expected.checked_add(1) == Some(approved.policy.revision),

@@ -218,7 +218,6 @@ impl NativeStore {
         control: &crate::AnalysisReadControl,
     ) -> Result<Option<PackageRevisionV1>> {
         control.check()?;
-        let _permit = self.reserve_reader()?;
         self.view()?
             .package_revision(tenant, package, revision, control)
     }

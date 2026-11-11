@@ -144,34 +144,7 @@ impl Progress {
                 .await
             }
         };
-        let subscription = {
-            let mut result = subscribe().await;
-            while matches!(
-                &result,
-                Err(crate::Error::Data {
-                    source: araphor_data::Error::AnalysisBusy {
-                        resource: "reader",
-                        ..
-                    },
-                })
-            ) {
-                self.run
-                    .session
-                    .control()
-                    .query_async(async {
-                        self.run
-                            .session
-                            .engine()
-                            .store()
-                            .wait_capacity()
-                            .await
-                            .map_err(crate::Error::from)
-                    })
-                    .await?;
-                result = subscribe().await;
-            }
-            result?
-        };
+        let subscription = subscribe().await?;
         self.changes = Some(subscription);
         self.observe();
         Ok(())

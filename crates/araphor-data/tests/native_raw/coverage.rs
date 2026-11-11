@@ -47,7 +47,7 @@ fn receipt_history_survives_expiry() -> TestResult {
         raw_max_age_ns: Some(50),
         ..Default::default()
     };
-    let store = NativeStore::open_with_limits(&root, limits, Default::default())?;
+    let store = NativeStore::open_with_retention(&root, limits)?;
     let source = identity();
     let registration = store.register_processor(
         &araphor_data::ProcessorScopeV1 {
@@ -118,7 +118,7 @@ fn receipt_history_survives_expiry() -> TestResult {
     };
     check(&store)?;
     drop(store);
-    let store = NativeStore::open_with_limits(&root, limits, Default::default())?;
+    let store = NativeStore::open_with_retention(&root, limits)?;
     check(&store)?;
     assert_eq!(
         store

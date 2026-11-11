@@ -85,7 +85,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let revision = tx.revision;
         drop(raw);
         #[cfg(any(test, feature = "test-fixtures"))]
-        self.store.run_commit_hook(crate::AnalysisCommitStage::BeforeRetentionCommit)?;
+        self.store
+            .run_commit_hook(crate::AnalysisCommitStage::BeforeRetentionCommit)?;
         let (_, _writer) = tx.commit_locked([], || {})?;
         for record in &records {
             record.unlink(&self.store.root)?;
@@ -103,7 +104,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
         }
         raw.directory_changed(false)?;
         drop(raw);
-        self.store.capacity.send_replace(());
         Ok(RetentionStepV1 {
             removed_records: removed,
             more: selection.more,
@@ -170,10 +170,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
 impl NativeStore {
     pub(in crate::analysis::native) fn require_retention(&self) -> Result<()> {
         if !self.retention_healthy() {
-            self.capacity.send_replace(());
             return crate::RetentionUnavailableSnafu.fail();
         }
         Ok(())
     }
-
 }

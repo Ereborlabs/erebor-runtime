@@ -1,16 +1,9 @@
 use super::*;
 
 #[test]
-fn revision_reads_release_capacity() -> TestResult {
+fn revision_reads_preserve_state() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = NativeStore::open_with_limits(
-        directory.path().join("store"),
-        Default::default(),
-        araphor_data::StorageLimitsV1 {
-            reader_admissions: Some(16),
-            ..Default::default()
-        },
-    )?;
+    let store = NativeStore::open(directory.path().join("store"))?;
     store.install_package(&[package("first", "v1")?], || Ok(()))?;
     let before = store.meta()?;
     let cursor = store.database().inner().journal_head()?;
@@ -33,38 +26,6 @@ fn revision_reads_release_capacity() -> TestResult {
         image: bundle.bundle().root.clone(),
         digest: bundle.digest().into(),
     };
-    let mut held = Vec::new();
-    for _ in 0..16 {
-        held.push(store.reserve_trace_read()?);
-    }
-    assert!(matches!(
-        store.package_revision([1; 16], "first", "v1"),
-        Err(Error::AnalysisBusy {
-            resource: "reader",
-            ..
-        })
-    ));
-    assert!(matches!(
-        store.package_revision_until([1; 16], "first", "v1", &control),
-        Err(Error::AnalysisBusy {
-            resource: "reader",
-            ..
-        })
-    ));
-    assert!(matches!(
-        store.package_image([1; 16], "image-root", None, &control),
-        Err(Error::AnalysisBusy {
-            resource: "reader",
-            ..
-        })
-    ));
-    assert!(matches!(
-        store.retained_package_image([1; 16], &pin, &control),
-        Err(Error::AnalysisBusy {
-            resource: "reader",
-            ..
-        })
-    ));
     assert!(matches!(
         store.package_revision_until([1; 16], "first", "v1", &cancelled),
         Err(Error::AnalysisReadCancelled { .. })
@@ -77,7 +38,6 @@ fn revision_reads_release_capacity() -> TestResult {
         store.retained_package_image([1; 16], &pin, &cancelled),
         Err(Error::AnalysisReadCancelled { .. })
     ));
-    drop(held);
     assert!(store
         .package_revision_until([1; 16], "first", "v1", &control)?
         .is_some());
@@ -87,10 +47,6 @@ fn revision_reads_release_capacity() -> TestResult {
     assert!(store
         .retained_package_image([1; 16], &pin, &control)?
         .is_none());
-    let held = (0..16)
-        .map(|_| store.reserve_trace_read())
-        .collect::<araphor_data::Result<Vec<_>>>()?;
-    assert_eq!(held.len(), 16);
     assert_eq!(store.meta()?, before);
     assert_eq!(store.database().inner().journal_head()?, cursor);
     Ok(())

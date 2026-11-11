@@ -388,20 +388,9 @@ impl ReplayQualification {
             failed: AtomicBool::new(true),
             finding_id: revised.finding_id.clone(),
         };
-        let mut capacity = None;
         for _ in 0..4 {
-            match router.deliver(&graph, &sink, now + 104) {
-                Ok(_) => {}
-                Err(araphor_analysis_back::Error::Data {
-                    source: Error::StorageCapacity { resource, .. },
-                }) => {
-                    capacity = Some(resource);
-                    break;
-                }
-                Err(error) => return Err(error.into()),
-            }
+            router.deliver(&graph, &sink, now + 104)?;
         }
-        assert_eq!(capacity, Some("tenant retained revisions"));
         let pressure = router.health(&grants[1], now + 104)?;
         assert_eq!(pressure.obligations, 257);
         assert_eq!(pressure.unrouted, 0);
@@ -422,9 +411,7 @@ impl ReplayQualification {
             "route_revision": 2, "original_deadline_preserved": true,
             "priority_floors_preserved": true, "attempts_preserved": true,
             "point_notification": lifecycle,
-            "capacity_error": {"code": "STORAGE_CAPACITY", "resource": capacity},
-            "storage_quotas": {"tenant_retained_revisions": 1024, "global_retained_revisions": 4096},
-            "backpressure_health": pressure,
+            "notification_health": pressure,
             "empty_configuration_healthy": false,
             "findings_retained": true, "bound_disabled": false,
         }))

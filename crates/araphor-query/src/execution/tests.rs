@@ -32,24 +32,13 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(limits: Limits) -> Self {
-        Self::storage(limits, Default::default())
-    }
-
-    fn storage(mut limits: Limits, storage: araphor_data::StorageLimitsV1) -> Self {
+    fn new(mut limits: Limits) -> Self {
         limits.input_capacity.get_or_insert(128 * 1024 * 1024);
         limits.output_capacity.get_or_insert(16 * 1024 * 1024);
         limits.extract_timeout = Some(Duration::from_secs(5));
         limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(
-            AnalysisStore::open_with_limits(
-                directory.path().join("data"),
-                Default::default(),
-                storage,
-            )
-            .unwrap(),
-        );
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data")).unwrap());
         let engine = Engine::new(store, limits).unwrap();
         Self {
             engine,
@@ -786,13 +775,7 @@ fn native_memory_limit_is_optional() {
 
 #[test]
 fn local_skips_store() {
-    let fixture = Fixture::storage(
-        Limits::default(),
-        araphor_data::StorageLimitsV1 {
-            reader_admissions: Some(16),
-            ..Default::default()
-        },
-    );
+    let fixture = Fixture::new(Limits::default());
     let (plan, _) = local_plan(&fixture.engine);
     let state = fixture.engine.catalog(SourceSnapshot::providers()).unwrap();
     let clock = Arc::new(
@@ -842,11 +825,6 @@ fn local_skips_store() {
         .register("local_rows", schema(), &[batch(11)])
         .unwrap();
     let meta = fixture.engine.store().meta().unwrap();
-    let readers = (0..16)
-        .map(|_| fixture.engine.store().reserve_trace_read().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(readers.len(), 16);
-    assert!(fixture.engine.store().reserve_trace_read().is_err());
     assert_eq!(value(&session.collect_local(plan).unwrap()), 11);
     let now = session.collect_local(clock).unwrap();
     assert!(
@@ -861,15 +839,6 @@ fn local_skips_store() {
         )
         .unwrap();
     assert!(session.collect_local(source).is_err());
-    let error = session
-        .execute(Arc::clone(&constant), &BTreeMap::new())
-        .unwrap_err();
-    assert!(
-        matches!(error, Error::Sql { source: datafusion::common::DataFusionError::External(source) }
-        if matches!(source.downcast_ref::<araphor_data::Error>(),
-            Some(araphor_data::Error::AnalysisBusy { resource: "reader", .. })))
-    );
-    drop(readers);
     let (receipt, rows) = session
         .execute(Arc::clone(&constant), &BTreeMap::new())
         .unwrap();

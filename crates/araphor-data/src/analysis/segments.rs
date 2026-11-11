@@ -2,12 +2,10 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-
-
-use super :: { AnalysisRecordV1 } ;
+use super::AnalysisRecordV1;
 #[cfg(test)]
 use crate::EvidenceIntakeIdentityV1;
-use crate :: Result ;
+use crate::Result;
 
 #[derive(Clone)]
 pub(super) struct SegmentRange {
@@ -74,12 +72,13 @@ impl SegmentRange {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisResultCommitV1 , AnalysisWitnessV1 , EvidenceRetentionOwner , ProcessorClassV1 , ProcessorScopeV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceRetentionOwner, ProcessorClassV1,
+        ProcessorScopeV1, RetentionLimitsV1, ValidatedEvidenceBatchV1,
+    };
 
     fn source() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
@@ -234,7 +233,7 @@ mod tests {
             raw_max_age_ns: Some(100),
             raw_max_bytes: Some(64 * 1024 * 1024),
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let identity = source();
         for group in 0..4_u64 {
             store.accept_validated_batch(
@@ -279,96 +278,14 @@ mod tests {
         ));
         assert_eq!(fs::read_dir(root.join("segments"))?.count(), 1);
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let removed = EvidenceRetentionOwner::new(&store).retain(&identity, 301)?;
         assert_eq!(removed.removed_records, 3072);
         assert_eq!(removed.retained_floor, 4096);
         assert_eq!(removed.retained_bytes, 0);
         assert_eq!(fs::read_dir(root.join("segments"))?.count(), 0);
         drop(store);
-        AnalysisStore::open_with_limits(&root, limits, Default::default())?;
-        Ok(())
-    }
-
-    #[test]
-    fn segment_growth_keeps_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let identity = source();
-        let mut store = AnalysisStore::open_with_limits(
-            directory.path().join("analysis"),
-            Default::default(),
-            crate::StorageLimitsV1::default(),
-        )?;
-        store.accept_validated_batch(
-            identity.clone(),
-            ValidatedEvidenceBatchV1 {
-                cpu_id: 0,
-                first_cursor: 1,
-                last_cursor: 1,
-                intake_utc_ns: 100,
-                framed_records: b"frame".to_vec().into(),
-                frame_ends: vec![5],
-            },
-        )?;
-        let pinned_bytes = fs::metadata(SegmentRange::path(&store.root, 1))?.len();
-        store.storage.witness_max_bytes = Some(pinned_bytes);
-        let scope = ProcessorScopeV1 {
-            processor_id: "witness".into(),
-            method_version: 1,
-            identity: identity.clone(),
-        };
-        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
-        store.commit_result(&AnalysisResultCommitV1 {
-            created_utc_ns: 101,
-            witnesses: vec![AnalysisWitnessV1 {
-                identity: identity.clone().into(),
-                cursor: 1,
-                expires_utc_ns: 300,
-            }],
-            ..crate::analysis::tests::result(scope, "pin".into())
-        })?;
-        let before = store.meta()?;
-        let next = ValidatedEvidenceBatchV1 {
-            cpu_id: 0,
-            first_cursor: 2,
-            last_cursor: 2,
-            intake_utc_ns: 102,
-            framed_records: b"x".to_vec().into(),
-            frame_ends: vec![1],
-        };
-        assert!(matches!(
-            store.accept_validated_batch(identity.clone(), next.clone()),
-            Err(crate::Error::StorageCapacity {
-                resource: "tenant witness bytes",
-                ..
-            })
-        ));
-        assert_eq!(store.meta()?, before);
-        assert_eq!(
-            store
-                .source_receipt(&identity)?
-                .ok_or("receipt absent")?
-                .contiguous_cursor,
-            1
-        );
-        assert_eq!(
-            fs::metadata(SegmentRange::path(&store.root, 1))?.len(),
-            pinned_bytes
-        );
-        store.accept_validated_batch(
-            identity.clone(),
-            ValidatedEvidenceBatchV1 {
-                intake_utc_ns: 301,
-                ..next
-            },
-        )?;
-        assert_eq!(
-            store
-                .source_receipt(&identity)?
-                .ok_or("receipt absent")?
-                .contiguous_cursor,
-            2
-        );
+        AnalysisStore::open_with_retention(&root, limits)?;
         Ok(())
     }
 }

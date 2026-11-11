@@ -271,7 +271,6 @@ impl NativeStore {
         }
         prepared.memory.check()?;
         check()?;
-        tx.check_witnesses(spec.tenant, input.now_utc_ns)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         let prepared_at = std::time::Instant::now();

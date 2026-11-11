@@ -26,7 +26,7 @@ bound or a new gain from the journal/resume corrections alone.
    appends event payloads once. [RawIndex](../../crates/araphor-data/src/analysis/raw/index.rs)
    indexes those original spans. A published DataView binds that raw prefix to
    one native snapshot. [Coverage reads](../../crates/araphor-data/src/analysis/native/source/coverage.rs)
-   preserve the public API through one captured view and an actual reader permit.
+   preserve the public API through one captured view and read cancellation.
 3. [Input registration](../../crates/araphor-data/src/analysis/native/inputs/registration.rs)
    and [input checkpoints](../../crates/araphor-data/src/analysis/native/inputs/checkpoint.rs)
    retain subscription progress. [Query progress](../../crates/araphor-query/src/stream/progress.rs)
@@ -129,12 +129,11 @@ sustained latency guarantee. Read the current worklist for exact report paths.
 ## Package image reads
 
 [NativeStore::package_revision_until](../../crates/araphor-data/src/analysis/native/packages/mod.rs) receives a tenant, exact package revision, and read control.
-  -> [AnalysisReadControl::check](../../crates/araphor-data/src/analysis/read.rs) rejects cancellation before capacity admission.
-  -> [NativeStore::reserve_reader](../../crates/araphor-data/src/analysis/native/admission.rs) holds one configured reader permit.
+  -> [AnalysisReadControl::check](../../crates/araphor-data/src/analysis/read.rs) rejects cancellation.
   -> [DataView::package_revision](../../crates/araphor-data/src/analysis/native/packages/mod.rs) joins metadata and the original body from one captured cut.
 
 The default `package_revision` call uses that same path. The public
-`package_image` and `retained_package_image` calls also hold one reader permit.
+`package_image` and `retained_package_image` calls use the same read control.
 Captured DataView reads and staged DataWrite reads keep their existing lifetime.
 The image closure reader authenticates artifacts and the saved bundle digest.
 
@@ -149,8 +148,8 @@ The positive ordering case reverses only retained metadata. Live image reads and
 reopen succeed. The stored vector stays reversed and the image digest stays equal.
 [Image tests](../../crates/araphor-data/tests/native_packages/catalogue/images.rs)
 keep the 33 MiB unqualified Native artifact and its exact round trip without
-execution. Sixteen held public read permits reject package reads. Cancellation
-takes priority. All sixteen permits are available after the checks.
+execution. Point-read checks preserve cancellation, unchanged Data metadata,
+and unchanged original journal position. Reader quotas are removed.
 [Lifecycle tests](../../crates/araphor-data/tests/native_packages/catalogue/lifecycle.rs)
 retain shared dependencies, explicit dependency images, foreign tenant images,
 definition roots, guarded uninstall, and reinstall after reopen.
@@ -195,7 +194,7 @@ These ten native checks replace the old SQL package-context family. The separate
 private verifier tests still require a native port. These checks do not establish
 a new incident speed gain. Read the current worklist for commands and results.
 
-## Capacity and maintenance
+## Usage, retention, and maintenance
 
 [Checkpoint](../../crates/araphor-data/src/analysis/native/backup/mod.rs) first
 saves safe filtered input positions. It then holds the Data writer during raw
@@ -228,11 +227,19 @@ An absent or released native cursor returns `AnalysisInputExpired`, with the
 requested position. Query reports `CursorExpired`. Decoder and I/O errors are
 not converted to expiry. No context/result scan or extra journal is added.
 
-[Writer admission](../../crates/araphor-data/src/analysis/native/capacity.rs)
-checks actual current usage. Ordinary writes enforce configured disk, entry,
-and free-space limits. Maintenance preserves the free-space reserve and can
-release input when ordinary intake is over capacity. Startup settlement uses
-its dedicated recovery access. The guard does not estimate encoded writes.
+The user removes Data storage quotas on 2026-11-10. The source has no
+`StorageLimitsV1`, quota constructor, reader permit, or storage-quota error.
+[StorageUsageV1](../../crates/araphor-data/src/analysis/capacity.rs) reports file
+bytes, allocated bytes, and available filesystem bytes. It does not reject an
+operation at a configured threshold. [RevisionCounts](../../crates/araphor-data/src/analysis/native/capacity.rs)
+remain integrity metadata and are checked during recovery. Physical format 10
+remains valid. Actual I/O errors still stop an uncertain owner.
+
+[Trace authority](../../crates/araphor-data/src/analysis/native/admission.rs)
+checks store readiness and current request state. [Query](../../crates/araphor-query/src/execution.rs)
+awaits that check inside its blocking worker. The [native revocation case](../../crates/araphor-query/tests/native_execution/trace.rs)
+reads a real trace through a package plan. Revocation rejects the saved receipt
+and captured execution. Failed execution leaves Data revision unchanged.
 
 [Required backlog](../../crates/araphor-data/src/analysis/raw/budget.rs) derives
 active Required minima from committed processor state. Volatile counters use
@@ -249,18 +256,19 @@ and original spans. No second durable backlog index is added.
 ## Backup and recovery
 
 [Backup](../../crates/araphor-data/src/analysis/native/backup/mod.rs) seals raw
-segments and exports the protected engine cut. [BackupBudget](../../crates/araphor-data/src/analysis/native/backup/budget.rs)
-admits each engine output before it is created. It reserves the remaining raw
-copies, manifest, and trace capacity. Fjall and lsm-tree report paths and exact
-lengths; Data owns capacity policy. The final manifest uses actual checksums.
+segments and exports the protected engine cut. The checkpoint callback records
+unique relative paths and expected file lengths. Data compares that inventory
+with the exported files. Data also checks directory membership, checksums, raw
+records, and trace obligation metadata. The callback applies no storage quota.
 
-A destination refusal can leave source flushing completed. It preserves the
+A destination I/O failure can leave source flushing completed. It preserves the
 logical Data cut and source readiness. Fjall removes the incomplete checkpoint.
 The outer staging directory is temporary. Raw payloads occur once in the backup.
 
 [Restore](../../crates/araphor-data/src/analysis/native/backup/restore.rs)
-validates the bundle and pure entry limits before it creates the target. It
-uses an exclusive lease and a durable pending marker during copy and validation.
+validates the complete bundle before it creates the target. It uses an exclusive
+lease and a durable pending marker during copy and validation. A failed copy can
+leave partial files. The pending marker prevents open and repeated restore.
 Restore verifies store identity, raw receipts, history, and the committed cut
 before it clears that marker. It advances the recovery epoch. An existing
 DuckDB directory is rejected; it is not opened as an empty native database.
@@ -273,6 +281,31 @@ recovery epoch once. The checks compare exact raw pages, native contexts,
 source metadata, and every file listed in the backup manifest. They also check
 backup retry after later input. The three focused tests pass in 1.47 seconds.
 The old SQL backup and restore crash tests are removed.
+
+## Quota removal qualification
+
+The source removes Data quotas and their Control configuration. The retired
+protobuf field numbers and names remain reserved. The engine keeps its normal
+cache and memtable settings. Query, package, and Required-input resource owners
+remain separate from storage usage reporting.
+
+[Native backup checks](../../crates/araphor-data/tests/native_backup.rs) pass
+eight cases. The tests include incomplete traces, 17 MiB raw segments, writer
+exclusion, held views, duplicate-stamp readiness failure, private bundle paths,
+physical faults, and semantic restore faults. The old SQL backup family is
+removed after these replacements pass. Six lifecycle and four indexed
+notification cases also pass. The [native trace check](../../crates/araphor-query/tests/native_execution/trace.rs)
+passes captured-read revocation through Query and package execution.
+The process-isolated file-size cases pass raw append failure and checkpoint
+export failure. Both cases preserve their distinct ACK and recovery boundaries.
+The export fixture copies empty native directories and checks the real EFBIG
+cause. The failed export destination remains unpublished.
+
+Production checks pass for Data, Query, Analysis, Control, CLI, and the E2E
+harness. Full CI remains excluded by user instruction. Existing obsolete Data
+unit fixtures still prevent complete unit-target qualification. The new private
+usage fixture has no execution result from that target. No new speed gain is
+claimed from quota removal.
 
 ## Verification and limits
 
@@ -298,9 +331,10 @@ The old SQL backup and restore crash tests are removed.
   still requires a native port.
 - The focused native lifecycle suite passes six cases. It covers raw recovery,
   backup and restore, Required byte and age bounds, rollback, restart, retirement
-  before expiry, witness expiry, and maintenance while ordinary admission fails.
-- Seven focused notification preparation cases and four indexed notification
-  cases pass. Configured route and related-state bounds are included.
+  before expiry, witness expiry, and maintenance after Required retirement.
+- The four indexed notification cases pass. Lookup returns all five retained
+  states before and after reopen. The two quota-only preparation cases are
+  removed. Prepared memory, cancellation, and current-view checks remain.
 - The expanded Graph domain suite passed 24 cases before the final admission
   changes. It includes retained traversal and ordinary projections without state.
 - Fjall checkpoint checks pass three cases. LSM metadata checks pass two cases.

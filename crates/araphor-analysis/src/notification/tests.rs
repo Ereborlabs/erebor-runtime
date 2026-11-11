@@ -11,7 +11,6 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 mod access;
 mod concern;
 mod delivery;
-mod isolation;
 mod lifecycle;
 mod limits;
 mod reactive;

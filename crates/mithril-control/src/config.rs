@@ -54,8 +54,6 @@ pub struct ControlConfig {
     #[serde(default)]
     pub data_retention: araphor_data::RetentionLimitsV1,
     #[serde(default)]
-    pub data_storage: araphor_data::StorageLimitsV1,
-    #[serde(default)]
     pub data_retirements: Vec<araphor_data::ProcessorRetirementV1>,
     #[serde(default)]
     pub discovery: bool,
@@ -250,12 +248,6 @@ impl ControlConfig {
                 });
         }
         ensure!(
-            self.data_storage.valid(),
-            InvalidConfigurationSnafu {
-                reason: "data storage capacity limits are invalid"
-            }
-        );
-        ensure!(
             self.control_store_directory
                 .as_ref()
                 .is_none_or(|path| path.is_absolute()),
@@ -326,10 +318,9 @@ impl ControlConfig {
             .context(IoSnafu {
                 path: &self.evidence_directory,
             })?;
-        araphor_data::AnalysisStore::open_with_limits(
+        araphor_data::AnalysisStore::open_with_retention(
             self.evidence_directory.join("analysis"),
             self.data_retention,
-            self.data_storage,
         )
         .and_then(|data| {
             for request in &self.data_retirements {

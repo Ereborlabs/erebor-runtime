@@ -100,9 +100,9 @@ impl Failure {
             Error::AnalysisReadCancelled { .. } => Self::Cancelled,
             Error::AnalysisReadDeadline { .. } => Self::DeadlineExceeded,
             Error::AnalysisBusy { .. } => Self::Busy,
-            Error::RetentionUnavailable { .. }
-            | Error::StorageCapacity { .. }
-            | Error::ProtectedInputCapacity { .. } => Self::StorageUnavailable,
+            Error::RetentionUnavailable { .. } | Error::ProtectedInputCapacity { .. } => {
+                Self::StorageUnavailable
+            }
             _ => Self::EvaluationFailed,
         }
     }

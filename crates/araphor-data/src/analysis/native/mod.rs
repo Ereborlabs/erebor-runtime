@@ -1,12 +1,22 @@
 //! Data owns original raw segments and versioned native transactions.
 
-use std :: { ops :: Bound :: Included , path :: { Path , PathBuf } , sync :: { atomic :: { AtomicBool , AtomicUsize , Ordering } , Arc , Mutex , MutexGuard , RwLock } } ;
+use std::{
+    ops::Bound::Included,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard, RwLock,
+    },
+};
 
 use fjall::{Branch, BranchSnapshot, BranchWriteTransaction, Commit, SingleWriterTxDatabase};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
-use super :: { raw :: { RawIndex , RawJournal } , read :: locks :: { Mutex as RawMutex , RwLock as Maintenance } } ;
+use super::{
+    raw::{RawIndex, RawJournal},
+    read::locks::{Mutex as RawMutex, RwLock as Maintenance},
+};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result};
 
 const HEAD: &[u8] = b"\0data/head";
@@ -16,19 +26,19 @@ const SCHEMA: &[u8] = b"\0data/schema";
 const RECOVERY: &[u8] = b"\0data/recovery";
 
 mod admission;
-mod capacity;
 mod backup;
+mod capacity;
 mod context;
 mod extraction;
-mod health;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixtures;
+mod health;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fixtures::StorageFault;
 pub(in crate::analysis) mod inputs;
 mod managed;
-use managed::PublicationRead;
 pub(in crate::analysis) use managed::FindingRead;
+use managed::PublicationRead;
 mod notification;
 pub use notification::NotificationCapture;
 mod packages;
@@ -36,14 +46,17 @@ mod progress;
 mod records;
 mod retention;
 pub use retention::EvidenceRetentionOwner;
+mod recovery;
 mod revisions;
 mod source;
 mod trace;
 mod witnesses;
-mod recovery;
 
 pub use inputs::ActivationSubscription;
-pub use managed :: { GraphPublication , ManagedCommit , ManagedGraph , ManagedGraphJournal , ManagedGraphTransaction , ManagedLease , ManagedReturn , PreparedManagedCommit } ;
+pub use managed::{
+    GraphPublication, ManagedCommit, ManagedGraph, ManagedGraphJournal, ManagedGraphTransaction,
+    ManagedLease, ManagedReturn, PreparedManagedCommit,
+};
 
 pub struct NativeStore {
     database: SingleWriterTxDatabase,
@@ -58,10 +71,7 @@ pub struct NativeStore {
     managed_owner: AtomicBool,
     notification_owner: AtomicBool,
     discovery_owners: AtomicUsize,
-    storage: crate::StorageLimitsV1,
     retention: crate::RetentionLimitsV1,
-    read_slots: Option<Arc<tokio::sync::Semaphore>>,
-    capacity: tokio::sync::watch::Sender<()>,
     revision: tokio::sync::watch::Sender<u64>,
     controls: tokio::sync::watch::Sender<()>,
     inputs: Arc<inputs::Coordinator>,
@@ -96,7 +106,6 @@ pub struct DataWrite<'a> {
     processors: std::collections::BTreeMap<u64, (crate::EvidenceIntakeIdentityV1, Option<u64>)>,
     expiry: Vec<(u64, Vec<u8>, u64, u64)>,
     deletions: Vec<u64>,
-    quotas: std::collections::BTreeSet<[u8; 16]>,
     verified: super::context::VerifiedPackages,
     _writer: MutexGuard<'a, ()>,
 }
@@ -131,45 +140,36 @@ impl NativeStore {
     }
 
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with_limits(root, Default::default(), Default::default())
+        Self::open_with_retention(root, Default::default())
     }
 
-    pub fn open_with_limits(
+    pub fn open_with_retention(
         root: impl AsRef<Path>,
         retention: crate::RetentionLimitsV1,
-        storage: crate::StorageLimitsV1,
     ) -> Result<Self> {
         let root = root.as_ref();
-        if !storage.valid()
-            || storage
-                .native_memory_bytes
-                .is_some_and(|bytes| bytes < 1024 * 1024)
-        {
-            return crate::Error::reject_path(root, "the storage capacity limits are invalid");
-        }
         let lease = super::read::AnalysisLease::acquire(root)?;
-        Self::open_leased(root, retention, storage, lease, false)
+        Self::open_leased(root, retention, lease, false)
     }
 
     fn open_leased(
         root: &Path,
         retention: crate::RetentionLimitsV1,
-        storage: crate::StorageLimitsV1,
         lease: super::read::AnalysisLease,
         restoring: bool,
     ) -> Result<Self> {
-
         let pending = root.join("restore.pending");
-        if !restoring { match std::fs::symlink_metadata(&pending) {
-            Ok(_) => {
-                return crate::Error::reject_path(
-                    root,
-                    "the analysis restore is incomplete; restore into a new directory",
-                )
+        if !restoring {
+            match std::fs::symlink_metadata(&pending) {
+                Ok(_) => {
+                    return crate::Error::reject_path(
+                        root,
+                        "the analysis restore is incomplete; restore into a new directory",
+                    )
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(source) => return Err(source).context(crate::IoSnafu { path: pending }),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-            Err(source) => return Err(source).context(crate::IoSnafu { path: pending }),
-        }
         }
         let legacy = root.join("analysis.duckdb");
         match std::fs::symlink_metadata(&legacy) {
@@ -182,17 +182,8 @@ impl NativeStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(source) => return Err(source).context(crate::IoSnafu { path: legacy }),
         }
-        let mut builder = SingleWriterTxDatabase::builder(root.join("fjall")).versioned();
-        if let Some(bytes) = storage.native_memory_bytes {
-            let buffer = (bytes / 2).max(1024 * 1024);
-            #[allow(deprecated)]
-            {
-                builder = builder
-                    .cache_size(bytes - buffer)
-                    .max_write_buffer_size(Some(buffer));
-            }
-        }
-        let database = builder
+        let database = SingleWriterTxDatabase::builder(root.join("fjall"))
+            .versioned()
             .open()
             .context(NativeStorageSnafu { operation: "open" })?;
         let branch = match database.branch("data").context(NativeStorageSnafu {
@@ -338,12 +329,7 @@ impl NativeStore {
             managed_owner: AtomicBool::new(false),
             notification_owner: AtomicBool::new(false),
             discovery_owners: AtomicUsize::new(0),
-            storage,
             retention,
-            read_slots: storage
-                .reader_admissions
-                .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
-            capacity: tokio::sync::watch::channel(()).0,
             revision,
             controls: tokio::sync::watch::channel(()).0,
             inputs,
@@ -462,7 +448,9 @@ impl NativeStore {
     }
 
     fn check(&self) -> Result<()> {
-        if self.database.inner().is_poisoned() { self.poison(); }
+        if self.database.inner().is_poisoned() {
+            self.poison();
+        }
         if !self.ready.load(Ordering::Acquire) {
             return NativeStateSnafu {
                 field: "uncertain commit; reopen required",
@@ -545,13 +533,11 @@ impl NativeStore {
 
     pub fn write(&self) -> Result<DataWrite<'_>> {
         let write = self.write_access()?;
-        self.require_capacity(false)?;
         Ok(write)
     }
 
     fn maintenance_write(&self) -> Result<DataWrite<'_>> {
         let write = self.write_access()?;
-        self.require_capacity(true)?;
         Ok(write)
     }
 
@@ -602,7 +588,6 @@ impl NativeStore {
             processors: Default::default(),
             expiry: Vec::new(),
             deletions: Vec::new(),
-            quotas: Default::default(),
             verified: super::context::VerifiedPackages::default(),
             _writer: writer,
         })
@@ -653,13 +638,20 @@ impl<'a> DataWrite<'a> {
         if !self.dirty && stamps.is_empty() {
             return Ok((None, self._writer));
         }
-        self.check_revisions()?;
         {
-            let raw = self.store.raw.lock().map_err(|_| NativeStateSnafu { field: "raw owner lock" }.build())?;
+            let raw = self.store.raw.lock().map_err(|_| {
+                NativeStateSnafu {
+                    field: "raw owner lock",
+                }
+                .build()
+            })?;
             self.deletions.extend(raw.budget.deletions.iter().copied());
         }
         for id in &self.deletions {
-            self.transaction.remove(retention::ExpiredSegment::key(retention::ExpiredSegment::DELETING, *id));
+            self.transaction.remove(retention::ExpiredSegment::key(
+                retention::ExpiredSegment::DELETING,
+                *id,
+            ));
         }
         self.checkpoint_inputs()?;
         self.stage_raw()?;
@@ -707,9 +699,12 @@ impl<'a> DataWrite<'a> {
             })?;
             raw.index = view.raw.clone();
             for (owner, (identity, floor)) in self.processors {
-                raw.budget.set_required(owner, identity.key(), identity.tenant_id, floor);
+                raw.budget
+                    .set_required(owner, identity.key(), identity.tenant_id, floor);
             }
-            for id in self.deletions { raw.budget.deletions.remove(&id); }
+            for id in self.deletions {
+                raw.budget.deletions.remove(&id);
+            }
             for (id, key, first, last) in self.expiry {
                 if let Some(segment) = raw.segments.get(&id) {
                     segment.live.store(false, Ordering::Release);

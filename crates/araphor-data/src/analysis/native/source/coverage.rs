@@ -178,7 +178,6 @@ impl NativeStore {
         control: &AnalysisReadControl,
     ) -> Result<crate::CoverageChanges> {
         control.check()?;
-        let _permit = self.reserve_reader()?;
         let view = self.view()?;
         Ok(crate::CoverageChanges {
             meta: view.meta(),
@@ -193,7 +192,6 @@ impl NativeStore {
         control: &AnalysisReadControl,
     ) -> Result<CoverageRecord> {
         control.check()?;
-        let _permit = self.reserve_reader()?;
         self.view()?.coverage_report(selection, reference, control)
     }
 

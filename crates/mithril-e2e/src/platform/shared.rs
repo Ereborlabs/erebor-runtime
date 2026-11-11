@@ -729,14 +729,7 @@ impl Shared {
         let intake = match &self.diagnostic_data {
             Some(path) => mithril_control::EvidenceIntakeOwner::new(
                 store,
-                Arc::new(araphor_data::AnalysisStore::open_with_limits(
-                    path,
-                    Default::default(),
-                    araphor_data::StorageLimitsV1 {
-                        disk_max_bytes: Some(1024 * 1024 * 1024),
-                        ..Default::default()
-                    },
-                )?),
+                Arc::new(araphor_data::AnalysisStore::open(path)?),
                 Arc::new(mithril_control::SystemIntakeClock),
             )?,
             None => mithril_control::EvidenceIntakeOwner::try_from(store)?,

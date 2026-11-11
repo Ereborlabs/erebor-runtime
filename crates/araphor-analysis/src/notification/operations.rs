@@ -10,15 +10,6 @@ impl NotificationRouter {
         let mut after = None;
         loop {
             let (page, next) = self.obligations_page(grant, after, now)?;
-            NotificationErrorCodeV1::Limit.require(
-                states.len().checked_add(page.len()).is_some_and(|count| {
-                    self.store
-                        .storage_limits()
-                        .notification_states
-                        .is_none_or(|limit| count <= limit)
-                }),
-                "notification read count",
-            )?;
             states.extend(page);
             let Some(next) = next else {
                 return Ok(states);

@@ -28,16 +28,9 @@ impl NotificationRouter {
     }
 
     pub(super) fn routes(&self, tenant: [u8; 16]) -> Result<Vec<ApprovedNotificationRouteV1>> {
-        let limit = self.store.storage_limits().notification_routes;
-        let contexts = self.store.context_heads(
-            tenant,
-            NOTIFICATION_ROUTE_OWNER,
-            limit.unwrap_or(usize::MAX).max(1),
-        )?;
-        NotificationErrorCodeV1::Limit.require(
-            limit.is_none_or(|limit| contexts.len() <= limit),
-            "route count",
-        )?;
+        let contexts = self
+            .store
+            .context_heads(tenant, NOTIFICATION_ROUTE_OWNER, usize::MAX)?;
         contexts
             .iter()
             .map(|value| ApprovedNotificationRouteV1::try_from(value).map_err(Into::into))
@@ -106,13 +99,6 @@ impl NotificationRouter {
         let contexts = self.store.notification_states(
             finding.tenant_id,
             NotificationLookup::Finding(&finding.finding_id, finding.required_action.as_deref()),
-        )?;
-        NotificationErrorCodeV1::Limit.require(
-            self.store
-                .storage_limits()
-                .notification_routes
-                .is_none_or(|limit| contexts.len() <= limit.saturating_add(1)),
-            "related obligation count",
         )?;
         contexts
             .iter()

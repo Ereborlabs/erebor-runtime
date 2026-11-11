@@ -587,13 +587,12 @@ mod tests {
         use std::time::Duration;
 
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open_with_limits(
+        let store = Arc::new(AnalysisStore::open_with_retention(
             directory.path().join("data"),
             RetentionLimitsV1 {
                 raw_max_age_ns: Some(1),
                 ..Default::default()
             },
-            Default::default(),
         )?);
         let owner = TraceOwner::new(store.clone());
         owner.accept(request()?, access(), 1)?;

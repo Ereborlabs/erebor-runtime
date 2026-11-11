@@ -941,13 +941,12 @@ async fn managed_expiry_drains_heads() -> TestResult {
     )?;
     let records = manifest.records.into_iter().take(3).collect::<Vec<_>>();
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
+    let store = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("data"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(araphor_data::GRAPH_WITNESS_TTL_NS),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?);
     let fixture = Fixture::stored(Target::Sql, records, directory, store)?;
     let (grant, definition) = fixture.graph_definition().await?;

@@ -120,13 +120,12 @@ async fn closed_replay_keeps_origin() -> TestResult {
 #[tokio::test]
 async fn replay_reports_expired_journal() -> TestResult {
     let mut fixture = Fixture::new(Limits::default())?;
-    fixture.store = Arc::new(AnalysisStore::open_with_limits(
+    fixture.store = Arc::new(AnalysisStore::open_with_retention(
         fixture._directory.path().join("retained"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             ..Default::default()
         },
-        Default::default(),
     )?);
     fixture.store.install_package_image(
         fixture.source.tenant_id,

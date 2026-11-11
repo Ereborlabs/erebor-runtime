@@ -459,7 +459,6 @@ impl Engine {
         {
             let control =
                 Arc::new(AnalysisReadControl::default().within(self.limits.extract_timeout)?);
-            let permit = self.store.reserve_trace_read()?;
             let engine = Arc::clone(self);
             let snapshot = Arc::clone(snapshot);
             let stage = Arc::clone(&control);
@@ -470,7 +469,6 @@ impl Engine {
                         snapshot.selection.tenant_id,
                         snapshot.page.extraction.trace_reads(),
                         &stage,
-                        permit,
                     )
                     .map_err(crate::Error::from)
             })
@@ -708,7 +706,7 @@ impl Engine {
             tables: Arc::default(),
             calls: None,
             managed: None,
-            
+
             consumer: None,
             reference: None,
             replay_frontier: None,
@@ -877,7 +875,7 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
-    
+
     pub(crate) consumer: Option<araphor_data::ManagedInstance>,
     pub(crate) reference: Option<Arc<araphor_data::ManagedAttempt>>,
     pub(crate) replay_frontier: Option<ReplayFrontier>,
@@ -1046,7 +1044,6 @@ impl Session {
         Engine::blocking(control, scope, move || capture.capture().context(SqlSnafu)).await
     }
 
-    
     pub fn bind_consumer(&mut self, instance: araphor_data::ManagedInstance) -> Result<()> {
         if self.consumer.is_some()
             || self.managed.is_some()
@@ -1073,7 +1070,7 @@ impl Session {
             tables: Arc::clone(&self.tables),
             calls: None,
             managed: None,
-            
+
             consumer: self.consumer.clone(),
             reference: self.reference.clone(),
             replay_frontier: self.replay_frontier.clone(),
@@ -1626,7 +1623,7 @@ impl Session {
                 let store = Arc::clone(&self.engine.store);
                 let control = Arc::new(self.control.operation()?);
                 let memory = Arc::clone(&self.memory);
-                
+
                 let inputs = self.input_changes.clone().filter(|inputs| {
                     managed.as_ref().is_some_and(|managed| managed.follow)
                         && !inputs.can_resume(parent.position)
@@ -1870,7 +1867,7 @@ impl Session {
                             }
                             let index_at = std::time::Instant::now();
                             index.restore(Arc::clone(&frame), receipt, &control).context(SqlSnafu)?;
-                            
+
                             if let Some(inputs) = &inputs {
                                 let budget = memory.managed_budget(control.as_ref(), limits.input_bytes);
                                 inputs.observe_source(&frame, &control, budget.as_ref())?;
@@ -1928,11 +1925,11 @@ impl Session {
             Arc::clone(&self.memory),
             managed,
         );
-        
+
         if let Some(consumer) = &self.consumer {
             snapshot.bind_consumer(consumer.clone()).context(SqlSnafu)?;
         }
-        
+
         if self.reference.is_none()
             && (self.managed.as_ref().is_some_and(|managed| managed.follow)
                 || self.consumer.is_some())

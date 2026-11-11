@@ -1,7 +1,5 @@
 use std::path::Path;
 
-
-
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
@@ -43,31 +41,46 @@ mod test_support;
 pub use test_support::RawIndexFixture;
 mod trace;
 
-pub use backup::{AnalysisBackupFileV1, AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
-pub use capacity::{StorageLimitsV1, StorageUsageV1};
+pub use backup::{
+    AnalysisBackupFileV1, AnalysisBackupManifestV1, AnalysisBackupSegmentV1,
+    AnalysisRecoveryStatusV1,
+};
+pub use capacity::StorageUsageV1;
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use coverage::{CoverageChanges, CoverageRecord, CoverageReportRef};
-pub use extraction :: { AnalysisAppendRead , AnalysisExtractLimits , AnalysisExtractionV1 , AnalysisPositionPageV1 , AnalysisReadModeV1 , AnalysisReferenceOriginV1 , AnalysisReferenceV1 , AnalysisSelectionV1 , AnalysisSourceSnapshotV1 , AnalysisTableRead , AnalysisTableRequests , Selection } ;
+pub use extraction::{
+    AnalysisAppendRead, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisPositionPageV1,
+    AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
+    AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
+};
 pub use graph::{GraphCommit, GraphManifest, GraphSourceSummary};
 
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use inputs::InputSubscription;
 pub use managed::*;
-pub use native :: { ActivationSubscription , ManagedCommit , ManagedGraphJournal , ManagedGraphTransaction , ManagedLease , ManagedReturn , NativeStore as AnalysisStore , PreparedManagedCommit } ;
+pub use native::EvidenceRetentionOwner;
+pub use native::{
+    ActivationSubscription, ManagedCommit, ManagedGraphJournal, ManagedGraphTransaction,
+    ManagedLease, ManagedReturn, NativeStore as AnalysisStore, PreparedManagedCommit,
+};
 pub use notification::{NotificationLookup, PreparedNotificationBatch};
 pub use packages::*;
-pub use progress :: { AnalysisContextRefV1 , AnalysisGapV1 , AnalysisProcessorResultV1 , AnalysisResultCommitV1 , AnalysisResultReceiptV1 , AnalysisWitnessV1 , ProcessorClassV1 , ProcessorScopeV1 } ;
-pub use progress :: { DiscoveryProducer , PreparedProfile , ProfileCommit , MAX_RESULT_BYTES , MAX_RESULT_REFS } ;
+pub use progress::{
+    AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
+    AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
+};
+pub use progress::{
+    DiscoveryProducer, PreparedProfile, ProfileCommit, MAX_RESULT_BYTES, MAX_RESULT_REFS,
+};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use retention::RetentionResultV1;
 pub use retention::{RetentionLimitsV1, RetentionStepV1};
-pub use native::EvidenceRetentionOwner;
 pub use retirement::ProcessorRetirementV1;
 pub use segment_file::{SegmentFile, EVIDENCE_SEGMENT_BYTES};
-pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermit, TraceStateV1};
+pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_SCHEMA_VERSION: i64 = 41;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
@@ -90,8 +103,6 @@ struct CommitHook {
     stage: AnalysisCommitStage,
     callback: Box<dyn FnOnce() -> Result<()> + Send>,
 }
-
-
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AnalysisStoreMetaV1 {
@@ -194,13 +205,10 @@ pub enum EvidenceStoreOutcomeV1 {
     AlreadyAcceptedExpired,
 }
 
-
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::EVIDENCE_BATCH_RECORDS;
-    
 
     pub(in crate::analysis) fn assert_no_execution(store: &AnalysisStore) -> Result<()> {
         let counts = store.read_snapshot(|reader| {

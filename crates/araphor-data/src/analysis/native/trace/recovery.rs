@@ -1,4 +1,7 @@
-use super :: { IntentRecord , NativeStateSnafu , NativeStorageSnafu , RawIdentity , RawReceipt , RawSource , Records , Result , Traces } ;
+use super::{
+    IntentRecord, NativeStateSnafu, NativeStorageSnafu, RawIdentity, RawReceipt, RawSource,
+    Records, Result, Traces,
+};
 use crate::analysis::raw::RawJournal;
 use crate::{TraceOutputReceiptV1, TraceStateV1};
 use snafu::ResultExt as _;
@@ -229,8 +232,8 @@ impl Traces {
             bytes = bytes
                 .checked_add(crate::analysis::quota::TRACE_RESERVE)
                 .ok_or_else(|| {
-                    crate::StorageCapacitySnafu {
-                        resource: "diagnostic physical reserve",
+                    crate::NativeStateSnafu {
+                        field: "diagnostic byte reserve",
                     }
                     .build()
                 })?;
@@ -243,8 +246,8 @@ impl Traces {
                     },
                 )
                 .ok_or_else(|| {
-                    crate::StorageCapacitySnafu {
-                        resource: "diagnostic storage entries",
+                    crate::NativeStateSnafu {
+                        field: "diagnostic slot reserve",
                     }
                     .build()
                 })?;

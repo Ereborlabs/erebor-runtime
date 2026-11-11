@@ -1,42 +1,24 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Read as _,
-    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _},
     path::Path,
 };
 
 use snafu::ResultExt as _;
 
 use super::NativeStore;
-use crate::{
-    AnalysisBackupManifestV1, IoSnafu, NativeStateSnafu, NativeStorageSnafu, Result,
-    StorageLimitsV1,
-};
+use crate::{AnalysisBackupManifestV1, IoSnafu, NativeStateSnafu, NativeStorageSnafu, Result};
 
 impl NativeStore {
     pub fn restore(backup: &Path, root: &Path) -> Result<Self> {
-        Self::restore_with_limits(backup, root, StorageLimitsV1::default())
-    }
-
-    pub fn restore_with_limits(
-        backup: &Path,
-        root: &Path,
-        storage: StorageLimitsV1,
-    ) -> Result<Self> {
-        if !storage.valid()
-            || storage
-                .native_memory_bytes
-                .is_some_and(|bytes| bytes < 1024 * 1024)
-            || !backup.is_absolute()
-            || !root.is_absolute()
-        {
-            return crate::Error::reject_path(root, "the restore paths or limits are invalid");
+        if !backup.is_absolute() || !root.is_absolute() {
+            return crate::Error::reject_path(root, "the restore paths are invalid");
         }
         Self::private_directory(backup)?;
         let path = backup.join("manifest.json");
         let file = Self::bundle_file(&path)?;
         let length = file.metadata().context(IoSnafu { path: &path })?.len();
-        storage.check_manifest(length)?;
         let mut bytes = Vec::new();
         file.take(length.checked_add(1).ok_or_else(|| {
             NativeStateSnafu {
@@ -52,33 +34,7 @@ impl NativeStore {
         let manifest: AnalysisBackupManifestV1 =
             serde_json::from_slice(&bytes).context(crate::JsonSnafu { path: &path })?;
         Self::validate_bundle(&manifest, backup)?;
-        let diagnostics = manifest
-            .segments
-            .iter()
-            .filter(|segment| segment.file_name.split('.').nth(1) == Some("d"))
-            .count();
         let directories = Self::checkpoint_dirs(&manifest.database_files)?;
-        let entries = manifest
-            .database_files
-            .len()
-            .checked_add(directories.len())
-            .and_then(|count| count.checked_add(manifest.segments.len() - diagnostics))
-            .and_then(|count| count.checked_add(4))
-            .ok_or_else(|| {
-                NativeStateSnafu {
-                    field: "restore entry count",
-                }
-                .build()
-            })?;
-        let slots = diagnostics
-            .checked_add(manifest.reserved_entries)
-            .ok_or_else(|| {
-                NativeStateSnafu {
-                    field: "restore diagnostic entries",
-                }
-                .build()
-            })?;
-        storage.check_entries(entries, slots)?;
         let lease = crate::analysis::read::AnalysisLease::acquire(root)?;
         for entry in fs::read_dir(root).context(IoSnafu { path: root })? {
             if entry.context(IoSnafu { path: root })?.file_name() != "analysis.lock" {
@@ -96,18 +52,6 @@ impl NativeStore {
         Self::sync_directory(root)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         Self::crash_path(root, "restore.pending");
-        let copy_bytes = manifest
-            .copy_bytes(root, 0)?
-            .checked_add(manifest.reserved_bytes)
-            .ok_or_else(|| {
-                NativeStateSnafu {
-                    field: "restore reserve",
-                }
-                .build()
-            })?;
-        storage.check_copy(crate::StorageUsageV1::free_bytes(root)?, copy_bytes)?;
-        let usage = crate::StorageUsageV1::inspect(root, entries - 2, slots, None, storage)?;
-        storage.check_append(usage, copy_bytes)?;
         let engine = root.join("fjall");
         fs::DirBuilder::new()
             .mode(0o700)
@@ -149,7 +93,7 @@ impl NativeStore {
         Self::sync_directory(root)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         Self::crash_path(root, "restore.copied");
-        let store = Self::open_leased(root, Default::default(), storage, lease, true)?;
+        let store = Self::open_leased(root, Default::default(), lease, true)?;
         let view = store.view()?;
         if view.store_uuid.to_string() != manifest.store_uuid
             || view.schema_version != manifest.schema_version

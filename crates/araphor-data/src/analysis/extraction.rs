@@ -11,8 +11,13 @@ use snafu::ResultExt as _;
 
 use super::raw::{RawIdentity, TracePayload, TraceRecord};
 use super::segments::SegmentRange;
-use super :: { AnalysisContextKeyV1 , AnalysisGapV1 , AnalysisReadControl , AnalysisSourceReceiptV1 , AnalysisStoreMetaV1 , StorePositionV1 , MAX_ANALYSIS_PAGE_RECORDS } ;
-use crate :: { AnalysisInputTooLargeSnafu , EvidenceIntakeIdentityV1 , EvidenceRecord , Result , TraceIdentityV1 } ;
+use super::{
+    AnalysisContextKeyV1, AnalysisGapV1, AnalysisReadControl, AnalysisSourceReceiptV1,
+    AnalysisStoreMetaV1, StorePositionV1, MAX_ANALYSIS_PAGE_RECORDS,
+};
+use crate::{
+    AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, EvidenceRecord, Result, TraceIdentityV1,
+};
 
 type IndexedNotificationGraph = (Vec<u8>, u64, u64, u64, Option<bool>, u64);
 
@@ -22,7 +27,6 @@ pub use append::AnalysisAppendRead;
 pub(in crate::analysis) mod changes;
 
 mod graph;
-
 
 pub(in crate::analysis) mod raw;
 mod selection;
@@ -1046,7 +1050,10 @@ impl AnalysisExtractionV1 {
         Ok(())
     }
 
-    pub(in crate::analysis) fn inherit_witness(&mut self, witness: crate::AnalysisWitnessV1) -> Result<()> {
+    pub(in crate::analysis) fn inherit_witness(
+        &mut self,
+        witness: crate::AnalysisWitnessV1,
+    ) -> Result<()> {
         let index = match self.witnesses.binary_search_by(|prior| {
             prior
                 .identity
@@ -1177,12 +1184,14 @@ impl AnalysisExtractionV1 {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisContextVersionV1 , AnalysisResultCommitV1 , ContextSensitivityV1 , EvidenceRetentionOwner , ProcessorClassV1 , ProcessorScopeV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisContextVersionV1, AnalysisResultCommitV1, ContextSensitivityV1,
+        EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1, RetentionLimitsV1,
+        ValidatedEvidenceBatchV1,
+    };
     use araphor_analysis_sdk::arrow_array::{Array, BinaryArray, UInt32Array, UInt64Array};
 
     const KEY_LIMIT: usize = 1024;
@@ -3047,11 +3056,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(1024),
         };
-        let store = AnalysisStore::open_with_limits(
-            directory.path().join("analysis"),
-            limits,
-            Default::default(),
-        )?;
+        let store = AnalysisStore::open_with_retention(directory.path().join("analysis"), limits)?;
         let identity = identity(1);
         store.accept_validated_batch(identity.clone(), batch(1, 1, 1)?)?;
         store.backup(&store.root.join("backups/sealed"))?;
@@ -3438,11 +3443,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(1),
         };
-        let store = AnalysisStore::open_with_limits(
-            directory.path().join("analysis"),
-            limits,
-            Default::default(),
-        )?;
+        let store = AnalysisStore::open_with_retention(directory.path().join("analysis"), limits)?;
         let identity = identity(1);
         let frame_bytes = 128 * 1024;
         for group in 0..18 {

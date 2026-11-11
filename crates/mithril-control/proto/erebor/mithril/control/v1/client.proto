@@ -192,8 +192,8 @@ message QueryHealth {
   uint64 dependency_revision = 1 [jstype = JS_STRING];
   bool write_ready = 2;
   bool retention_healthy = 3;
-  bool intake_capacity = 4;
-  bool maintenance_capacity = 5;
+  reserved 4, 5;
+  reserved "intake_capacity", "maintenance_capacity";
 }
 
 message QueryError {

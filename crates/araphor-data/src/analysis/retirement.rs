@@ -1,7 +1,6 @@
-
 use serde::{Deserialize, Serialize};
 
-use super :: { ProcessorScopeV1 } ;
+use super::ProcessorScopeV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,12 +28,14 @@ impl ProcessorRetirementV1 {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate :: { AnalysisResultCommitV1 , AnalysisWitnessV1 , EvidenceIntakeIdentityV1 , EvidenceRetentionOwner , ProcessorClassV1 , ProcessorStateV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
+    use crate::{
+        AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
+        EvidenceRetentionOwner, ProcessorClassV1, ProcessorStateV1, RetentionLimitsV1,
+        ValidatedEvidenceBatchV1,
+    };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -63,7 +64,7 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(100),
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let mut input = request();
         input.scope.identity.node_id = "n".repeat(128);
         store.register_processor(&input.scope, ProcessorClassV1::Required, 1)?;
@@ -167,7 +168,7 @@ mod tests {
         next.consumed_cursor = 4;
         assert!(store.commit_result(&next).is_err());
         drop(store);
-        let reopened = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let reopened = AnalysisStore::open_with_retention(&root, limits)?;
         assert_eq!(
             reopened.processor_retirement(&input.scope)?,
             Some((input.clone(), revision))

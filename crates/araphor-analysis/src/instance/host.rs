@@ -366,9 +366,8 @@ impl InstanceHost {
         registration: Registration,
         mut requests: mpsc::UnboundedReceiver<PauseRequest>,
     ) -> Result<()> {
-        
         let mut notices = self.query.store().subscribe_activations()?;
-        
+
         let mut metadata = Some(self.membership(Arc::clone(&reader)).boxed());
         let mut members = FuturesUnordered::new();
         let result = loop {
@@ -485,24 +484,7 @@ impl InstanceHost {
                 reader.active_managed(&stage).map_err(Into::into)
             })
         };
-        let result = read().await;
-        let result = {
-            let mut result = result;
-            while matches!(
-                &result,
-                Err(araphor_query::Error::Data {
-                    source: araphor_data::Error::AnalysisBusy {
-                        resource: "reader",
-                        ..
-                    },
-                })
-            ) {
-                control.query_async(store.wait_capacity()).await?;
-                result = read().await;
-            }
-            result
-        };
-        result.map_err(Into::into)
+        read().await.map_err(Into::into)
     }
 
     async fn wait_membership(
@@ -716,16 +698,6 @@ impl InstanceHost {
         let mut resource = None;
         let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
         while let Some(error) = current {
-            if matches!(
-                error.downcast_ref::<araphor_data::Error>(),
-                Some(araphor_data::Error::AnalysisBusy {
-                    resource: "reader",
-                    ..
-                })
-            ) {
-                resource = Some(("reader", 0));
-                break;
-            }
             if let Some(araphor_query::Error::Capacity {
                 resource: capacity @ ("shared input" | "shared output"),
                 ..
@@ -763,11 +735,6 @@ impl InstanceHost {
         epoch: u64,
     ) -> Result<bool> {
         match Self::open_resource(error) {
-            Some(("reader", _)) => {
-                control
-                    .query_async(self.query.store().wait_capacity())
-                    .await?
-            }
             Some(("shared input" | "shared output", _)) => {
                 control.query_async(memory.capacity_changed(epoch)).await?
             }
@@ -1053,26 +1020,7 @@ impl InstanceHost {
                 Ok(())
             })
         };
-        let result = read().await;
-        let result = {
-            let mut result = result;
-            while matches!(
-                &result,
-                Err(araphor_query::Error::Data {
-                    source: araphor_data::Error::AnalysisBusy {
-                        resource: "reader",
-                        ..
-                    },
-                })
-            ) {
-                control
-                    .query_async(self.query.store().wait_capacity())
-                    .await?;
-                result = read().await;
-            }
-            result
-        };
-        result.map_err(Into::into)
+        read().await.map_err(Into::into)
     }
 }
 

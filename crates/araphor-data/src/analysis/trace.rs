@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
 
-
 use serde::{Deserialize, Serialize};
 use snafu::ensure;
 
-use crate :: { Result , TraceIdentityV1 , TraceInvalidSnafu , TraceSourceV1 } ;
+use crate::{Result, TraceIdentityV1, TraceInvalidSnafu, TraceSourceV1};
 
 const TRACE_PAGE_ROWS: usize = 16;
 
@@ -86,10 +85,6 @@ pub struct TraceIntentPageV1 {
     pub intents: Vec<(TraceStateV1, TraceIntentV1)>,
     pub next_request: Option<[u8; 16]>,
 }
-
-pub struct TraceReadPermit(pub(in crate::analysis) super::read::ReadPermit);
-
-
 
 #[cfg(test)]
 pub(in crate::analysis) mod tests {
@@ -214,77 +209,6 @@ pub(in crate::analysis) mod tests {
         assert!(store.trace_intents([1; 16], None).is_err());
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn observability_intent_pressure() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("data");
-        let store = AnalysisStore::open_with_limits(
-            &root,
-            Default::default(),
-            super::super::StorageLimitsV1::fixture(),
-        )?;
-        let input = intent(3)?;
-        let state = store.accept_trace(&input)?;
-        let padding = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(root.join("quota-test"))?;
-        padding.set_len(
-            store
-                .storage
-                .disk_max_bytes
-                .ok_or("configured disk limit")?,
-        )?;
-        assert!(matches!(
-            store.accept_trace(&intent(4)?),
-            Err(crate::Error::StorageCapacity { .. })
-        ));
-        assert_eq!(store.accept_trace(&input)?, state);
-        let cancelled = store.update_trace(&TraceStateV1 {
-            cancel_requested: true,
-            read_revoked: true,
-            ..state
-        })?;
-        assert_eq!(
-            store
-                .trace_intent([1; 16], [3; 16])?
-                .map(|(state, _)| state),
-            Some(cancelled)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn diagnostic_sources_are_optional() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("data");
-        let limits = super::super::StorageLimitsV1 {
-            diagnostic_sources: Some(1),
-            tenant_diagnostic_sources: Some(1),
-            ..Default::default()
-        };
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        let first = intent(3)?;
-        let state = store.accept_trace(&first)?;
-        let before = store.meta()?;
-        assert!(matches!(
-            store.accept_trace(&intent(4)?),
-            Err(crate::Error::StorageCapacity {
-                resource: "diagnostic sources",
-                ..
-            })
-        ));
-        assert_eq!(store.meta()?, before);
-        assert!(store.trace_intent([1; 16], [4; 16])?.is_none());
-        assert_eq!(store.accept_trace(&first)?, state);
-        drop(store);
-        let store = AnalysisStore::open(&root)?;
-        store.accept_trace(&intent(4)?)?;
-        assert!(store.trace_intent([1; 16], [3; 16])?.is_some());
-        assert!(store.trace_intent([1; 16], [4; 16])?.is_some());
         Ok(())
     }
 
@@ -430,7 +354,7 @@ pub(in crate::analysis) mod tests {
         let before = store.meta()?;
         assert_eq!(before.commit_revision, committed);
         let control = AnalysisReadControl::default();
-        store.check_trace_reads([1; 16], &requests, &control, store.reserve_trace_read()?)?;
+        store.check_trace_reads([1; 16], &requests, &control)?;
         let column = crate::AnalysisStore::table_schemas()["traces"].index_of("request_id")?;
         let columns =
             std::collections::BTreeMap::from([("traces".into(), Some(BTreeSet::from([column])))]);
@@ -509,20 +433,20 @@ pub(in crate::analysis) mod tests {
         ));
         for tenant in [[0; 16], [2; 16]] {
             assert!(matches!(
-                store.check_trace_reads(tenant, &requests, &control, store.reserve_trace_read()?),
+                store.check_trace_reads(tenant, &requests, &control),
                 Err(crate::Error::AnalysisReadDenied { .. })
             ));
         }
         for request in [[0; 16], 1026_u128.to_be_bytes()] {
             assert!(matches!(
-                store.check_trace_reads([1; 16], &[request], &control, store.reserve_trace_read()?),
+                store.check_trace_reads([1; 16], &[request], &control),
                 Err(crate::Error::AnalysisReadDenied { .. })
             ));
         }
         let cancelled = AnalysisReadControl::default();
         cancelled.cancel()?;
         assert!(matches!(
-            store.check_trace_reads([1; 16], &requests, &cancelled, store.reserve_trace_read()?),
+            store.check_trace_reads([1; 16], &requests, &cancelled),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
         assert_eq!(store.meta()?, before);
@@ -532,7 +456,7 @@ pub(in crate::analysis) mod tests {
             ..last.ok_or("last trace absent")?
         })?;
         assert!(matches!(
-            store.check_trace_reads([1; 16], &requests, &control, store.reserve_trace_read()?),
+            store.check_trace_reads([1; 16], &requests, &control),
             Err(crate::Error::AnalysisReadDenied { .. })
         ));
         Ok(())

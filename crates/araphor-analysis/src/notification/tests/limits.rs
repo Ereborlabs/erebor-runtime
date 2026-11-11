@@ -85,18 +85,9 @@ fn optional_bytes_keep_history() -> TestResult {
 }
 
 #[test]
-fn configured_limits_keep_history() -> TestResult {
+fn route_retries_keep_history() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
-        directory.path().join("data"),
-        Default::default(),
-        StorageLimitsV1 {
-            notification_routes: Some(2),
-            notification_states: Some(1),
-            context_max_bytes: Some(32 * 1024),
-            ..Default::default()
-        },
-    )?);
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     let human = grant(NotificationPrincipalV1::Human);
@@ -129,47 +120,8 @@ fn configured_limits_keep_history() -> TestResult {
             assert_eq!(router.obligations(&human, 101)?.len(), 1);
         }
     }
-    assert!(matches!(
-        router.obligations(&human, 101),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::Notification {
-                code: NotificationErrorCodeV1::Limit,
-                field: "notification read count",
-                ..
-            }
-        })
-    ));
+    assert_eq!(router.obligations(&human, 101)?.len(), 2);
     assert_eq!(router.health(&human, 101)?.obligations, 2);
-    let before = store.meta()?;
-    let mut extra = human.clone();
-    extra.routes.push("third".into());
-    assert!(matches!(
-        router.configure(&extra, policy("third"), 12),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::Notification {
-                code: NotificationErrorCodeV1::Limit,
-                field: "route count",
-                ..
-            }
-        })
-    ));
-    assert_eq!(store.meta()?, before);
-    let mut large = human.clone();
-    large
-        .routes
-        .extend((0..513).map(|index| format!("route-{index:04}-{}", "r".repeat(50))));
-    large.routes.sort();
-    approved.revision = 3;
-    assert!(matches!(
-        router.configure(&large, approved, 12),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::StorageCapacity {
-                resource: "context version bytes",
-                ..
-            }
-        })
-    ));
-    assert_eq!(store.meta()?, before);
     let routes = router.routes(human.tenant_id)?;
     assert_eq!(routes.len(), 2);
     assert_eq!(
@@ -182,38 +134,6 @@ fn configured_limits_keep_history() -> TestResult {
         2
     );
     assert_eq!(router.health(&human, 101)?.obligations, 2);
-    Ok(())
-}
-
-#[test]
-fn zero_routes_reject_write() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
-        directory.path().join("data"),
-        Default::default(),
-        StorageLimitsV1 {
-            notification_routes: Some(0),
-            ..Default::default()
-        },
-    )?);
-    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
-    let before = store.meta()?;
-    assert!(matches!(
-        router.configure(
-            &grant(NotificationPrincipalV1::Human),
-            policy("primary"),
-            10
-        ),
-        Err(crate::Error::Data {
-            source: araphor_data::Error::Notification {
-                code: NotificationErrorCodeV1::Limit,
-                field: "route count",
-                ..
-            }
-        })
-    ));
-    assert_eq!(store.meta()?, before);
-    assert!(router.routes([1; 16])?.is_empty());
     Ok(())
 }
 

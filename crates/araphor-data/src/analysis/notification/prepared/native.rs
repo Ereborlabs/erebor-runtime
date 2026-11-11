@@ -48,12 +48,15 @@ impl NativeStore {
             })
             .collect::<Vec<_>>();
         let read = view
-            .head_versions(tenant, NOTIFICATION_ROUTE_OWNER, None,
-                self.storage_limits().notification_routes.map_or(usize::MAX, |limit| limit.saturating_add(1)), false, &mut |bytes| {
-                Self::charge_notice(&batch, bytes)
-            })
+            .head_versions(
+                tenant,
+                NOTIFICATION_ROUTE_OWNER,
+                None,
+                usize::MAX,
+                false,
+                &mut |bytes| Self::charge_notice(&batch, bytes),
+            )
             .and_then(|contexts| {
-                Code::Limit.require(self.storage_limits().notification_routes.is_none_or(|limit| contexts.len() <= limit), "route count")?;
                 contexts
                     .iter()
                     .map(ApprovedNotificationRouteV1::try_from)
@@ -95,11 +98,9 @@ impl NativeStore {
                 .notification_states_charged(
                     tenant,
                     NotificationLookup::Finding(&id, action.as_deref()),
-                    self.storage_limits().notification_routes.and_then(|limit| limit.checked_add(2)).unwrap_or(usize::MAX),
                     &mut |bytes| Self::charge_notice(&batch, bytes),
                 )
                 .and_then(|contexts| {
-                    Code::Limit.require(self.storage_limits().notification_routes.is_none_or(|limit| contexts.len() <= limit.saturating_add(1)), "related obligation count")?;
                     for context in contexts {
                         batch.borrow_mut().insert_state(context)?;
                     }

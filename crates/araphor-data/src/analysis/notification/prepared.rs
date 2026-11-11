@@ -4,8 +4,11 @@ use std::sync::Arc;
 use super::*;
 
 use crate::analysis::managed::PreparedMemory;
-use crate :: { AnalysisReadControl , ApprovedNotificationRouteV1 , FindingV1 , GraphRevisionV1 , ManagedBudget , NotificationErrorCodeV1 as Code , NotificationFindingRefV1 , NotificationKeyV1 , NotificationRouteRefV1 , NOTIFICATION_ROUTE_OWNER } ;
-
+use crate::{
+    AnalysisReadControl, ApprovedNotificationRouteV1, FindingV1, GraphRevisionV1, ManagedBudget,
+    NotificationErrorCodeV1 as Code, NotificationFindingRefV1, NotificationKeyV1,
+    NotificationRouteRefV1, NOTIFICATION_ROUTE_OWNER,
+};
 
 mod native;
 
@@ -158,7 +161,6 @@ impl<'a> PreparedNotificationBatch<'a> {
                 crate::Error::AnalysisReadCancelled { .. }
                     | crate::Error::AnalysisReadDeadline { .. }
                     | crate::Error::AnalysisInputTooLarge { .. }
-                    | crate::Error::StorageCapacity { .. }
                     | crate::Error::ProtectedInputCapacity { .. }
                     | crate::Error::Package {
                         code: crate::PackageErrorCodeV1::Limit,
@@ -322,5 +324,3 @@ impl<'a> PreparedNotificationBatch<'a> {
         })
     }
 }
-
-

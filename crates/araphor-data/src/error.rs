@@ -249,12 +249,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Analysis storage reached its {resource} limit"))]
-    StorageCapacity {
-        resource: &'static str,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Analysis {resource} admission is full"))]
     AnalysisBusy {
         resource: &'static str,
@@ -484,8 +478,7 @@ impl ErrorExt for Error {
             | Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
             Self::AnalysisReadCancelled { .. } => StatusCode::Cancelled,
             Self::AnalysisReadDeadline { .. } => StatusCode::DeadlineExceeded,
-            Self::StorageCapacity { .. }
-            | Self::AnalysisBusy { .. }
+            Self::AnalysisBusy { .. }
             | Self::ProtectedInputCapacity { .. }
             | Self::RetentionUnavailable { .. } => StatusCode::Unavailable,
             Self::AnalysisConflict { .. }
@@ -514,7 +507,6 @@ impl ErrorExt for Error {
             Self::Definition { source } => source.retry_hint(),
             Self::AnalysisContract { source, .. } => source.retry_hint(),
             Self::AnalysisBusy { .. }
-            | Self::StorageCapacity { .. }
             | Self::ProtectedInputCapacity { .. }
             | Self::RetentionUnavailable { .. } => RetryHint::Retryable,
             Self::Io { source, .. } => RetryHint::from_io_error(source),
@@ -663,11 +655,7 @@ mod package_tests {
             AnalysisReadDeadlineSnafu.build(),
             AnalysisReadDeniedSnafu.build(),
             AnalysisConflictSnafu.build(),
-            AnalysisBusySnafu {
-                resource: "readers",
-            }
-            .build(),
-            StorageCapacitySnafu { resource: "bytes" }.build(),
+            AnalysisBusySnafu { resource: "writer" }.build(),
             ProtectedInputCapacitySnafu { resource: "memory" }.build(),
             RetentionUnavailableSnafu.build(),
             Code::Denied.error("stored scope"),

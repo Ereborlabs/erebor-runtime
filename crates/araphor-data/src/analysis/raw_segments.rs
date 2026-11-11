@@ -1,13 +1,15 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::os::unix::fs::{MetadataExt as _, DirBuilderExt as _, PermissionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use prost::Message as _;
 use snafu::ResultExt as _;
 
-use super :: raw :: { RawCommit , RawEntry , RawIdentity , RawIndex , RawJournal , RawKind , RawLocation , RawMeta } ;
+use super::raw::{
+    RawCommit, RawEntry, RawIdentity, RawIndex, RawJournal, RawKind, RawLocation, RawMeta,
+};
 use super::{SegmentFile, StorageUsageV1, EVIDENCE_SEGMENT_BYTES};
 use crate::{AnalysisStateSnafu, IoSnafu, Result};
 
@@ -27,12 +29,6 @@ pub(super) struct RawAppend {
     pub(super) header: Option<Vec<u8>>,
     pub(super) frame: Vec<u8>,
     pub(super) commit: RawCommit,
-}
-
-impl RawAppend {
-    pub(super) fn added(&self) -> u64 {
-        (self.frame.len() + self.header.as_ref().map_or(0, Vec::len)) as u64
-    }
 }
 
 impl RawCommit {

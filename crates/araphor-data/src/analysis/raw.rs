@@ -2,8 +2,8 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-mod index;
 mod budget;
+mod index;
 pub(in crate::analysis) use budget::RawBudget;
 mod page;
 
@@ -13,7 +13,7 @@ use prost::Message as _;
 use snafu::ResultExt as _;
 
 use super::raw_segments::{DirectoryStamp, RawSegment};
-use super :: { AnalysisSourceReceiptV1 , SegmentFile , StorageUsageV1 , ValidatedEvidenceBatchV1 } ;
+use super::{AnalysisSourceReceiptV1, SegmentFile, StorageUsageV1, ValidatedEvidenceBatchV1};
 use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, Result};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -125,7 +125,6 @@ pub(super) struct RawBatch {
     intake_utc_ns: u64,
     framed_records: prost::bytes::Bytes,
     frame_ends: Vec<usize>,
-    pub(in crate::analysis) terminal_bytes: usize,
 }
 
 impl From<ValidatedEvidenceBatchV1> for RawBatch {
@@ -137,7 +136,6 @@ impl From<ValidatedEvidenceBatchV1> for RawBatch {
             intake_utc_ns: batch.intake_utc_ns,
             framed_records: batch.framed_records,
             frame_ends: batch.frame_ends,
-            terminal_bytes: 0,
         }
     }
 }
@@ -233,7 +231,6 @@ impl RawBatch {
                 .build()
             })?;
         let mut bytes = Vec::new();
-        let mut terminal_bytes = 0;
         let mut ends =
             Vec::with_capacity(batch.frames.len() + usize::from(batch.terminal.is_some()));
         for frame in &batch.frames {
@@ -268,7 +265,6 @@ impl RawBatch {
                 .fail();
             }
             let json = serde_json::to_vec(terminal).context(crate::JsonSnafu { path: root })?;
-            terminal_bytes = json.len();
             TraceRecord {
                 payload: Some(TracePayload::Terminal(json)),
             }
@@ -293,12 +289,9 @@ impl RawBatch {
             intake_utc_ns: intake,
             framed_records: bytes.into(),
             frame_ends: ends,
-            terminal_bytes,
         })
     }
 }
-
-
 
 #[derive(Clone, PartialEq, prost::Message)]
 pub(super) struct RawSpan {
@@ -623,7 +616,11 @@ impl RawRead {
 
     fn check_live(&self) -> Result<()> {
         if !self.live.load(std::sync::atomic::Ordering::Acquire) {
-            return crate::RetainedRangeExpiredSnafu { first_cursor: self.first, last_cursor: self.last }.fail();
+            return crate::RetainedRangeExpiredSnafu {
+                first_cursor: self.first,
+                last_cursor: self.last,
+            }
+            .fail();
         }
         Ok(())
     }
@@ -1016,13 +1013,21 @@ impl RawJournal {
         Some((entry, index))
     }
 
-    pub(in crate::analysis) fn witness_entry(&self, witness: &super::AnalysisWitnessV1, revision: u64) -> Result<&RawEntry> {
+    pub(in crate::analysis) fn witness_entry(
+        &self,
+        witness: &super::AnalysisWitnessV1,
+        revision: u64,
+    ) -> Result<&RawEntry> {
         let (entry, slot) = self.locate(&witness.identity.key(), witness.cursor, revision)?;
         let span = &entry.commit.spans[slot];
-        if entry.identity != witness.identity || witness.cursor == 0
+        if entry.identity != witness.identity
+            || witness.cursor == 0
             || !(span.first..=span.last).contains(&witness.cursor)
-            || entry.commit.revision == 0 || entry.commit.revision > revision
-        { return Err(self.invalid("the witness differs from its original raw range")); }
+            || entry.commit.revision == 0
+            || entry.commit.revision > revision
+        {
+            return Err(self.invalid("the witness differs from its original raw range"));
+        }
         Ok(entry)
     }
 
@@ -1356,7 +1361,8 @@ impl RawJournal {
             return crate::RetainedRangeExpiredSnafu {
                 first_cursor: entry.commit.spans.first().map_or(0, |span| span.first),
                 last_cursor: entry.commit.spans.last().map_or(0, |span| span.last),
-            }.fail();
+            }
+            .fail();
         }
         Ok(())
     }
@@ -1730,7 +1736,7 @@ pub(super) mod tests {
     fn observability_terminal_pin() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::{
             AnalysisReadControl, AnalysisResultCommitV1, AnalysisWitnessV1, ProcessorClassV1,
-            ProcessorScopeV1, StorageLimitsV1,
+            ProcessorScopeV1,
         };
 
         if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
@@ -1738,14 +1744,6 @@ pub(super) mod tests {
             let intent = trace_intent()?;
             let identity = &intent.bindings[0].identity;
             let store = AnalysisStore::open(&root)?;
-            let limits = StorageLimitsV1 {
-                witness_max_bytes: Some(
-                    store.witness_usage(identity.tenant_id, 203)?.charged_bytes,
-                ),
-                ..Default::default()
-            };
-            drop(store);
-            let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
             store.append_trace(
                 identity,
                 &crate::TraceBatchV1 {
@@ -1810,27 +1808,6 @@ pub(super) mod tests {
             ..crate::analysis::tests::result(scope, "trace-result".into())
         })?;
         let usage = store.witness_usage(identity.tenant_id, 202)?;
-        let limits = StorageLimitsV1 {
-            witness_max_bytes: Some(usage.charged_bytes),
-            ..Default::default()
-        };
-        drop(store);
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        let mixed = crate::TraceBatchV1 {
-            execution_id: identity.execution_id,
-            frames: vec![crate::TraceFrameV1 {
-                sequence: 2,
-                ..frame.clone()
-            }],
-            terminal: Some(trace_terminal(2, 2)),
-        };
-        assert!(matches!(
-            store.append_trace(identity, &mixed, 203),
-            Err(crate::Error::StorageCapacity {
-                resource: "tenant witness bytes",
-                ..
-            })
-        ));
         drop(store);
         let status = std::process::Command::new(std::env::current_exe()?)
             .args([
@@ -1841,7 +1818,7 @@ pub(super) mod tests {
             .env("ARAPHOR_CRASH_POINT", "segment.reserved")
             .status()?;
         assert_eq!(status.code(), Some(73));
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let store = AnalysisStore::open(&root)?;
         let terminal = trace_terminal(1, 1);
         let combined = crate::TraceBatchV1 {
             terminal: Some(terminal.clone()),
@@ -1871,7 +1848,7 @@ pub(super) mod tests {
             usage.charged_bytes
         );
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let store = AnalysisStore::open(&root)?;
         assert_eq!(store.append_trace(identity, &combined, 206)?, receipt);
         let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
         assert_eq!(page.frames, vec![frame]);
@@ -1891,13 +1868,12 @@ pub(super) mod tests {
         use crate::{AnalysisCommitStage, AnalysisReadControl, EvidenceRetentionOwner};
 
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open_with_limits(
+        let store = AnalysisStore::open_with_retention(
             directory.path().join("data"),
             crate::RetentionLimitsV1 {
                 raw_max_age_ns: Some(50),
                 ..Default::default()
             },
-            Default::default(),
         )?;
         let intent = trace_intent()?;
         let identity = &intent.bindings[0].identity;
@@ -1973,13 +1949,12 @@ pub(super) mod tests {
 
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
-        let store = AnalysisStore::open_with_limits(
+        let store = AnalysisStore::open_with_retention(
             &root,
             RetentionLimitsV1 {
                 raw_max_age_ns: Some(1),
                 ..Default::default()
             },
-            Default::default(),
         )?;
         let intent = trace_intent()?;
         let identity = &intent.bindings[0].identity;
@@ -2040,7 +2015,7 @@ pub(super) mod tests {
             raw_max_age_ns: Some(50),
             ..Default::default()
         };
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let intent = trace_intent()?;
         let identity = &intent.bindings[0].identity;
         store.accept_trace(&intent)?;
@@ -2089,7 +2064,7 @@ pub(super) mod tests {
         )?;
         assert_eq!((removed.removed_records, removed.retained_floor), (15, 15));
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         let restored = store.trace_receipt(identity)?.ok_or("receipt absent")?;
         assert_eq!(restored.last_sequence, receipt.last_sequence);
         assert_eq!(restored.output_bytes, receipt.output_bytes);
@@ -2118,7 +2093,7 @@ pub(super) mod tests {
             Err(crate::Error::AnalysisConflict { .. })
         ));
         drop(store);
-        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_retention(&root, limits)?;
         assert_eq!(store.append_trace(identity, &terminal, 203)?, expired);
         assert_eq!(store.trace_receipt(identity)?, Some(expired));
         Ok(())

@@ -2,9 +2,7 @@ use std::collections::BTreeSet;
 
 use snafu::ResultExt as _;
 
-use super::{
-    context::ContextRecord, managed::References, records::Records, DataWrite, NativeStore,
-};
+use super::{context::ContextRecord, managed::References, records::Records, NativeStore};
 use crate::analysis::raw::{RawIdentity, RawJournal};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, WitnessUsageV1};
 
@@ -181,59 +179,6 @@ impl Witnesses {
 }
 
 impl NativeStore {
-    pub(in crate::analysis::native) fn check_append_witnesses(
-        &self,
-        view: &super::DataView,
-        raw: &RawJournal,
-        tenant: [u8; 16],
-        now: u64,
-        id: u64,
-        added: u64,
-    ) -> Result<()> {
-        if self.storage.witness_max_bytes.is_none() {
-            return Ok(());
-        }
-        let prefix = [References::SEGMENT, &id.to_be_bytes()].concat();
-        let mut pinned = false;
-        for entry in view.snapshot.prefix(prefix) {
-            let (_, value) = entry.context(NativeStorageSnafu {
-                operation: "read growing segment pins",
-            })?;
-            if Self::number(&value)? > now {
-                pinned = true;
-                break;
-            }
-        }
-        if !pinned {
-            return Ok(());
-        }
-        let usage = Witnesses::read(
-            raw,
-            tenant,
-            now,
-            view.revision,
-            false,
-            (
-                view.snapshot.prefix(References::RAW),
-                view.snapshot.prefix(References::CONTEXT_OWNER),
-            ),
-            |key| Records::read(key, &view.snapshot),
-        )?;
-        self.storage
-            .check_witness(
-                usage
-                    .usage
-                    .charged_bytes
-                    .checked_add(added)
-                    .ok_or_else(|| {
-                        NativeStateSnafu {
-                            field: "growing witness total",
-                        }
-                        .build()
-                    })?,
-            )
-    }
-
     pub fn witness_usage(&self, tenant: [u8; 16], now: u64) -> Result<WitnessUsageV1> {
         if tenant == [0; 16] || now == 0 {
             return crate::Error::reject_path(
@@ -267,36 +212,5 @@ impl NativeStore {
             |key| Records::read(key, &view.snapshot),
         )?
         .exact(&raw)
-    }
-}
-
-impl DataWrite<'_> {
-    pub(in crate::analysis::native) fn check_witnesses(
-        &self,
-        tenant: [u8; 16],
-        now: u64,
-    ) -> Result<()> {
-        if self.store.storage.witness_max_bytes.is_none() {
-            return Ok(());
-        }
-        let raw = self.store.raw.lock().map_err(|_| {
-            NativeStateSnafu {
-                field: "raw owner lock",
-            }
-            .build()
-        })?;
-        let usage = Witnesses::read(
-            &raw,
-            tenant,
-            now,
-            self.revision,
-            false,
-            (
-                self.transaction.prefix(References::RAW),
-                self.transaction.prefix(References::CONTEXT_OWNER),
-            ),
-            |key| Records::staged(key, &self.transaction),
-        )?;
-        self.store.storage.check_witness(usage.usage.charged_bytes)
     }
 }

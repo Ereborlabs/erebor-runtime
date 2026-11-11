@@ -339,7 +339,10 @@ fn recovery_checks_terminal_contract() -> TestResult {
         )?;
         drop(writer);
         drop(store);
-        assert!(AnalysisStore::open(&root).is_err(), "terminal fault {fault}");
+        assert!(
+            AnalysisStore::open(&root).is_err(),
+            "terminal fault {fault}"
+        );
     }
     Ok(())
 }
@@ -498,20 +501,6 @@ fn startup_keeps_committed_state() -> TestResult {
         let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read startup output fence" }))?;
         let before = store.meta()?;
         drop(store);
-        assert!(matches!(
-            AnalysisStore::open_with_limits(
-                &root,
-                Default::default(),
-                crate::StorageLimitsV1 {
-                    policy_reserve_bytes: Some(u64::MAX / 4),
-                    ..Default::default()
-                }
-            ),
-            Err(crate::Error::StorageCapacity {
-                resource: "filesystem reserve",
-                ..
-            })
-        ));
         let reader = AnalysisStore::open_native(
             &root.join("analysis.duckdb"),
             Default::default(),

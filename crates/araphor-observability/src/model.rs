@@ -215,12 +215,13 @@ mod tests {
                 RetryHint::NonRetryable,
             ),
             (
-                araphor_data::Error::StorageCapacity {
-                    resource: "diagnostic bytes",
+                araphor_data::Error::Io {
+                    path: "diagnostic.segment".into(),
+                    source: std::io::Error::from(std::io::ErrorKind::StorageFull),
                     location: snafu::Location::default(),
                 },
-                StatusCode::Unavailable,
-                RetryHint::Retryable,
+                StatusCode::External,
+                RetryHint::NonRetryable,
             ),
             (
                 araphor_data::Error::ProtectedInputCapacity {

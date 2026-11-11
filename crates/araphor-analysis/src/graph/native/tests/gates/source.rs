@@ -6,13 +6,12 @@ async fn retained_floor_is_gapped() -> TestResult {
     let mut records = records(1, [[7; 16]; 3])?;
     let source = records[0].id.stream.clone();
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
+    let store = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("data"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             ..Default::default()
         },
-        Default::default(),
     )?);
     for record in &records[..2] {
         store.accept_validated_batch(

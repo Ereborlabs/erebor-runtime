@@ -92,10 +92,9 @@ impl Fixture {
         } = self;
         let limits = query.limits().clone();
         drop((query, store));
-        let store = Arc::new(AnalysisStore::open_with_limits(
+        let store = Arc::new(AnalysisStore::open_with_retention(
             _directory.path().join("data"),
             RETENTION,
-            Default::default(),
         )?);
         let mut query = Engine::new(Arc::clone(&store), limits)?;
         Arc::get_mut(&mut query)

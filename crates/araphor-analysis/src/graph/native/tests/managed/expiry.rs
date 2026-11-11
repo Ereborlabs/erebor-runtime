@@ -77,13 +77,12 @@ async fn expiry_allows_new_input() -> TestResult {
     let raw = fixture.query.store().read_page(&fixture.source, 1)?.records;
     assert_eq!(raw.len(), 3);
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
+    let store = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("data"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(araphor_data::GRAPH_WITNESS_TTL_NS),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?);
     let donor = Fixture::stored(Target::Wasm, fixture.records.clone(), directory, store)?;
     assert_eq!(donor.source, fixture.source);
@@ -441,13 +440,12 @@ async fn managed_expiry_is_atomic() -> TestResult {
     )?;
     let records = manifest.records.into_iter().take(3).collect::<Vec<_>>();
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
+    let store = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("data"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(araphor_data::GRAPH_WITNESS_TTL_NS),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?);
     let fixture = Fixture::stored(Target::Wasm, records, directory, store)?;
     let publication = fixture.prepare("").await?;
@@ -930,13 +928,12 @@ async fn managed_expiry_subscription_recovers() -> TestResult {
     )?;
     let records = manifest.records.into_iter().take(3).collect::<Vec<_>>();
     let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open_with_limits(
+    let store = Arc::new(AnalysisStore::open_with_retention(
         directory.path().join("data"),
         araphor_data::RetentionLimitsV1 {
             raw_max_age_ns: Some(araphor_data::GRAPH_WITNESS_TTL_NS),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?);
     let fixture = Fixture::stored(Target::Wasm, records, directory, store)?;
     let prepared = fixture.prepare("").await?;

@@ -616,14 +616,8 @@ fn source_frames_skip_empty() -> TestResult {
 #[test]
 fn source_reads_release_views() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
-        directory.path().join("store"),
-        Default::default(),
-        crate::StorageLimitsV1 {
-            reader_admissions: Some(1),
-            ..Default::default()
-        },
-    )?;
+    let store =
+        AnalysisStore::open_with_retention(directory.path().join("store"), Default::default())?;
     SourceFixture::append(&store, 1, 3)?;
     let mut context = crate::AnalysisContextVersionV1 {
         key: crate::AnalysisContextKeyV1 {
@@ -811,13 +805,12 @@ fn source_reads_release_views() -> TestResult {
 fn source_history_keeps_headers() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         &root,
         crate::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     SourceFixture::append(&store, 100, 1)?;
     let mut fixture = SourceFixture::new(&store)?;
@@ -921,13 +914,12 @@ fn source_history_keeps_headers() -> TestResult {
 fn source_pending_blocks_retention() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         &root,
         crate::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     SourceFixture::append(&store, 100, 1)?;
     let mut fixture = SourceFixture::new(&store)?;
@@ -992,13 +984,12 @@ fn source_pending_blocks_retention() -> TestResult {
 #[test]
 fn source_changes_require_raw() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         directory.path().join("store"),
         crate::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     SourceFixture::append(&store, 100, 1)?;
     let mut fixture = SourceFixture::new(&store)?;
@@ -1059,13 +1050,12 @@ fn source_changes_require_raw() -> TestResult {
 #[test]
 fn source_references_project_context() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
+    let store = AnalysisStore::open_with_retention(
         directory.path().join("store"),
         crate::RetentionLimitsV1 {
             raw_max_age_ns: Some(1),
             raw_max_bytes: None,
         },
-        Default::default(),
     )?;
     SourceFixture::append(&store, 1, 3)?;
     let mut context = crate::AnalysisContextVersionV1 {

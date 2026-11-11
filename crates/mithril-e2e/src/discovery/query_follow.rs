@@ -709,13 +709,12 @@ impl QueryFollowQualification {
     }
 
     async fn retention(&self, root: &Path) -> Result<serde_json::Value> {
-        let store = Arc::new(AnalysisStore::open_with_limits(
+        let store = Arc::new(AnalysisStore::open_with_retention(
             root,
             araphor_data::RetentionLimitsV1 {
                 raw_max_age_ns: Some(24 * 60 * MINUTE),
                 ..Default::default()
             },
-            Default::default(),
         )?);
         let source = evidence_source(1, 3);
         let expires = 3 * 24 * 60 * MINUTE;
@@ -1128,13 +1127,12 @@ impl QueryFollowQualification {
     }
 
     async fn paused_stream(&self, root: &Path) -> Result<serde_json::Value> {
-        let store = Arc::new(AnalysisStore::open_with_limits(
+        let store = Arc::new(AnalysisStore::open_with_retention(
             root,
             araphor_data::RetentionLimitsV1 {
                 raw_max_age_ns: Some(24 * 60 * MINUTE),
                 ..Default::default()
             },
-            Default::default(),
         )?);
         let source = evidence_source(1, 3);
         commit(&store, &source, 1, MINUTE, records(1, 1, 7))?;

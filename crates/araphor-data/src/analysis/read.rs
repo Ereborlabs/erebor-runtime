@@ -1,6 +1,6 @@
+use std::future::Future as _;
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::Arc;
-use std::future::Future as _;
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::Mutex;
 use std::sync::{TryLockError, TryLockResult};
@@ -13,9 +13,6 @@ use crate::Result;
 mod lease;
 pub(super) mod locks;
 pub(in crate::analysis) use lease::AnalysisLease;
-mod permit;
-pub(in crate::analysis) use permit::ReadPermit;
-
 
 #[cfg(any(test, feature = "test-fixtures"))]
 type ReadStep = Box<dyn FnOnce() -> Result<()> + Send>;

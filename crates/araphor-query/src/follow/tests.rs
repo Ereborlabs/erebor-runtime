@@ -87,12 +87,7 @@ impl Fixture {
         limits.evaluate_timeout = Some(Duration::from_secs(5));
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(
-            AnalysisStore::open_with_limits(
-                directory.path().join("data"),
-                retention,
-                Default::default(),
-            )
-            .unwrap(),
+            AnalysisStore::open_with_retention(directory.path().join("data"), retention).unwrap(),
         );
         let engine = Engine::new(Arc::clone(&store), limits).unwrap();
         Self {

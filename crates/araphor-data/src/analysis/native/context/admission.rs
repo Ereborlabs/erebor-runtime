@@ -1,5 +1,8 @@
 use super::{ContextRecord, DataView, DataWrite, NativeStore, Records};
-use crate :: { AnalysisContextRefV1 , AnalysisContextVersionV1 , ApprovedNotificationRouteV1 , DiscoveryContextRevisionV1 , NativeStateSnafu , Result } ;
+use crate::{
+    AnalysisContextRefV1, AnalysisContextVersionV1, ApprovedNotificationRouteV1,
+    DiscoveryContextRevisionV1, NativeStateSnafu, Result,
+};
 
 impl NativeStore {
     pub fn commit_contexts_checked(
@@ -248,7 +251,6 @@ impl DataWrite<'_> {
         } else {
             None
         };
-        self.store.storage.check_context(input.body.len() as u64)?;
         let reference = self.record(input, expected, notification)?;
         let id = ContextRecord::id(&input.key, |key| Records::staged(key, &self.transaction))?
             .ok_or_else(|| {

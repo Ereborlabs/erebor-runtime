@@ -221,8 +221,6 @@ impl ClientGrpcOwner {
             dependency_revision: update.snapshot.page.extraction.meta.commit_revision,
             write_ready: health.write_ready,
             retention_healthy: health.retention_healthy,
-            intake_capacity: health.intake_capacity,
-            maintenance_capacity: health.maintenance_capacity,
         }
     }
 }

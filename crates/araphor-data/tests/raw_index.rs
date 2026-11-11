@@ -39,7 +39,7 @@ fn captured_roots_survive_retention() -> TestResult {
         raw_max_age_ns: Some(50),
         ..Default::default()
     };
-    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, limits)?;
     let source = identity();
     let empty = store.raw_index_fixture()?;
     assert_eq!(empty.counts(), (0, 0, 0));
@@ -134,7 +134,7 @@ fn captured_roots_survive_retention() -> TestResult {
         Err(araphor_data::Error::RetainedRangeExpired { .. })
     ));
     drop(store);
-    let reopened = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let reopened = AnalysisStore::open_with_retention(&root, limits)?;
     assert_eq!(reopened.source_receipt(&source)?, Some(current));
     assert_eq!(reopened.raw_index_fixture()?.counts(), (0, 0, 0));
     assert_eq!(covered.counts(), (2, 2, 2));

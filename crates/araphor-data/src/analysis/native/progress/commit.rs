@@ -1,6 +1,11 @@
 use super::*;
-use crate :: analysis :: { managed :: PreparedMemory , progress :: { PreparedProfile , ProfileHeader , ProgressWrite , ResultHead } } ;
-use crate :: { AnalysisContextVersionV1 , AnalysisResultCommitV1 , AnalysisResultReceiptV1 , DiscoveryProfileV1 } ;
+use crate::analysis::{
+    managed::PreparedMemory,
+    progress::{PreparedProfile, ProfileHeader, ProgressWrite, ResultHead},
+};
+use crate::{
+    AnalysisContextVersionV1, AnalysisResultCommitV1, AnalysisResultReceiptV1, DiscoveryProfileV1,
+};
 
 struct ProgressBudget;
 
@@ -37,8 +42,9 @@ impl NativeStore {
             None,
             &mut memory,
         )?;
-        if !output.commit { return Ok(output.receipt); }
-        tx.check_witnesses(input.scope.identity.tenant_id, input.created_utc_ns)?;
+        if !output.commit {
+            return Ok(output.receipt);
+        }
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         tx.commit([])?;

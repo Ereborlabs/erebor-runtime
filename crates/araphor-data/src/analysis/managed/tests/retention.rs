@@ -8,7 +8,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
         raw_max_age_ns: Some(1),
         raw_max_bytes: Some(1024 * 1024),
     };
-    let store = AnalysisStore::open_with_limits(&root, retention, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     let source = crate::analysis::tests::identity();
     let frame = Vec::<u8>::try_from(&crate::EvidenceRecord {
         operation: 7,
@@ -197,7 +197,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
         vec![receipt.clone()]
     );
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, retention, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     assert_eq!(
         store.package_evidence(source.tenant_id, &ids)?,
         (witnesses.clone(), context_refs.clone())
@@ -230,7 +230,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
         (witnesses.clone(), context_refs.clone())
     );
     drop(store);
-    let store = AnalysisStore::open_with_limits(&root, retention, Default::default())?;
+    let store = AnalysisStore::open_with_retention(&root, retention)?;
     assert_eq!(
         store.package_evidence(source.tenant_id, &ids)?,
         (witnesses, context_refs)

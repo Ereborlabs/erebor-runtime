@@ -67,7 +67,6 @@ impl NativeStore {
         if !source.valid() {
             return Err(Code::Invalid.error("Graph source"));
         }
-        let _permit = self.reserve_reader()?;
         let _lease = self
             .maintenance
             .read_until(&AnalysisReadControl::default())?;
@@ -111,7 +110,6 @@ impl NativeStore {
         if tenant == [0; 16] || !crate::NotificationGrantV1::identifier(result_id, usize::MAX) {
             return Err(Code::Invalid.error("Graph result reference"));
         }
-        let _permit = self.reserve_reader()?;
         let _lease = self
             .maintenance
             .read_until(&AnalysisReadControl::default())?;

@@ -143,7 +143,6 @@ impl NativeStore {
     ) -> Result<(AnalysisPositionPageV1, T)> {
         control.check()?;
         read.check_inputs(selection, limits, &self.root)?;
-        let _permit = self.reserve_reader()?;
         let _lease = self.maintenance.read_until(control)?;
         self.check()?;
         if view.store_uuid != self.view()?.store_uuid {
@@ -385,7 +384,6 @@ impl NativeStore {
     ) -> Result<(Option<StorePositionV1>, bool, crate::AnalysisStoreMetaV1)> {
         control.check()?;
         let _lease = self.maintenance.read_until(control)?;
-        let _permit = self.reserve_reader()?;
         self.check_trace_authority(scan.selection.tenant_id, output.trace_reads(), control)?;
         let view = self.view()?;
         if let (Some(position), Some(floor)) =

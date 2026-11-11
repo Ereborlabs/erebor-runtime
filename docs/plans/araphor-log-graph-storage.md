@@ -24,9 +24,20 @@ verifier fixture port remains open. No new latency gain is measured by these che
 
 The fifteen old package catalogue/image cases are replaced by sixteen native
 cases. The positive dependency-order case remains valid after reopen. Public
-package reads retain reader admission and cancellation. The 33 MiB artifact
+package reads retain one captured view and cancellation. The 33 MiB artifact
 workload and the existing failure assertions remain. Read the same worklist
 for exact checks. Private verifier and witness ports remain open.
+
+## Storage quota removal, 2026-11-10
+
+The user removes Data storage quotas. The current source removes their type,
+configuration, constructors, reader permits, and enforcement. Earlier quota and
+capacity requirements below are historical. Data keeps storage usage reporting,
+actual I/O errors, Required-input retention floors, durable consumer positions,
+and current authorization. Query and package execution budgets remain separate.
+Read the [current quota contract](../research/araphor-fjall-integration.md#storage-quota-removal-2026-11-10)
+for the exact retained owners and native backup proof. Format 10 remains valid.
+The complete replacement and 100-fold performance proof remain **Not done**.
 
 ## Production integration status, 2026-11-09
 

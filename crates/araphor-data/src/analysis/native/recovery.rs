@@ -128,7 +128,6 @@ impl NativeStore {
         })? = Arc::new(next);
         self.ready.store(true, Ordering::Release);
         self.controls.send_replace(());
-        self.capacity.send_replace(());
         self.revision.send_replace(revision);
         Ok(())
     }

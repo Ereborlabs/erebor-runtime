@@ -1,5 +1,3 @@
-
-
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -381,7 +379,6 @@ fn native_router_operations() -> TestResult {
     changes.borrow_and_update();
     assert!(fixture.router().is_err());
     assert!(!changes.has_changed()?);
-    assert_eq!(fixture.store.storage_limits(), &StorageLimitsV1::default());
     Fixture::configure(&router)?;
     Fixture::configure(&router)?;
     let state = Fixture::submit(&router)?;

@@ -23,6 +23,35 @@ The performance goals remain notification creation below 100 milliseconds and
 the requested 100-fold improvement. Neither result follows from engine selection.
 Use the same incident workload and measurement boundaries to prove them.
 
+## Storage quota removal, 2026-11-10
+
+The user removes Data storage quotas. This instruction supersedes the earlier
+configured-capacity requirements and reader-permit records below.
+`StorageLimitsV1`, `data_storage`, `open_with_limits`, `restore_with_limits`,
+reader permits, and the storage-quota error are removed. The API keeps `open`,
+`open_with_retention`, `restore`, `storage_usage`, and `storage_health`.
+No ignored limit argument or replacement quota remains.
+
+Data keeps actual file, allocated-byte, and free-space measurements. Data also
+keeps leases, read cancellation, current trace authority, transaction locks,
+Required-input retention floors, durable consumer positions, and real I/O errors.
+`RetentionLimitsV1` remains a separate raw-retention policy. Query execution and
+package memory budgets remain separate resource owners.
+
+Backup callbacks record the expected native file inventory. They do not admit
+bytes or entries. Data compares file names and lengths, checks checksums and raw
+records, and publishes the temporary bundle after sync. Restore retains bundle
+validation, the exclusive lease, the pending marker, exact identity checks, and
+recovery before it removes the marker. Trace obligation metadata and revision
+counters remain integrity data. The physical format remains 10.
+
+Eight native backup cases replace the old SQL backup family. The cases preserve
+incomplete traces, the 17 MiB raw segment, writer exclusion, held views, duplicate
+stamp failure, source immutability, physical bundle faults, semantic faults,
+recovery floors, and restart. Quota-only refusal cases are removed. Real disk-full
+and file-size failure cases remain. These changes do not establish a latency gain.
+Final qualification and the incident result are recorded in the current evidence.
+
 ## Current replacement work, 2026-11-10
 
 Result: **Not done for the complete replacement and performance proof**.
@@ -35,14 +64,33 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Owner | Current work and completion proof |
 | --- | --- |
 | Data and Araphor Graph | Complete native API parity and remove obsolete SQL fixtures and dependencies. Require the default production and E2E builds. |
-| Fixture retirement | The context, catalogue, and image SQL families have native replacements. The remaining Data unit target still fails to compile obsolete callers. Replace the ten backup cases next. Preserve trace reserves, manifest admission, the 17 MiB raw segment, bundle faults, and revision isolation. Private verifier and witness ports remain open. |
-| Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
+| Fixture retirement | The context, catalogue, image, and backup SQL families have native replacements. Eight native backup cases preserve the applicable recovery and integrity assertions. Quota-only cases are removed by user instruction. Remaining Data unit fixtures still need native ports. |
+| Storage lifecycle | Data storage quotas are removed. Keep usage reporting, retention, collection, and checkpoint/restore integrity. Recovery preserves acknowledged raw input and distinguishes a failed raw append from a poisoned native engine. Complete qualification remains open. |
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | Matched release runs at `d429b0d08` measure durable creation below 100 ms. The measured gain against DuckDB is 6.70 to 7.30 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- Data storage quota removal and native backup fixture retirement are **Done**
+  for the focused source boundary. The final native run passes 8 backup cases,
+  3 crash cases, 6 lifecycle cases, 99 managed cases, 4 notification cases, and
+  26 package cases. The managed snapshot fixture now expects exact
+  `Missing: Source Graph snapshot`. Its unchanged fixture has no package state;
+  the previous `Unsupported` assertion predates native snapshot support.
+  A native Query trace case passes capture, revocation, and denied execution.
+  The two process-isolated file-size fault cases pass in 3.76 seconds. The
+  fixture copies the complete native backup tree, including empty directories.
+  Raw append failure sends no ACK. Checkpoint-export failure follows an existing
+  raw ACK and preserves source readiness. Recovery, exact retry, and reopen pass.
+  The unchanged incident passes in 14.37 seconds in the debug profile. This
+  result is functional proof only. The workload and definition hashes match
+  the paired release record. Full CI, physical disk-full qualification, and
+  the complete Data unit target remain unqualified. Read
+  `output/araphor-fjall-migration-20261110/no-storage-quota-results.json`,
+  `no-storage-quota-native.log`, `no-storage-quota-final.log`, and
+  `no-storage-quota-incident.log`, and `no-storage-quota-io-export.log` in the same directory.
 
 - At `0b8490cbd`, a compile-only Data unit diagnostic still fails. The command
   is `cargo test --offline -p araphor-data --lib --no-run --message-format=json`.
@@ -785,8 +833,8 @@ qualification. Continue with one connected production cutover:
    owner. Keep Control, Observability, Query, and Analysis on those same types.
    Remove backend choices at callers. Compiler errors identify the remaining
    required APIs; temporary errors in the cutover draft are not a task blocker.
-2. Complete those real owners in the same draft: configured admission, trace
-   storage, retention and deletion recovery, backup, package collection, and
+2. Complete those real owners in the same draft: trace storage, usage reporting,
+   retention and deletion recovery, backup, package collection, and
    Source reads. Preserve their existing contracts. Do not add methods that
    ignore supplied limits or return success without the required work.
 3. Remove the replaced SQL owner, projections, connection pools, schema code,
