@@ -4,6 +4,33 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [36 native control cases](../../crates/araphor-data/tests/native_managed/storage/control.rs)
+with the [activation classifier](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs)
+and [original-log activation proof](../../crates/araphor-data/tests/native_managed/lifecycle/activation.rs).
+The cases replace the complete old lifecycle, history, renewal, removal, status,
+and version case families. They keep authority guards, checkpoint continuation,
+scope checks, corruption matrices, rollback, recreation, and restart. Continuation
+uses the original evaluation parameters through `hydrate_prior`; Data does not
+archive parameters. The fixture projects the current instance selection through
+its requested tables. The old version path contains only two helpers needed by
+other unit cases.
+
+The port exposes a false host wake on initial inactive admission. The classifier
+still uses the committed Data revision from the original CDC batch. If lifecycle
+and generation both equal that revision, one owner-scoped prefix lookup reads
+the earliest logical version key in the exact batch view. Initial admission has
+the same generation and stays silent. Recreation retains an earlier version
+and emits its wake. All logical generations remain revivable. Native MVCC
+collection does not remove those current logical version keys. Other lifecycle
+transitions keep the existing revision check. No new snapshot, storage record,
+subscription, or retention root is added. The focused run passes 187 managed,
+18 raw, six lifecycle, and eight backup cases. The release library check without
+default features and formatting of changed Rust files pass. Data unit compilation
+has 420 diagnostics, down from 450. That unit target still does not compile or run.
+Read the `native-control-*` evidence
+under `output/araphor-fjall-migration-20261110`. Complete migration qualification
+and the incident performance goal remain open.
+
 Read the [native lifecycle fault cases](../../crates/araphor-data/tests/native_managed/lifecycle/faults.rs)
 with [Data publication](../../crates/araphor-data/src/analysis/native/mod.rs)
 and [recovery](../../crates/araphor-data/src/analysis/native/recovery.rs).

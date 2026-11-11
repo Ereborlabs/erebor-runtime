@@ -2,9 +2,13 @@ use std::sync::{atomic::Ordering, Arc};
 
 use snafu::ResultExt as _;
 
-use super::{InstanceRecord, Records};
+use super::{InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Failure, FailureOrigin};
-use crate :: { analysis :: native :: { DataView , DataWrite , NativeStore } , AnalysisConflictSnafu , AnalysisReadControl , ManagedInstance , ManagedMember , ManagedResume , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , PackageGrantV1 , Result } ;
+use crate::{
+    analysis::native::{DataView, DataWrite, NativeStore},
+    AnalysisConflictSnafu, AnalysisReadControl, ManagedInstance, ManagedMember, ManagedResume,
+    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, PackageGrantV1, Result,
+};
 
 pub struct ManagedLease(Arc<NativeStore>);
 
@@ -255,7 +259,23 @@ impl DataView {
         let bytes = Records::payload(key, |key| Records::read(key, &self.snapshot))?
             .ok_or_else(|| Code::Missing.error("activation instance"))?;
         let instance: InstanceRecord = Records::decode(&bytes)?;
-        Ok(instance.lifecycle == revision)
+        if instance.lifecycle != revision {
+            return Ok(false);
+        }
+        if instance.lifecycle != instance.generation {
+            return Ok(true);
+        }
+        let owner = NativeStore::number(&key[7..])?;
+        let (first, _) = self
+            .snapshot
+            .prefix(Records::key(b'Z', owner))
+            .next()
+            .transpose()
+            .context(NativeStorageSnafu {
+                operation: "read initial managed version",
+            })?
+            .ok_or_else(|| Code::Missing.error("activation managed version"))?;
+        Ok(first.as_ref() != VersionRecord::key(owner, instance.generation))
     }
 
     pub fn active_managed(

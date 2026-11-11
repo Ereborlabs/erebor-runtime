@@ -1,14 +1,14 @@
 use super::*;
-use crate::PackageErrorCodeV1 as Code;
+use araphor_data::PackageErrorCodeV1 as Code;
 
 #[test]
 fn explicit_stop_fences_birth() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let birth = fixture.instance.clone();
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let before = store.meta()?;
     assert!(store
         .stop_managed(
@@ -71,7 +71,7 @@ async fn lifecycle_cas_is_inert() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let mut notices = store.subscribe_activations()?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let admitted = &fixture.instance;
     assert!(!admitted.running);
     assert_eq!(admitted.lifecycle, admitted.generation);
@@ -88,7 +88,7 @@ async fn lifecycle_cas_is_inert() -> TestResult {
             checked = true;
             Err(Code::Denied.error("lifecycle fixture authority"))
         }),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -135,7 +135,7 @@ async fn lifecycle_cas_is_inert() -> TestResult {
             checked = true;
             Ok(())
         }),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert!(!checked);
     assert!(!notices.has_changed()?);
@@ -146,7 +146,7 @@ async fn lifecycle_cas_is_inert() -> TestResult {
             checked = true;
             Err(Code::Denied.error("lifecycle no-op authority"))
         }),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -168,7 +168,7 @@ async fn lifecycle_cas_is_inert() -> TestResult {
     notices.changed().await?;
     assert!(matches!(
         store.set_managed_running([1; 16], "counter", running.lifecycle, false, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert!(!notices.has_changed()?);
     Ok(())
@@ -178,19 +178,19 @@ async fn lifecycle_cas_is_inert() -> TestResult {
 async fn lifecycle_notice_excludes_data() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
     let mut notices = store.subscribe_activations()?;
-    let bytes = Vec::<u8>::try_from(&crate::EvidenceRecord {
+    let bytes = Vec::<u8>::try_from(&araphor_data::EvidenceRecord {
         operation: 7,
         ..Default::default()
     })?;
     store.accept_validated_batch(
-        crate::analysis::tests::identity(),
-        crate::ValidatedEvidenceBatchV1 {
+        identity(),
+        araphor_data::ValidatedEvidenceBatchV1 {
             cpu_id: 0,
             first_cursor: 1,
             last_cursor: 1,
@@ -200,13 +200,13 @@ async fn lifecycle_notice_excludes_data() -> TestResult {
         },
     )?;
     assert!(!notices.has_changed()?);
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let input = request("metadata-notice");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     assert!(!notices.has_changed()?);
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
@@ -239,8 +239,8 @@ async fn lifecycle_notice_excludes_data() -> TestResult {
 fn transition_fences_registration() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
-    let captured = fixture.capture(&store, false)?;
+    let fixture = fixture(&store)?;
+    let captured = fixture.capture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
@@ -249,7 +249,7 @@ fn transition_fences_registration() -> TestResult {
     let input = request("old-capture");
     assert!(matches!(
         store.register_managed_attempt(&captured, &input, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert!(store
         .managed_attempt(
@@ -285,10 +285,13 @@ fn transition_fences_registration() -> TestResult {
         )
         .is_err());
     assert_eq!(fixture.current(&store)?, running);
-    let current = fixture.capture(&store, false)?;
+    let current = fixture.capture(&store)?;
     assert_eq!(current.instance(), &running);
-    assert_eq!(current.contract.lifecycle, running.lifecycle);
-    assert!(current.contract.running);
+    let input = request("current-capture");
+    store.register_managed_attempt(&current, &input, || Ok(()))?;
+    let saved = capture_record(&store, &input.id)?;
+    assert_eq!(saved.lifecycle, running.lifecycle);
+    assert!(saved.running);
     Ok(())
 }
 
@@ -296,17 +299,17 @@ fn transition_fences_registration() -> TestResult {
 fn transition_fences_publication() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let input = request("old-work");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let stopped =
@@ -317,8 +320,8 @@ fn transition_fences_publication() -> TestResult {
         .err()
         .ok_or("old lifecycle published")?;
     assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
+        error.downcast_ref::<araphor_data::Error>(),
+        Some(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     assert_eq!(fixture.current(&store)?.progress, 0);
@@ -330,20 +333,20 @@ fn transition_fences_publication() -> TestResult {
         .err()
         .ok_or("old lifecycle published")?;
     assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
+        error.downcast_ref::<araphor_data::Error>(),
+        Some(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     assert_eq!(fixture.current(&store)?.progress, 0);
     assert_eq!(restarted.generation, fixture.instance.generation);
     let stopped =
         store.set_managed_running([1; 16], "counter", restarted.lifecycle, false, || Ok(()))?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let input = request("inactive-finite");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
     let current = fixture.current(&store)?;
@@ -363,24 +366,24 @@ fn lifecycle_history_survives_reopen() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
-    let pending_capture = fixture.capture(&store, false)?;
+    let fixture = fixture(&store)?;
+    let pending_capture = fixture.capture(&store)?;
     let pending_input = request("retained-pending");
     let pending = store.register_managed_attempt(&pending_capture, &pending_input, || Ok(()))?;
     let pending_evaluations = [
-        fixture.evaluation(&pending_input, 10, Some(&pending_capture))?,
-        fixture.evaluation(&pending_input, 11, Some(&pending_capture))?,
+        fixture.continued(&pending_input, 10, Some(&pending_capture))?,
+        fixture.continued(&pending_input, 11, Some(&pending_capture))?,
     ];
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let input = request("retained-complete");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
@@ -453,10 +456,21 @@ fn lifecycle_history_survives_reopen() -> TestResult {
         assert!(result.current);
         assert_eq!(fixture.checkpoint(&store, reference)?.version, 1);
     }
-    let resumed = fixture.capture(&store, false)?;
+    let mut resumed = fixture.capture(&store)?;
+    for (call, evaluation) in [10, 11].into_iter().zip(&evaluations) {
+        resumed.hydrate_prior(
+            call,
+            &fixture.model,
+            evaluation.parameters.as_ref().map(|batch| sdk::Dataset {
+                name: "parameters".into(),
+                batches: vec![batch.clone()],
+            }),
+            None,
+        )?;
+    }
     let next = request("after-lifecycle");
     for call in [10, 11] {
-        let evaluation = fixture.evaluation(&next, call, Some(&resumed))?;
+        let evaluation = fixture.continued(&next, call, Some(&resumed))?;
         assert_eq!(
             evaluation
                 .checkpoint
@@ -482,8 +496,8 @@ fn lifecycle_history_survives_reopen() -> TestResult {
         .err()
         .ok_or("recovered pending attempt published")?;
     assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::Package {
+        error.downcast_ref::<araphor_data::Error>(),
+        Some(araphor_data::Error::Package {
             code: Code::Incomplete,
             ..
         })
@@ -493,8 +507,8 @@ fn lifecycle_history_survives_reopen() -> TestResult {
         .err()
         .ok_or("old live attempt published after reopen")?;
     assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
+        error.downcast_ref::<araphor_data::Error>(),
+        Some(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     assert_eq!(fixture.current(&store)?, restarted);
@@ -514,58 +528,57 @@ fn lifecycle_recovery_rejects_corruption() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
+        let fixture = fixture(&store)?;
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
-        let captured = fixture.capture(&store, false)?;
+        let captured = fixture.capture(&store)?;
         let input = request("corrupt-lifecycle");
         let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
         let evaluations = [
-            fixture.evaluation(&input, 10, Some(&captured))?,
-            fixture.evaluation(&input, 11, Some(&captured))?,
+            fixture.continued(&input, 10, Some(&captured))?,
+            fixture.continued(&input, 11, Some(&captured))?,
         ];
         let outputs = [fixture.output(2)?, fixture.output(3)?];
         fixture.publish(&store, &attempt, &evaluations, &outputs)?;
         {
-            let mut writer = store.writer()?;
-            let writer = writer.get_mut()?;
+            let (key, bytes) = single(&store, b"\0data/J")?;
+            let mut row: Instance = rmp_serde::from_slice(&bytes[1..])?;
+            let mut tx = store.write()?;
             match corruption {
                 "initial-running" => {
-                    writer.execute(
-                        "UPDATE managed_instances SET running = true, lifecycle = generation",
-                        [],
-                    )?;
+                    row.running = true;
+                    row.lifecycle = row.generation;
+                    tx.native().insert(&key, framed(&row)?);
                 }
                 "past-lifecycle" => {
-                    writer.execute(
-                        "UPDATE managed_instances SET lifecycle = generation - 1",
-                        [],
-                    )?;
+                    row.lifecycle = row.generation - 1;
+                    tx.native().insert(&key, framed(&row)?);
                 }
                 "future-lifecycle" => {
-                    writer.execute("UPDATE managed_instances SET lifecycle = (SELECT commit_revision + 1 FROM store_meta)", [])?;
+                    row.lifecycle = tx.revision() + 1;
+                    tx.native().insert(&key, framed(&row)?);
                 }
                 "schema-column" => {
-                    writer.execute("ALTER TABLE managed_instances DROP COLUMN lifecycle", [])?;
+                    let Value::Map(mut fields) = serde_value::to_value(row)? else {
+                        return Err("instance fields".into());
+                    };
+                    assert!(fields.remove(&Value::String("lifecycle".into())).is_some());
+                    tx.native().insert(&key, framed(&Value::Map(fields))?);
                 }
                 _ => {
-                    let mut saved: model::Attempt = ManagedCodec::decode(&writer.query_row(
-                        "SELECT contract FROM managed_attempts WHERE attempt_id = ?",
-                        params![input.id],
-                        |row| row.get::<_, Vec<u8>>(0),
-                    )?)?;
+                    let (key, bytes) = attempt_record(&store, &input.id)?;
+                    let mut saved: Value = rmp_serde::from_slice(&bytes[1..])?;
                     if corruption == "capture-lifecycle" {
-                        saved.capture.lifecycle = saved.capture.revision + 1;
+                        *mut_field(&mut saved, &["capture", "lifecycle"])? =
+                            Value::U64(attempt.captured_revision() + 1);
                     } else {
-                        saved.capture.running = false;
+                        *mut_field(&mut saved, &["capture", "running"])? = Value::Bool(false);
                     }
-                    writer.execute(
-                        "UPDATE managed_attempts SET contract = ? WHERE attempt_id = ?",
-                        params![ManagedCodec::encode(&saved)?, input.id],
-                    )?;
+                    tx.native().insert(key, framed(&saved)?);
                 }
             }
+            tx.commit([])?;
         }
         drop(store);
         assert!(
@@ -581,13 +594,16 @@ fn prior_schema_is_rejected() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    {
-        let mut writer = store.writer()?;
-        writer.get_mut()?.execute(
-            "UPDATE store_meta SET schema_version = ?",
-            params![crate::analysis::ANALYSIS_SCHEMA_VERSION - 1],
-        )?;
-    }
+    let schema = u64::from(store.meta()?.schema_version - 1);
+    let mut tx = store.write()?;
+    tx.native().insert(b"\0data/schema", schema.to_be_bytes());
+    assert!(matches!(
+        tx.commit([]),
+        Err(Error::NativeState {
+            field: "logical Data metadata",
+            ..
+        })
+    ));
     drop(store);
     assert!(AnalysisStore::open(&root).is_err());
     Ok(())
@@ -601,7 +617,7 @@ fn active_metadata_honors_cancel() -> TestResult {
     control.cancel()?;
     assert!(matches!(
         store.active_managed(&control),
-        Err(crate::Error::AnalysisReadCancelled { .. })
+        Err(araphor_data::Error::AnalysisReadCancelled { .. })
     ));
     Ok(())
 }
@@ -610,7 +626,7 @@ fn active_metadata_honors_cancel() -> TestResult {
 fn idle_suspend_checks_fences() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
@@ -636,7 +652,7 @@ fn idle_suspend_checks_fences() -> TestResult {
                 checked = true;
                 Ok(())
             }),
-            Err(crate::Error::AnalysisConflict { .. })
+            Err(araphor_data::Error::AnalysisConflict { .. })
         ));
         assert!(!checked);
         assert_eq!(fixture.current(&store)?, running);
@@ -648,7 +664,7 @@ fn idle_suspend_checks_fences() -> TestResult {
             checked = true;
             Err(Code::Denied.error("suspension callback"))
         }),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -664,7 +680,7 @@ fn idle_suspend_checks_fences() -> TestResult {
     assert!(stopped.lifecycle > running.lifecycle);
     assert!(matches!(
         store.suspend_managed(&running, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     Ok(())
 }
@@ -676,7 +692,7 @@ fn host_lease_is_exclusive() -> TestResult {
     let lease = store.lease_managed()?;
     assert!(matches!(
         store.lease_managed(),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Conflict,
             field: "managed host owner",
             ..
@@ -691,7 +707,7 @@ fn host_lease_is_exclusive() -> TestResult {
 fn active_membership_keeps_revision() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())

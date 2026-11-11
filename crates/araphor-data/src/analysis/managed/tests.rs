@@ -23,18 +23,13 @@ mod destination;
 mod execution;
 mod guards;
 mod health;
-mod history;
 mod input;
 mod journal;
-mod lifecycle;
 mod memory;
 mod metadata;
-mod removal;
-mod renewal;
 mod replay;
 mod retention;
 mod source;
-mod status;
 mod version;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;

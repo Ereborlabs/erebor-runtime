@@ -90,13 +90,13 @@ fn call_references_keep_descriptor() -> TestResult {
         fixture.continued(&request, 10, None)?,
         fixture.continued(&request, 11, None)?,
     ];
-    let receipt = fixture.publish(
+    let receipt = fixture.publish_checked(
         &store,
         &attempt,
         &evaluations,
         &[
-            fixture.output(12, "exact context")?,
-            fixture.output(103, "exact context")?,
+            fixture.output_detail(12, "exact context")?,
+            fixture.output_detail(103, "exact context")?,
         ],
         || Ok(()),
     )?;
@@ -186,15 +186,15 @@ fn managed_calls_commit_atomically() -> TestResult {
         fixture.continued(&input, 11, None)?,
     ];
     let outputs = [
-        fixture.output(12, "exact context")?,
-        fixture.output(103, "exact context")?,
+        fixture.output_detail(12, "exact context")?,
+        fixture.output_detail(103, "exact context")?,
     ];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
     assert_eq!(receipt.results.len(), 2);
     assert_eq!(receipt.selected.commit_revision, receipt.commit_revision);
     let after = store.meta()?;
     assert!(fixture
-        .publish(&store, &attempt, &evaluations, &outputs, || Ok(()))
+        .publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))
         .is_err());
     assert_eq!(
         store
@@ -310,10 +310,10 @@ fn managed_calls_commit_atomically() -> TestResult {
         fixture.continued(&second, 11, Some(&next))?,
     ];
     let second_outputs = [
-        fixture.output(22, "exact context")?,
-        fixture.output(203, "exact context")?,
+        fixture.output_detail(22, "exact context")?,
+        fixture.output_detail(203, "exact context")?,
     ];
-    let second_receipt = fixture.publish(
+    let second_receipt = fixture.publish_checked(
         &store,
         &second_attempt,
         &second_evaluations,
@@ -459,17 +459,17 @@ fn managed_capture_keeps_guards() -> TestResult {
         fixture.continued(&first, 11, None)?,
     ];
     let outputs = [
-        fixture.output(12, "exact context")?,
-        fixture.output(13, "exact context")?,
+        fixture.output_detail(12, "exact context")?,
+        fixture.output_detail(13, "exact context")?,
     ];
-    fixture.publish(&store, &attempt, &eval, &outputs, || Ok(()))?;
+    fixture.publish_checked(&store, &attempt, &eval, &outputs, || Ok(()))?;
     let stale_eval = [
         fixture.continued(&second, 10, None)?,
         fixture.continued(&second, 11, None)?,
     ];
     let before = store.meta()?;
     assert!(fixture
-        .publish(&store, &stale, &stale_eval, &outputs, || Ok(()))
+        .publish_checked(&store, &stale, &stale_eval, &outputs, || Ok(()))
         .is_err());
     assert_eq!(store.meta()?, before);
     let mut captured = fixture.capture(&store)?;
@@ -585,7 +585,7 @@ fn managed_capture_keeps_guards() -> TestResult {
         fixture.continued(&input, 11, Some(&captured))?,
     ];
     assert!(fixture
-        .publish(&store, &recovered, &eval, &outputs, || Ok(()))
+        .publish_checked(&store, &recovered, &eval, &outputs, || Ok(()))
         .is_err());
     let before = store.meta()?;
     for coverage in [false, true] {
@@ -597,7 +597,7 @@ fn managed_capture_keeps_guards() -> TestResult {
             changed[0].inputs[0].revision.id.push_str("-changed");
         }
         let error = fixture
-            .publish(&store, &attempt, &changed, &outputs, || Ok(()))
+            .publish_checked(&store, &attempt, &changed, &outputs, || Ok(()))
             .err()
             .ok_or("changed inputs reused captured state")?;
         assert!(matches!(
@@ -610,7 +610,7 @@ fn managed_capture_keeps_guards() -> TestResult {
         ));
         assert_eq!(store.meta()?, before);
     }
-    fixture.publish(&store, &attempt, &eval, &outputs, || Ok(()))?;
+    fixture.publish_checked(&store, &attempt, &eval, &outputs, || Ok(()))?;
     Ok(())
 }
 
@@ -627,14 +627,14 @@ fn managed_failure_is_atomic() -> TestResult {
         fixture.evaluation(&input, 11)?,
     ];
     let mut outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
     let before = store.meta()?;
     let mut changed = evaluations.clone();
     changed[0].context.time_utc_ns += 1;
     let error = fixture
-        .publish(&store, &attempt, &changed, &outputs, || Ok(()))
+        .publish_checked(&store, &attempt, &changed, &outputs, || Ok(()))
         .err()
         .ok_or("wrong evaluation time was published")?;
     assert!(matches!(
@@ -648,7 +648,7 @@ fn managed_failure_is_atomic() -> TestResult {
     assert_eq!(store.meta()?, before);
     outputs[1].evidence[0].input.row = 1;
     assert!(fixture
-        .publish(&store, &attempt, &evaluations, &outputs, || Ok(()))
+        .publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))
         .is_err());
     assert_eq!(store.meta()?, before);
     let state = fixture.capture(&store)?;
@@ -659,7 +659,7 @@ fn managed_failure_is_atomic() -> TestResult {
     outputs[1].evidence[0].input.row = 0;
     let mut checked = 0;
     assert!(matches!(
-        fixture.publish(&store, &attempt, &evaluations, &outputs, || {
+        fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || {
             checked += 1;
             Err(Error::AnalysisReadDenied {
                 location: snafu::location!(),
@@ -669,14 +669,14 @@ fn managed_failure_is_atomic() -> TestResult {
     ));
     assert_eq!(checked, 1);
     assert_eq!(store.meta()?, before);
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || {
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || {
         checked += 1;
         Ok(())
     })?;
     assert_eq!(checked, 2);
     let after = store.meta()?;
     assert!(fixture
-        .publish(&store, &attempt, &evaluations, &outputs, || {
+        .publish_checked(&store, &attempt, &evaluations, &outputs, || {
             checked += 1;
             Err(Error::AnalysisReadDenied {
                 location: snafu::location!(),
@@ -686,7 +686,7 @@ fn managed_failure_is_atomic() -> TestResult {
     assert_eq!(checked, 2);
     assert_eq!(store.meta()?, after);
     assert!(matches!(
-        fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(())),
+        fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(())),
         Err(Error::AnalysisConflict { .. })
     ));
     assert_eq!(
@@ -701,9 +701,9 @@ fn managed_failure_is_atomic() -> TestResult {
         Some(receipt)
     );
     let mut conflicting = outputs.clone();
-    conflicting[1] = fixture.output(99, "exact context")?;
+    conflicting[1] = fixture.output_detail(99, "exact context")?;
     assert!(matches!(
-        fixture.publish(&store, &attempt, &evaluations, &conflicting, || Ok(())),
+        fixture.publish_checked(&store, &attempt, &evaluations, &conflicting, || Ok(())),
         Err(Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, after);

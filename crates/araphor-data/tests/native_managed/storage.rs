@@ -8,6 +8,8 @@ use sdk::arrow_array::{StringArray, UInt64Array};
 
 #[path = "storage/calls.rs"]
 mod calls;
+#[path = "storage/control.rs"]
+mod control;
 #[path = "storage/output.rs"]
 mod output;
 #[path = "storage/terminal.rs"]
@@ -18,7 +20,7 @@ struct StorageFixture {
     model: sdk::Model,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct Instance {
     tenant: [u8; 16],
     id: String,
@@ -124,11 +126,12 @@ impl StorageFixture {
     }
 
     fn capture(&self, store: &NativeStore) -> Result<ManagedCapture, Box<dyn std::error::Error>> {
+        let instance = self.current(store)?;
         let requests = BTreeMap::new();
         let page = store.read_managed_tables_filtered(
-            &self.instance.grant.selection.project(&requests)?,
+            &instance.grant.selection.project(&requests)?,
             &ManagedRead {
-                instance: self.current(store)?,
+                instance,
                 expected: None,
                 rebuild: false,
                 follow: false,
@@ -201,7 +204,11 @@ impl StorageFixture {
         })
     }
 
-    fn output(&self, value: u64, detail: &str) -> sdk::Result<sdk::Output> {
+    fn output(&self, value: u64) -> sdk::Result<sdk::Output> {
+        self.output_detail(value, "exact context")
+    }
+
+    fn output_detail(&self, value: u64, detail: &str) -> sdk::Result<sdk::Output> {
         let batch = Self::batch(&self.model.outputs[0].schema, value)?;
         Ok(sdk::Output {
             datasets: vec![sdk::Dataset {
@@ -240,6 +247,17 @@ impl StorageFixture {
     }
 
     fn publish(
+        &self,
+        store: &NativeStore,
+        attempt: &ManagedAttempt,
+        evaluations: &[sdk::Evaluation],
+        outputs: &[sdk::Output],
+    ) -> Result<ManagedReceipt, Box<dyn std::error::Error>> {
+        self.publish_checked(store, attempt, evaluations, outputs, || Ok(()))
+            .map_err(Into::into)
+    }
+
+    fn publish_checked(
         &self,
         store: &NativeStore,
         attempt: &ManagedAttempt,
@@ -546,8 +564,8 @@ fn large_contract_preserves_bytes() -> TestResult {
         fixture.evaluation(&input, 11)?,
     ];
     let outputs = [
-        fixture.output(2, &"r".repeat(16 * 1024 * 1024 + 1))?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, &"r".repeat(16 * 1024 * 1024 + 1))?,
+        fixture.output_detail(3, "exact context")?,
     ];
     assert_eq!(
         outputs[0].reasons[0]
@@ -586,7 +604,7 @@ fn large_contract_preserves_bytes() -> TestResult {
     let cursor = store.database().inner().journal_head()?;
     let mut checked = false;
     let error = fixture
-        .publish(&store, &attempt, &evaluations, &outputs, || {
+        .publish_checked(&store, &attempt, &evaluations, &outputs, || {
             checked = true;
             Err(Error::AnalysisReadDenied {
                 location: snafu::location!(),
@@ -603,7 +621,7 @@ fn large_contract_preserves_bytes() -> TestResult {
     assert_eq!(call_heads(store.view()?.as_ref(), &spec.id)?, heads);
     assert!(records(store.view()?.as_ref(), b"\0data/X")?.is_empty());
     assert!(records(store.view()?.as_ref(), b"\0data/U")?.is_empty());
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
     verify_publication(&store, &receipt)?;
     let committed = store.meta()?;
     let journal = store.database().inner().journal_head()?;

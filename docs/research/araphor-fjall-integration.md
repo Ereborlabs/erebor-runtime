@@ -88,6 +88,39 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Thirty-six native cases replace the complete old lifecycle, history,
+  renewal, removal, status, and version case families. They preserve authority
+  guards, exact receipts, checkpoint reads, scope checks, corruption matrices,
+  rollback, recreation, and reopen. The shared fixture uses the current
+  instance selection. Checkpoint continuation hydrates parameters from the
+  original successful evaluation through the existing API. No parameter archive
+  is added. Only the two version helpers needed by other unit cases remain
+  at the old path.
+
+  The first native run passes 32 cases and fails four. Three failures expose
+  fixture hydration or selection errors. After those corrections, 35 cases
+  pass. The last failure exposes an actual false activation: initial inactive
+  admission emits a host wake. The CDC classifier now reads the earliest
+  owner-scoped version key only when lifecycle and generation equal the
+  committed Data revision. Initial admission stays silent. Recreation keeps
+  its wake because it retains an earlier logical version. Normal transitions
+  keep their existing revision check. The read uses the original batch's exact
+  committed view. No predecessor snapshot or retention root is added.
+
+  All 187 native managed cases pass in 16.97 seconds. This includes the
+  36 replacements and the original-log activation case, which checks inactive
+  recreation and rewind. Eight backup, six lifecycle, and 18 raw cases also
+  pass. The release library check without default features and formatting of
+  changed Rust files pass. Data unit compilation has 420 diagnostics, down from
+  450 after these case bodies move. That unit target still does not compile or
+  run. Read `native-control-fixture-contracts.log`,
+  `native-control-contracts.log`, `native-control-recovery.log`,
+  `native-control-default.log`, and `native-control-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for these six native case families and the false activation
+  correction**. Complete migration qualification and incident performance
+  remain **Not done**. No new incident timing is measured.
+
 - Two native cases replace the old SQL uncertain lifecycle commit case.
   A child process forces an actual journal `EFBIG` error. It checks the native
   error chain, engine poison, blocked reads and writes, blocked activation

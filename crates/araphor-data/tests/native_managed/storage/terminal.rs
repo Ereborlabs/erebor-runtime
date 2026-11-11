@@ -155,10 +155,10 @@ fn terminal_keeps_successful_state() -> TestResult {
         fixture.continued(&first, 11, Some(&captured))?,
     ];
     let outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
     let prior = fixture.capture(&store)?;
     let failed = request("failed");
     let attempt = store.register_managed_attempt(&prior, &failed, || Ok(()))?;
@@ -223,7 +223,7 @@ fn terminal_keeps_successful_state() -> TestResult {
         Some(&terminal)
     );
     assert!(fixture
-        .publish(&store, &attempt, &evaluations, &outputs, || Ok(()))
+        .publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))
         .is_err());
     assert_eq!(data_state(&store)?, before);
     assert_eq!(store.database().inner().journal_head()?, journal);
@@ -313,8 +313,8 @@ fn unknown_claim_cannot_finish() -> TestResult {
         fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
     drop(captured);
     drop(store);
@@ -322,7 +322,7 @@ fn unknown_claim_cannot_finish() -> TestResult {
     assert_eq!(data_state(&store)?, before);
     let journal = store.database().inner().journal_head()?;
     assert!(matches!(
-        fixture.publish(&store, &original, &evaluations, &outputs, || Ok(())),
+        fixture.publish_checked(&store, &original, &evaluations, &outputs, || Ok(())),
         Err(Error::AnalysisConflict { .. })
     ));
     assert!(matches!(
@@ -497,10 +497,10 @@ fn live_recovery_keeps_claim() -> TestResult {
         fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
     assert_eq!(receipt.commit_revision, before.0.commit_revision + 1);
     assert_eq!(receipt.results.len(), 2);
     assert_eq!(receipt.frontier, input.frontier);
@@ -541,13 +541,13 @@ fn startup_cancels_promoted_attempts() -> TestResult {
         fixture.evaluation(&inputs[2], 10)?,
         fixture.evaluation(&inputs[2], 11)?,
     ];
-    let receipt = fixture.publish(
+    let receipt = fixture.publish_checked(
         &store,
         &attempts[2],
         &evaluations,
         &[
-            fixture.output(12, "exact context")?,
-            fixture.output(103, "exact context")?,
+            fixture.output_detail(12, "exact context")?,
+            fixture.output_detail(103, "exact context")?,
         ],
         || Ok(()),
     )?;
@@ -666,10 +666,11 @@ fn startup_keeps_committed_state() -> TestResult {
             fixture.continued(&input, 11, Some(&captured))?,
         ];
         let outputs = [
-            fixture.output(2, "exact context")?,
-            fixture.output(3, "exact context")?,
+            fixture.output_detail(2, "exact context")?,
+            fixture.output_detail(3, "exact context")?,
         ];
-        let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+        let receipt =
+            fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
         if !stopped {
             let captured = fixture.capture(&store)?;
             let failed =
@@ -808,10 +809,10 @@ fn startup_filters_generations() -> TestResult {
         fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
-    let receipt = fixture.publish(&store, &promoted, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &promoted, &evaluations, &outputs, || Ok(()))?;
     let current = fixture.current(&store)?;
     let mut spec = current.spec.clone();
     spec.definition.definition.description = "Keep this target prospective.".into();
@@ -923,10 +924,10 @@ fn startup_restores_native_intent() -> TestResult {
         fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [
-        fixture.output(2, "exact context")?,
-        fixture.output(3, "exact context")?,
+        fixture.output_detail(2, "exact context")?,
+        fixture.output_detail(3, "exact context")?,
     ];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
+    let receipt = fixture.publish_checked(&store, &attempt, &evaluations, &outputs, || Ok(()))?;
     let current = fixture.current(&store)?;
     let captured = fixture.capture(&store)?;
     let pending_input = native_request("live-through-backup");
@@ -994,7 +995,7 @@ fn startup_restores_native_intent() -> TestResult {
     assert_eq!(selected, receipt);
     assert_eq!(StorageFixture::rows(&restored, &selected.selected)?, 1);
     assert!(matches!(
-        fixture.publish(&restored, &pending, &pending_evaluations, &outputs, || Ok(
+        fixture.publish_checked(&restored, &pending, &pending_evaluations, &outputs, || Ok(
             ()
         )),
         Err(Error::AnalysisConflict { .. })
@@ -1011,10 +1012,10 @@ fn startup_restores_native_intent() -> TestResult {
         contract
     );
     let source_outputs = [
-        fixture.output(22, "exact context")?,
-        fixture.output(33, "exact context")?,
+        fixture.output_detail(22, "exact context")?,
+        fixture.output_detail(33, "exact context")?,
     ];
-    let published = fixture.publish(
+    let published = fixture.publish_checked(
         &store,
         &pending,
         &pending_evaluations,

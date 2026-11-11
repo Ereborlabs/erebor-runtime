@@ -1,13 +1,13 @@
 use super::*;
-use crate::PackageErrorCodeV1 as Code;
+use araphor_data::PackageErrorCodeV1 as Code;
 
 fn publish_step(fixture: &Fixture, store: &AnalysisStore, id: &str) -> TestResult<ManagedReceipt> {
     let input = request(id);
-    let captured = fixture.capture(store, false)?;
+    let captured = fixture.capture(store)?;
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     fixture.publish(
         store,
@@ -22,10 +22,10 @@ fn removal_keeps_exact_history() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let receipt = publish_step(&fixture, &store, "retained")?;
     let current = fixture.current(&store)?;
-    let stale = fixture.capture(&store, false)?;
+    let stale = fixture.capture(&store)?;
     let before = store.meta()?;
     assert!(store
         .remove_managed(&current, || Err(
@@ -42,7 +42,7 @@ fn removal_keeps_exact_history() -> TestResult {
     assert_eq!(removed.generation, current.generation);
     assert_eq!(removed.progress, current.progress);
     assert!(removed.lifecycle > current.lifecycle);
-    let status: crate::InstanceStatusV1 = store
+    let status: araphor_data::InstanceStatusV1 = store
         .managed_status(
             &removed.grant.selection,
             "counter",
@@ -78,7 +78,7 @@ fn removal_keeps_exact_history() -> TestResult {
     assert!(store
         .register_managed_attempt(&stale, &request("stale"), || Ok(()))
         .is_err());
-    assert!(fixture.capture(&store, false).is_err());
+    assert!(fixture.capture(&store).is_err());
     assert!(store
         .managed_resume([1; 16], "counter", &AnalysisReadControl::default())
         .is_err());
@@ -126,7 +126,7 @@ fn removal_waits_all_attempts() -> TestResult {
     for candidate in [false, true] {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("store"))?;
-        let fixture = Fixture::admit(&store)?;
+        let fixture = fixture(&store)?;
         let current = fixture.current(&store)?;
         let captured = if candidate {
             let spec = super::version::target(&store, &current, "Pending candidate.")?;
@@ -134,7 +134,7 @@ fn removal_waits_all_attempts() -> TestResult {
             assert_ne!(next.generation, current.generation);
             super::version::capture(&store, &current, &next, false)?
         } else {
-            fixture.capture(&store, false)?
+            fixture.capture(&store)?
         };
         let input = request("independent-pending");
         let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
@@ -145,7 +145,7 @@ fn removal_waits_all_attempts() -> TestResult {
                 guarded = true;
                 Ok(())
             }),
-            Err(crate::Error::AnalysisBusy {
+            Err(araphor_data::Error::AnalysisBusy {
                 resource: "managed attempt",
                 ..
             })
@@ -170,7 +170,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
     let store = AnalysisStore::open(&root)?;
     let mut scope = AnalysisSelectionV1::new([1; 16], Vec::new());
     scope.nodes.push("node-a".into());
-    let fixture = Fixture::admit_scope(&store, false, scope)?;
+    let fixture = Fixture::new_scope(&store, "counter", DESCRIPTION.into(), scope)?;
     let first = publish_step(&fixture, &store, "scope-a")?;
     let original = fixture.current(&store)?;
     let removed = store.remove_managed(&original, || Ok(()))?;
@@ -196,7 +196,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
     assert!(store
         .recreate_managed(&removed, &removed.spec, &grant, || Ok(()))
         .is_err());
-    let next = fixture.capture(&store, false)?;
+    let next = fixture.capture(&store)?;
     assert!(next.prior(10).is_none());
     assert!(next.prior(11).is_none());
     let second = publish_step(&fixture, &store, "scope-b")?;
@@ -205,7 +205,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
     let old_id = first.results[&10].result_id.clone();
     assert!(matches!(
         store.managed_result(&current, &old_id, 10, &control),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -222,7 +222,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
     unrelated.nodes = vec!["node-c".into()];
     assert!(matches!(
         store.managed_history(&unrelated, "counter", &control),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -264,7 +264,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
     );
     assert!(matches!(
         reopened.managed_result(&current, &old_id, 10, &control),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -282,7 +282,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
 fn historical_scope_precedes_integrity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let first = publish_step(&fixture, &store, "scope-a")?;
     let original = fixture.current(&store)?;
     let removed = store.remove_managed(&original, || Ok(()))?;
@@ -291,16 +291,17 @@ fn historical_scope_precedes_integrity() -> TestResult {
     let current = store.recreate_managed(&removed, &removed.spec, &grant, || Ok(()))?;
     let id = &first.results[&10].result_id;
     {
-        let mut writer = store.writer()?;
-        writer.get_mut()?.execute(
-            "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
-            params![id],
-        )?;
+        let (key, bytes) = super::super::output::result_record(store.view()?.as_ref(), id)?;
+        let mut saved: Value = rmp_serde::from_slice(&bytes[1..])?;
+        *mut_field(&mut saved, &["revision"])? = Value::U64(first.commit_revision + 1);
+        let mut tx = store.write()?;
+        tx.native().insert(key, framed(&saved)?);
+        tx.commit([])?;
     }
     let control = AnalysisReadControl::default();
     assert!(matches!(
         store.managed_result(&current, id, 10, &control),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -317,7 +318,7 @@ fn recovery_rejects_scope_changes() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
+        let fixture = fixture(&store)?;
         publish_step(&fixture, &store, "scope-a")?;
         let original = fixture.current(&store)?;
         let removed = store.remove_managed(&original, || Ok(()))?;
@@ -325,34 +326,36 @@ fn recovery_rejects_scope_changes() -> TestResult {
         grant.selection.nodes = vec!["node-b".into()];
         store.recreate_managed(&removed, &removed.spec, &grant, || Ok(()))?;
         {
-            let mut writer = store.writer()?;
-            let writer = writer.get_mut()?;
+            let mut tx = store.write()?;
             match field {
                 "version" => {
-                    writer.execute(
-                        "UPDATE managed_versions SET scope = ? WHERE generation = ?",
-                        params![ManagedCodec::encode(&grant.selection)?, original.generation],
-                    )?;
+                    let (owner, _) = single(&store, b"\0data/J")?;
+                    let key = [
+                        b"\0data/Z".as_slice(),
+                        &owner[7..],
+                        &original.generation.to_be_bytes(),
+                    ]
+                    .concat();
+                    let (_, bytes) = single(&store, &key)?;
+                    let mut saved: Version = rmp_serde::from_slice(&bytes[1..])?;
+                    saved.scope = grant.selection;
+                    tx.native().insert(key, framed(&saved)?);
                 }
                 "captured" => {
-                    let mut saved: model::Attempt = ManagedCodec::decode(&writer.query_row(
-                        "SELECT contract FROM managed_attempts WHERE attempt_id = 'scope-a'",
-                        [],
-                        |row| row.get::<_, Vec<u8>>(0),
-                    )?)?;
-                    saved.capture.grant = grant;
-                    writer.execute(
-                        "UPDATE managed_attempts SET contract = ? WHERE attempt_id = 'scope-a'",
-                        params![ManagedCodec::encode(&saved)?],
-                    )?;
+                    let (key, bytes) = attempt_record(&store, "scope-a")?;
+                    let mut saved: Value = rmp_serde::from_slice(&bytes[1..])?;
+                    *mut_field(&mut saved, &["capture", "grant"])? = serde_value::to_value(grant)?;
+                    tx.native().insert(key, framed(&saved)?);
                 }
                 _ => {
-                    writer.execute(
-                        "UPDATE managed_instances SET removed = true, running = true",
-                        [],
-                    )?;
+                    let (key, bytes) = single(&store, b"\0data/J")?;
+                    let mut saved: Instance = rmp_serde::from_slice(&bytes[1..])?;
+                    saved.removed = true;
+                    saved.running = true;
+                    tx.native().insert(key, framed(&saved)?);
                 }
             }
+            tx.commit([])?;
         }
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "corruption {field}");
@@ -365,7 +368,7 @@ fn uninstall_keeps_admitted_program() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let first = publish_step(&fixture, &store, "before-uninstall")?;
     let current = fixture.current(&store)?;
     let pin = &current.spec.definition.images[0];
@@ -444,7 +447,7 @@ fn rollback_keeps_recreated_scope() -> TestResult {
         let store = AnalysisStore::open(&root)?;
         let mut scope = AnalysisSelectionV1::tenant([1; 16]);
         scope.nodes = vec!["node-a".into()];
-        let fixture = Fixture::admit_scope(&store, false, scope)?;
+        let fixture = Fixture::new_scope(&store, "counter", DESCRIPTION.into(), scope)?;
         let first = publish_step(&fixture, &store, "original-a")?;
         let original = fixture.current(&store)?;
         let removed = store.remove_managed(&original, || Ok(()))?;
@@ -484,8 +487,8 @@ fn rollback_keeps_recreated_scope() -> TestResult {
         };
         let attempt = store.register_managed_attempt(&captured, &request, || Ok(()))?;
         let evaluations = [
-            fixture.evaluation(&request, 10, Some(&captured))?,
-            fixture.evaluation(&request, 11, Some(&captured))?,
+            fixture.continued(&request, 10, Some(&captured))?,
+            fixture.continued(&request, 11, Some(&captured))?,
         ];
         let receipt = fixture.publish(
             &store,
@@ -508,7 +511,7 @@ fn rollback_keeps_recreated_scope() -> TestResult {
                 10,
                 &AnalysisReadControl::default()
             ),
-            Err(crate::Error::Package {
+            Err(araphor_data::Error::Package {
                 code: Code::Denied,
                 ..
             })

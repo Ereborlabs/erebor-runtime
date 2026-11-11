@@ -1,11 +1,11 @@
 use super::*;
-use crate::PackageErrorCodeV1 as Code;
+use araphor_data::PackageErrorCodeV1 as Code;
 
 #[tokio::test]
 async fn renewal_cas_is_inert() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let expected = &fixture.instance;
     let mut grant = expected.grant.clone();
     grant.revision += 1;
@@ -17,7 +17,7 @@ async fn renewal_cas_is_inert() -> TestResult {
             checked += 1;
             Err(Code::Denied.error("renewal fixture authority"))
         }),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -36,7 +36,7 @@ async fn renewal_cas_is_inert() -> TestResult {
     assert_eq!(store.meta()?, before);
     assert!(!notices.has_changed()?);
     let mut changed = grant.clone();
-    changed.selection.contexts = crate::Selection::All;
+    changed.selection.contexts = araphor_data::Selection::All;
     assert!(store.renew_managed(expected, &changed, || Ok(())).is_err());
     assert_eq!(fixture.current(&store)?, *expected);
     assert_eq!(store.meta()?, before);
@@ -84,13 +84,13 @@ fn renewal_keeps_history() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
-    let captured = fixture.capture(&store, false)?;
+    let fixture = fixture(&store)?;
+    let captured = fixture.capture(&store)?;
     let input = request("before-renewal");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
@@ -103,6 +103,8 @@ fn renewal_keeps_history() -> TestResult {
         )?
         .ok_or("committed attempt")?;
     assert_eq!(committed.receipt(), Some(&receipt));
+    let contract = attempt_record(&store, &input.id)?.1;
+    let captured_fields = capture_record(&store, &input.id)?;
     let current = fixture.current(&store)?;
     let original = store.managed_result(
         &current,
@@ -120,12 +122,12 @@ fn renewal_keeps_history() -> TestResult {
     )?;
     assert!(matches!(
         &status.readiness,
-        crate::PackageReadinessV1::Failed {
+        araphor_data::PackageReadinessV1::Failed {
             code: Code::Denied,
             ..
         }
     ));
-    let stale = fixture.capture(&store, false)?;
+    let stale = fixture.capture(&store)?;
     let mut grant = stopped.grant.clone();
     grant.revision += 1;
     let renewed = store.renew_managed(&stopped, &grant, || Ok(()))?;
@@ -153,13 +155,27 @@ fn renewal_keeps_history() -> TestResult {
         )?
         .ok_or("retained attempt")?;
     assert_eq!(loaded.instance().grant, attempt.instance().grant);
-    assert_eq!(loaded.0, committed.0);
-    let after = fixture.capture(&store, false)?;
-    assert_eq!(after.contract.grant, grant);
+    assert_eq!(attempt_record(&store, &input.id)?.1, contract);
+    let mut after = fixture.capture(&store)?;
+    for (call, evaluation) in [10, 11].into_iter().zip(&evaluations) {
+        after.hydrate_prior(
+            call,
+            &fixture.model,
+            evaluation.parameters.as_ref().map(|batch| sdk::Dataset {
+                name: "parameters".into(),
+                batches: vec![batch.clone()],
+            }),
+            None,
+        )?;
+    }
+    assert_eq!(after.instance().grant, grant);
+    let continued = request("continued-renewal");
+    let pending = store.register_managed_attempt(&after, &continued, || Ok(()))?;
+    let saved = capture_record(&store, &continued.id)?;
+    assert_eq!(saved.grant, grant);
     assert_eq!(
-        after.contract.prior,
-        captured
-            .contract
+        saved.prior,
+        captured_fields
             .prior
             .keys()
             .map(|call| (*call, receipt.results.get(call).cloned()))
@@ -167,10 +183,11 @@ fn renewal_keeps_history() -> TestResult {
     );
     for call in [10, 11] {
         assert!(fixture
-            .evaluation(&request("continue"), call, Some(&after))?
+            .continued(&request("continue"), call, Some(&after))?
             .checkpoint
             .is_some());
     }
+    store.finish_managed(&pending, ManagedExit::Cancelled, || Ok(()))?;
     drop(store);
     let store = AnalysisStore::open(&root)?;
     assert_eq!(fixture.current(&store)?, renewed);
@@ -182,7 +199,7 @@ fn renewal_keeps_history() -> TestResult {
             &AnalysisReadControl::default(),
         )?
         .ok_or("reopened attempt")?;
-    assert_eq!(loaded.0, committed.0);
+    assert_eq!(attempt_record(&store, &input.id)?.1, contract);
     assert_eq!(loaded.instance().grant, attempt.instance().grant);
     assert_eq!(
         store.managed_history(&grant.selection, "counter", &AnalysisReadControl::default())?,
@@ -215,7 +232,7 @@ fn renewal_requires_finished_work() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let mut grant = fixture.instance.grant.clone();
     grant.revision += 1;
     let running =
@@ -227,13 +244,14 @@ fn renewal_requires_finished_work() -> TestResult {
     assert_eq!(store.meta()?, before);
     let stopped =
         store.set_managed_running([1; 16], "counter", running.lifecycle, false, || Ok(()))?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let input = request("pending-renewal");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
+    let contract = attempt_record(&store, &input.id)?.1;
     let before = store.meta()?;
     assert!(matches!(
         store.renew_managed(&stopped, &grant, || Ok(())),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Incomplete,
             field: "managed pending attempt",
             ..
@@ -244,7 +262,7 @@ fn renewal_requires_finished_work() -> TestResult {
     let store = AnalysisStore::open(&root)?;
     assert!(matches!(
         store.renew_managed(&stopped, &grant, || Ok(())),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Incomplete,
             field: "managed pending attempt",
             ..
@@ -258,7 +276,12 @@ fn renewal_requires_finished_work() -> TestResult {
             &AnalysisReadControl::default(),
         )?
         .ok_or("pending attempt")?;
-    assert_eq!(loaded.0, attempt.0);
+    assert_eq!(attempt_record(&store, &input.id)?.1, contract);
+    assert_eq!(loaded.instance(), attempt.instance());
+    assert_eq!(loaded.request(), attempt.request());
+    assert_eq!(loaded.captured_revision(), attempt.captured_revision());
+    assert!(loaded.receipt().is_none());
+    assert!(loaded.terminal().is_none());
     assert!(store
         .finish_managed(&loaded, ManagedExit::Cancelled, || Ok(()))
         .is_err());

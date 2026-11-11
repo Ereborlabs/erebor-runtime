@@ -11,7 +11,7 @@ impl StorageFixture {
         let captured = self.capture(store)?;
         let input = request(id);
         let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-        self.publish(
+        self.publish_checked(
             store,
             &attempt,
             &[
@@ -19,8 +19,8 @@ impl StorageFixture {
                 self.continued(&input, 11, Some(&captured))?,
             ],
             &[
-                self.output(value, "exact context")?,
-                self.output(value + 1, "exact context")?,
+                self.output_detail(value, "exact context")?,
+                self.output_detail(value + 1, "exact context")?,
             ],
             || Ok(()),
         )
@@ -28,7 +28,7 @@ impl StorageFixture {
     }
 }
 
-fn result_record(
+pub(super) fn result_record(
     view: &DataView,
     name: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
@@ -553,7 +553,7 @@ fn successful_receipt_keeps_head() -> TestResult {
         assert_eq!(
             fixture.checkpoint(&store, &receipt.results[&10])?.datasets[0].batches,
             fixture
-                .output(value, "exact context")?
+                .output_detail(value, "exact context")?
                 .checkpoint
                 .ok_or("state")?
                 .datasets[0]

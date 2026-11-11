@@ -1,13 +1,12 @@
-use super::super::model::Attempt;
 use super::*;
-use crate::PackageErrorCodeV1 as Code;
+use araphor_data::PackageErrorCodeV1 as Code;
 
 #[test]
 fn history_keeps_original_receipts() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let selection = &fixture.instance.grant.selection;
     let control = AnalysisReadControl::default();
     assert!(store
@@ -15,12 +14,12 @@ fn history_keeps_original_receipts() -> TestResult {
         .is_empty());
     let mut expected = Vec::new();
     for id in ["second-name", "first-name"] {
-        let capture = fixture.capture(&store, false)?;
+        let capture = fixture.capture(&store)?;
         let input = request(id);
         let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
         let evaluations = [
-            fixture.evaluation(&input, 10, Some(&capture))?,
-            fixture.evaluation(&input, 11, Some(&capture))?,
+            fixture.continued(&input, 10, Some(&capture))?,
+            fixture.continued(&input, 11, Some(&capture))?,
         ];
         expected.push(fixture.publish(
             &store,
@@ -33,11 +32,11 @@ fn history_keeps_original_receipts() -> TestResult {
         ("failed", ManagedExit::Failed(Code::Invalid)),
         ("cancelled", ManagedExit::Cancelled),
     ] {
-        let capture = fixture.capture(&store, false)?;
+        let capture = fixture.capture(&store)?;
         let attempt = store.register_managed_attempt(&capture, &request(id), || Ok(()))?;
         store.finish_managed(&attempt, exit, || Ok(()))?;
     }
-    let capture = fixture.capture(&store, false)?;
+    let capture = fixture.capture(&store)?;
     let pending = store.register_managed_attempt(&capture, &request("pending"), || Ok(()))?;
     let current = fixture.current(&store)?;
     let running =
@@ -47,9 +46,9 @@ fn history_keeps_original_receipts() -> TestResult {
     for _ in 0..2 {
         let history = store.managed_history(selection, "counter", &control)?;
         assert_eq!(history, expected);
-        let encoded = crate::PackageResponseV1::History(history).encode()?;
-        let crate::PackageResponseV1::History(returned) =
-            crate::PackageResponseV1::from_bytes(&encoded)?
+        let encoded = araphor_data::PackageResponseV1::History(history).encode()?;
+        let araphor_data::PackageResponseV1::History(returned) =
+            araphor_data::PackageResponseV1::from_bytes(&encoded)?
         else {
             return Err("history response variant".into());
         };
@@ -70,7 +69,7 @@ fn history_keeps_original_receipts() -> TestResult {
     narrowed.nodes = vec!["ungranted-node".into()];
     assert!(matches!(
         store.managed_history(&narrowed, "counter", &control),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -78,7 +77,7 @@ fn history_keeps_original_receipts() -> TestResult {
     control.cancel()?;
     assert!(matches!(
         store.managed_history(selection, "counter", &control),
-        Err(crate::Error::AnalysisReadCancelled { .. })
+        Err(araphor_data::Error::AnalysisReadCancelled { .. })
     ));
     Ok(())
 }
@@ -87,50 +86,61 @@ fn history_keeps_original_receipts() -> TestResult {
 fn history_checks_stored_binding() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
-    let capture = fixture.capture(&store, false)?;
+    let fixture = fixture(&store)?;
+    let capture = fixture.capture(&store)?;
     let input = request("original");
     let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
     let receipt = fixture.publish(
         &store,
         &attempt,
         &[
-            fixture.evaluation(&input, 10, Some(&capture))?,
-            fixture.evaluation(&input, 11, Some(&capture))?,
+            fixture.continued(&input, 10, Some(&capture))?,
+            fixture.continued(&input, 11, Some(&capture))?,
         ],
         &[fixture.output(2)?, fixture.output(3)?],
     )?;
-    let original = {
-        let mut writer = store.writer()?;
-        writer.get_mut()?.query_row("SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![[1u8;16].as_slice()], |row| row.get::<_, Vec<u8>>(0))?
-    };
+    let (key, original) = attempt_record(&store, "original")?;
+    let (ended, owner) = single(&store, b"\0data/E")?;
+    assert_eq!(
+        &ended[ended.len() - 8..],
+        receipt.commit_revision.to_be_bytes()
+    );
+    assert_eq!(owner.as_slice(), &key[7..]);
     for case in 0..9 {
-        let mut value: Attempt = ManagedCodec::decode(&original)?;
+        let mut value: Value = rmp_serde::from_slice(&original[1..])?;
         let mut completed = receipt.commit_revision;
         match case {
-            0 => value.capture.tenant = [2; 16],
-            1 => value.capture.instance = "foreign".into(),
-            2 => value.request.id = "foreign".into(),
-            3 => value.capture.generation += 1,
-            4 => value.receipt.as_mut().ok_or("receipt")?.instance = "foreign".into(),
-            5 => value.receipt.as_mut().ok_or("receipt")?.attempt = "foreign".into(),
-            6 => completed += 1,
-            7 => {
-                value
-                    .receipt
-                    .as_mut()
-                    .ok_or("receipt")?
-                    .results
-                    .get_mut(&10)
-                    .ok_or("call")?
-                    .commit_revision -= 1
+            0 => {
+                *mut_field(&mut value, &["capture", "tenant"])? = serde_value::to_value([2u8; 16])?
             }
+            1 => {
+                *mut_field(&mut value, &["capture", "instance"])? = Value::String("foreign".into())
+            }
+            2 => *mut_field(&mut value, &["request", "id"])? = Value::String("foreign".into()),
+            3 => {
+                *mut_field(&mut value, &["capture", "generation"])? =
+                    Value::U64(fixture.instance.generation + 1)
+            }
+            4 | 5 | 7 => {
+                let mut changed = receipt.clone();
+                match case {
+                    4 => changed.instance = "foreign".into(),
+                    5 => changed.attempt = "foreign".into(),
+                    _ => changed.results.get_mut(&10).ok_or("call")?.commit_revision -= 1,
+                }
+                *mut_field(&mut value, &["receipt"])? = serde_value::to_value(changed)?;
+            }
+            6 => completed += 1,
             _ => completed = 0,
         }
-        {
-            let mut writer = store.writer()?;
-            writer.get_mut()?.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![ManagedCodec::encode(&value)?, completed, [1u8;16].as_slice()])?;
-        }
+        let mut changed = ended.clone();
+        let offset = changed.len() - 8;
+        changed[offset..].copy_from_slice(&completed.to_be_bytes());
+        let mut tx = store.write()?;
+        tx.native().insert(&key, framed(&value)?);
+        tx.native().remove(&ended);
+        tx.native().insert(&changed, &owner);
+        tx.commit([])?;
         assert!(
             matches!(
                 store.managed_history(
@@ -138,17 +148,18 @@ fn history_checks_stored_binding() -> TestResult {
                     "counter",
                     &AnalysisReadControl::default()
                 ),
-                Err(crate::Error::Package {
+                Err(Error::Package {
                     code: Code::Invalid,
                     ..
                 })
             ),
             "case {case}"
         );
-    }
-    {
-        let mut writer = store.writer()?;
-        writer.get_mut()?.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![original, receipt.commit_revision, [1u8;16].as_slice()])?;
+        let mut tx = store.write()?;
+        tx.native().remove(&changed);
+        tx.native().insert(&ended, &owner);
+        tx.native().insert(&key, &original);
+        tx.commit([])?;
     }
     assert_eq!(
         store.managed_history(

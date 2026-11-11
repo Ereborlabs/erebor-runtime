@@ -1,5 +1,5 @@
 use super::*;
-use crate::{PackageErrorCodeV1 as Code, PackageReadinessV1 as Readiness};
+use araphor_data::{PackageErrorCodeV1 as Code, PackageReadinessV1 as Readiness};
 
 fn status(store: &AnalysisStore, fixture: &Fixture) -> TestResult<ManagedStatus> {
     Ok(store.managed_status(
@@ -10,12 +10,12 @@ fn status(store: &AnalysisStore, fixture: &Fixture) -> TestResult<ManagedStatus>
 }
 
 fn publish(fixture: &Fixture, store: &AnalysisStore, id: &str) -> TestResult<ManagedReceipt> {
-    let captured = fixture.capture(store, false)?;
+    let captured = fixture.capture(store)?;
     let input = request(id);
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
-        fixture.evaluation(&input, 10, Some(&captured))?,
-        fixture.evaluation(&input, 11, Some(&captured))?,
+        fixture.continued(&input, 10, Some(&captured))?,
+        fixture.continued(&input, 11, Some(&captured))?,
     ];
     fixture.publish(
         store,
@@ -30,7 +30,7 @@ fn idle_failure_keeps_progress() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     assert!(matches!(
         status(&store, &fixture)?.readiness,
         Readiness::Inactive
@@ -77,22 +77,14 @@ fn idle_failure_keeps_progress() -> TestResult {
                 checked = true;
                 Ok(())
             }),
-            Err(crate::Error::AnalysisConflict { .. })
+            Err(araphor_data::Error::AnalysisConflict { .. })
         ));
         assert!(!checked);
         assert_eq!(store.meta()?, before);
     }
     let stopped = store.suspend_managed(&current, || Ok(()))?;
     let failed = status(&store, &fixture)?;
-    let attempts: u64 = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT count(*) FROM managed_attempts", [], |row| {
-                row.get(0)
-            })
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "count idle failure attempts",
-            })
-    })?;
+    let attempts = records(store.view()?.as_ref(), b"\0data/a")?.len();
     assert_eq!(attempts, 1);
     assert!(!failed.instance.running);
     assert_eq!(failed.status_progress, receipt.commit_revision);
@@ -176,12 +168,12 @@ fn attempted_failure_uses_history() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let running =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let stale = store.register_managed_attempt(&captured, &request("old-lifecycle"), || Ok(()))?;
     let stopped =
         store.set_managed_running([1; 16], "counter", running.lifecycle, false, || Ok(()))?;
@@ -210,10 +202,10 @@ fn attempted_failure_uses_history() -> TestResult {
         status(&store, &fixture)?.readiness,
         Readiness::Ready
     ));
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let failed = store.register_managed_attempt(&captured, &request("invalid"), || Ok(()))?;
     store.finish_managed(&failed, ManagedExit::Failed(Code::Invalid), || Ok(()))?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let cancelled = store.register_managed_attempt(&captured, &request("cancelled"), || Ok(()))?;
     store.finish_managed(&cancelled, ManagedExit::Cancelled, || Ok(()))?;
     assert!(matches!(
@@ -254,7 +246,7 @@ fn attempted_failure_uses_history() -> TestResult {
         store.set_managed_running([1; 16], "counter", stopped.lifecycle, true, || Ok(()))?;
     assert!(restarted.lifecycle > restarted.generation);
     assert!(restarted.lifecycle > running.lifecycle);
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let failed = store.register_managed_attempt(&captured, &request("unsupported"), || Ok(()))?;
     let before = store.meta()?;
     assert!(store
@@ -269,21 +261,13 @@ fn attempted_failure_uses_history() -> TestResult {
             "counter",
             &AnalysisReadControl::default()
         ),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Incomplete,
             ..
         })
     ));
-    let bytes: Vec<u8> = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT failure FROM managed_instances", [], |row| {
-                row.get(0)
-            })
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read rolled back failure",
-            })
-    })?;
-    let saved: super::super::status::Failure = ManagedCodec::decode(&bytes)?;
+    let (_, bytes) = single(&store, b"\0data/Y")?;
+    let saved: Failure = rmp_serde::from_slice(&bytes[1..])?;
     assert_eq!(saved.code, Code::Denied);
     assert_eq!(saved.progress, stopped.progress);
     assert_eq!(saved.revision, stopped.lifecycle);
@@ -295,7 +279,7 @@ fn attempted_failure_uses_history() -> TestResult {
             ..
         }
     ));
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let pending = store.register_managed_attempt(&captured, &request("pending"), || Ok(()))?;
     assert!(store
         .managed_resume([1; 16], "counter", &AnalysisReadControl::default())
@@ -306,7 +290,7 @@ fn attempted_failure_uses_history() -> TestResult {
             "counter",
             &AnalysisReadControl::default()
         ),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Incomplete,
             ..
         })
@@ -333,12 +317,12 @@ fn attempted_failure_uses_history() -> TestResult {
 fn status_read_is_scoped_metadata() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     publish(&fixture, &store, "stored")?;
-    let selected = AnalysisSelectionV1::new([1; 16], vec![crate::analysis::tests::identity()]);
+    let selected = AnalysisSelectionV1::new([1; 16], vec![identity()]);
     assert!(matches!(
         store.managed_status(&selected, "counter", &AnalysisReadControl::default()),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Denied,
             ..
         })
@@ -349,7 +333,7 @@ fn status_read_is_scoped_metadata() -> TestResult {
             "counter",
             &AnalysisReadControl::default()
         ),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Missing,
             ..
         })
@@ -359,16 +343,23 @@ fn status_read_is_scoped_metadata() -> TestResult {
     assert!(store
         .managed_status(&fixture.instance.grant.selection, "counter", &cancelled)
         .is_err());
+    let view = store.view()?;
+    let checkpoints = records(&view, b"\0data/U")?;
+    let packages = records(&view, b"\0data/P")?;
+    let bodies = records(&view, b"\0data/@package-body/")?;
+    assert_eq!(checkpoints.len(), 2);
+    assert_eq!(packages.len(), 1);
+    assert_eq!(bodies.len(), 1);
+    let mut tx = store.write()?;
+    for key in checkpoints
+        .keys()
+        .chain(packages.keys())
+        .chain(bodies.keys())
+    {
+        tx.native().insert(key, b"invalid");
+    }
+    tx.commit([])?;
     let before = store.meta()?;
-    let mut writer = store.writer()?;
-    writer
-        .get_mut()?
-        .execute("UPDATE analysis_results SET body = 'invalid'::BLOB WHERE processor_id = 'managed-package-v1'", [])?;
-    writer.get_mut()?.execute(
-        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
-        [],
-    )?;
-    drop(writer);
     assert!(matches!(
         status(&store, &fixture)?.readiness,
         Readiness::Inactive
@@ -383,7 +374,7 @@ fn failure_recovery_rejects_corruption() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
+        let fixture = fixture(&store)?;
         let running = store.set_managed_running(
             [1; 16],
             "counter",
@@ -396,8 +387,8 @@ fn failure_recovery_rejects_corruption() -> TestResult {
         }
         let stopped = store.suspend_managed(&fixture.current(&store)?, || Ok(()))?;
         assert!(stopped.lifecycle > running.lifecycle);
-        let mut failure = super::super::status::Failure {
-            origin: super::super::status::FailureOrigin::Admission,
+        let mut failure = Failure {
+            origin: FailureOrigin::Admission,
             code: Code::Denied,
             progress: stopped.progress,
             revision: stopped.lifecycle,
@@ -410,32 +401,34 @@ fn failure_recovery_rejects_corruption() -> TestResult {
             7 => failure.progress = 1,
             _ => {}
         }
-        let mut writer = store.writer()?;
+        let (key, _) = single(&store, b"\0data/Y")?;
+        let mut tx = store.write()?;
+        if fault == 3 {
+            failure.revision = tx.revision() + 1;
+        }
         match fault {
             4 => {
-                writer
-                    .get_mut()?
-                    .execute("UPDATE managed_instances SET running = true", [])?;
+                let (key, bytes) = single(&store, b"\0data/J")?;
+                let mut row: Instance = rmp_serde::from_slice(&bytes[1..])?;
+                row.running = true;
+                tx.native().insert(key, framed(&row)?);
             }
             5 => {
-                writer
-                    .get_mut()?
-                    .execute("ALTER TABLE managed_instances DROP COLUMN failure", [])?;
+                let Value::Map(mut fields) = serde_value::to_value(&failure)? else {
+                    return Err("failure fields".into());
+                };
+                assert!(fields.remove(&Value::String("revision".into())).is_some());
+                tx.native().insert(key, framed(&Value::Map(fields))?);
             }
             6 => {
-                writer.get_mut()?.execute(
-                    r#"UPDATE managed_instances SET failure = '{"code":"denied"}'::BLOB"#,
-                    [],
-                )?;
+                tx.native()
+                    .insert(key, [vec![0], br#"{"code":"denied"}"#.to_vec()].concat());
             }
             _ => {
-                writer.get_mut()?.execute(
-                    "UPDATE managed_instances SET failure = ?",
-                    params![ManagedCodec::encode(&failure)?],
-                )?;
+                tx.native().insert(key, framed(&failure)?);
             }
         }
-        drop(writer);
+        tx.commit([])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "failure fault {fault}");
     }
@@ -448,11 +441,11 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
+        let fixture = fixture(&store)?;
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
         })?;
-        let captured = fixture.capture(&store, false)?;
+        let captured = fixture.capture(&store)?;
         let attempt =
             store.register_managed_attempt(&captured, &request("known-failure"), || Ok(()))?;
         let code = if fault == 6 {
@@ -461,8 +454,8 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
             Code::Invalid
         };
         let terminal = store.finish_managed(&attempt, ManagedExit::Failed(code), || Ok(()))?;
-        let mut failure = super::super::status::Failure {
-            origin: super::super::status::FailureOrigin::Attempt,
+        let mut failure = Failure {
+            origin: FailureOrigin::Attempt,
             code,
             progress: 0,
             revision: terminal.revision,
@@ -474,17 +467,21 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
             failure.revision += 1;
         }
         if fault == 4 {
-            failure.origin = super::super::status::FailureOrigin::Admission;
+            failure.origin = FailureOrigin::Admission;
         }
-        let mut writer = store.writer()?;
+        let (key, _) = single(&store, b"\0data/Y")?;
+        let mut tx = store.write()?;
+        if fault == 2 {
+            failure.revision = tx.revision() + 1;
+        }
         if fault == 0 {
-            writer
-                .get_mut()?
-                .execute("UPDATE managed_instances SET failure = NULL", [])?;
+            tx.native().remove(key);
         } else if matches!(fault, 3 | 6) {
-            writer
-                .get_mut()?
-                .execute("DELETE FROM managed_attempts", [])?;
+            let attempts = records(store.view()?.as_ref(), b"\0data/a")?;
+            assert_eq!(attempts.len(), 1);
+            for key in attempts.keys() {
+                tx.native().remove(key);
+            }
         } else if fault == 5 {
             #[derive(serde::Serialize)]
             struct MissingOrigin {
@@ -497,17 +494,11 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
                 progress: failure.progress,
                 revision: failure.revision,
             };
-            writer.get_mut()?.execute(
-                "UPDATE managed_instances SET failure = ?",
-                params![ManagedCodec::encode(&value)?],
-            )?;
+            tx.native().insert(key, framed(&value)?);
         } else {
-            writer.get_mut()?.execute(
-                "UPDATE managed_instances SET failure = ?",
-                params![ManagedCodec::encode(&failure)?],
-            )?;
+            tx.native().insert(key, framed(&failure)?);
         }
-        drop(writer);
+        tx.commit([])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "failure fact {fault}");
     }
@@ -519,12 +510,12 @@ fn admission_failure_keeps_intent() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
         Ok(())
     })?;
     let prior = publish(&fixture, &store, "before-admission")?;
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let attempt = store.register_managed_attempt(&captured, &request("real-failure"), || Ok(()))?;
     let terminal =
         store.finish_managed(&attempt, ManagedExit::Failed(Code::Unsupported), || Ok(()))?;
@@ -553,16 +544,11 @@ fn admission_failure_keeps_intent() -> TestResult {
     assert!(checked);
     assert_eq!(store.meta()?, before);
     assert!(!activations.has_changed()?);
-    let (attempts, bytes): (u64, Vec<u8>) =
-        store.read_snapshot(|reader| {
-            reader.query_row(
-            "SELECT (SELECT count(*) FROM managed_attempts), failure FROM managed_instances",
-            [], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(crate::AnalysisDatabaseSnafu { operation: "read admission failure proof" })
-        })?;
+    let attempts = records(store.view()?.as_ref(), b"\0data/a")?.len();
+    let (_, bytes) = single(&store, b"\0data/Y")?;
     assert_eq!(attempts, 2);
-    let failure: super::super::status::Failure = ManagedCodec::decode(&bytes)?;
-    assert!(failure.origin == super::super::status::FailureOrigin::Admission);
+    let failure: Failure = rmp_serde::from_slice(&bytes[1..])?;
+    assert!(failure.origin == FailureOrigin::Admission);
     assert_eq!(failure.code, Code::Limit);
     assert_eq!(failure.progress, prior.commit_revision);
     assert_eq!(failure.revision, before.commit_revision);
@@ -591,15 +577,7 @@ fn admission_failure_keeps_intent() -> TestResult {
     assert!(matches!(saved.readiness, Readiness::Ready));
     assert_eq!(saved.instance.progress, next.commit_revision);
     assert_eq!(saved.instance.lifecycle, recorded.lifecycle);
-    let empty: bool = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT failure IS NULL FROM managed_instances", [], |row| {
-                row.get(0)
-            })
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read cleared admission failure",
-            })
-    })?;
+    let empty = records(store.view()?.as_ref(), b"\0data/Y")?.is_empty();
     assert!(empty);
     assert_eq!(
         store
@@ -620,7 +598,7 @@ fn admission_failure_keeps_intent() -> TestResult {
 fn admission_failure_checks_fences() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
+    let fixture = fixture(&store)?;
     let current =
         store.set_managed_running([1; 16], "counter", fixture.instance.lifecycle, true, || {
             Ok(())
@@ -686,13 +664,13 @@ fn admission_failure_checks_fences() -> TestResult {
         .fail_managed(&expected, Code::Invalid, || cancelled.check())
         .is_err());
     assert_eq!(store.meta()?, before);
-    let captured = fixture.capture(&store, false)?;
+    let captured = fixture.capture(&store)?;
     let pending =
         store.register_managed_attempt(&captured, &request("pending-admission"), || Ok(()))?;
     let before = store.meta()?;
     assert!(matches!(
         store.fail_managed(&expected, Code::Invalid, || Ok(())),
-        Err(crate::Error::AnalysisBusy {
+        Err(araphor_data::Error::AnalysisBusy {
             resource: "managed attempt",
             ..
         })
@@ -702,7 +680,7 @@ fn admission_failure_checks_fences() -> TestResult {
     let before = store.meta()?;
     assert!(matches!(
         store.fail_managed(&expected, Code::Invalid, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     let expected = ManagedResume {
@@ -714,7 +692,7 @@ fn admission_failure_checks_fences() -> TestResult {
     let before = store.meta()?;
     assert!(matches!(
         store.fail_managed(&expected, Code::Limit, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     assert_eq!(fixture.current(&store)?.progress, receipt.commit_revision);
@@ -732,7 +710,7 @@ fn admission_failure_checks_fences() -> TestResult {
     let before = store.meta()?;
     assert!(matches!(
         store.fail_managed(&expected, Code::Invalid, || Ok(())),
-        Err(crate::Error::AnalysisConflict { .. })
+        Err(araphor_data::Error::AnalysisConflict { .. })
     ));
     assert_eq!(store.meta()?, before);
     Ok(())
