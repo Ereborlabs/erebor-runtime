@@ -1,4 +1,7 @@
-use std :: { collections :: { BTreeMap , BTreeSet } , sync :: Arc } ;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use araphor_analysis_sdk as sdk;
 use araphor_analysis_types::DomainRelations;
@@ -8,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::ManagedGraphJournal;
-use crate :: analysis :: { managed :: PreparedMemory , native :: { DataView , DataWrite , ManagedCommit , NativeStore } } ;
+use crate::analysis::{
+    managed::PreparedMemory,
+    native::{DataView, DataWrite, ManagedCommit, NativeStore},
+};
 use crate::{ManagedReceipt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result};
 
 mod expiry;
@@ -174,7 +180,7 @@ struct Value {
 struct Values<'a> {
     store: &'a NativeStore,
     reserve: &'a dyn Fn(usize) -> Result<Option<araphor_graph::native::Lease>>,
-    views: BTreeMap<(u64, u64), View>,
+    views: BTreeMap<(u64, u64, u64, u64), View>,
     values: BTreeMap<u64, Value>,
     leases: Vec<araphor_graph::native::Lease>,
 }
@@ -201,12 +207,18 @@ impl Values<'_> {
             return Ok(());
         }
         self.charge(12 * size_of::<Value>())?;
-        let cut = (property.graph, property.revision);
+        let cut = (
+            property.graph,
+            property.revision,
+            property.writer,
+            property.relation,
+        );
         if !self.views.contains_key(&cut) {
             let snapshot = self.store.read_at(property.revision)?;
-            let view = Graph::new(property.graph)?.view(
+            let view = Graph::new(property.graph)?.scoped_view(
                 snapshot.snapshot().clone(),
-                BTreeMap::new(),
+                property.writer,
+                property.relation,
                 &|writer, bytes, total| self.graph_reserve(writer, bytes, total),
             )?;
             self.views.insert(cut, view);

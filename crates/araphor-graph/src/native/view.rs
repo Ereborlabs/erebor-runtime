@@ -92,27 +92,10 @@ impl View {
                 operation: "read Graph relations",
             })?;
             let relation = Key::number(&value)?;
-            let record = snapshot
-                .get(Key::record(b'f', &[relation]))
-                .context(NativeSnafu {
-                    operation: "read Graph relation",
-                })?
-                .ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "native Graph relation reference",
-                    }
-                    .build()
-                })?;
-            memory.charge(0, record.len().saturating_mul(4) + 256)?;
-            let stored: StoredRelation = Key::decode(&record)?;
-            if stored.graph != graph.id {
-                return InvalidSnafu {
-                    field: "native Graph relation scope",
-                }
-                .fail();
-            }
-            let shape = stored.shape()?;
-            relations.insert(relation, (stored, shape));
+            relations.insert(
+                relation,
+                Self::load_relation(graph, &snapshot, relation, &mut memory)?,
+            );
         }
         let mut snapshots = BTreeMap::new();
         let mut heads = BTreeMap::new();
@@ -121,29 +104,8 @@ impl View {
                 operation: "read Graph writers",
             })?;
             let writer = Key::number(&value)?;
-            memory.check(writer)?;
-            memory.charge(writer, 256)?;
             let view = selected.remove(&writer).unwrap_or_else(|| snapshot.clone());
-            if view
-                .get(Key::record(b'w', &[writer]))
-                .context(NativeSnafu {
-                    operation: "check Graph view writer",
-                })?
-                .as_deref()
-                != Some(graph.id.to_be_bytes().as_slice())
-            {
-                return InvalidSnafu {
-                    field: "native Graph view writer",
-                }
-                .fail();
-            }
-            let head = view
-                .get(Key::record(b'h', &[writer]))
-                .context(NativeSnafu {
-                    operation: "read Graph head",
-                })?
-                .map(|value| Key::decode(&value))
-                .transpose()?;
+            let head = Self::load_writer(graph, &view, writer, &mut memory)?;
             heads.insert(writer, head);
             snapshots.insert(writer, view);
         }
@@ -165,6 +127,112 @@ impl View {
 
     pub fn writers(&self) -> impl Iterator<Item = u64> + '_ {
         self.snapshots.keys().copied()
+    }
+
+    pub(super) fn new_scoped(
+        graph: Graph,
+        snapshot: BranchSnapshot,
+        writer: u64,
+        relation: u64,
+        reserve: &Reserve<'_>,
+    ) -> Result<Self> {
+        let mut memory = Scratch::new(reserve);
+        memory.check(0)?;
+        if snapshot
+            .get(Key::record(b'g', &[graph.id, relation]))
+            .context(NativeSnafu {
+                operation: "read Graph relation reference",
+            })?
+            .as_deref()
+            != Some(relation.to_be_bytes().as_slice())
+        {
+            return InvalidSnafu {
+                field: "native Graph relation reference",
+            }
+            .fail();
+        }
+        let declaration = Self::load_relation(graph, &snapshot, relation, &mut memory)?;
+        if snapshot
+            .get(Key::record(b'v', &[graph.id, writer]))
+            .context(NativeSnafu {
+                operation: "read Graph writer reference",
+            })?
+            .as_deref()
+            != Some(writer.to_be_bytes().as_slice())
+        {
+            return InvalidSnafu {
+                field: "native Graph view writer",
+            }
+            .fail();
+        }
+        let head = Self::load_writer(graph, &snapshot, writer, &mut memory)?;
+        Ok(Self {
+            graph,
+            snapshots: BTreeMap::from([(writer, snapshot)]),
+            heads: BTreeMap::from([(writer, head)]),
+            relations: BTreeMap::from([(relation, declaration)]),
+            chunks: Mutex::new(BTreeMap::new()),
+            _leases: memory.into_leases(),
+        })
+    }
+
+    fn load_relation(
+        graph: Graph,
+        snapshot: &BranchSnapshot,
+        relation: u64,
+        memory: &mut Scratch<'_>,
+    ) -> Result<(StoredRelation, Relation)> {
+        let record = snapshot
+            .get(Key::record(b'f', &[relation]))
+            .context(NativeSnafu {
+                operation: "read Graph relation",
+            })?
+            .ok_or_else(|| {
+                InvalidSnafu {
+                    field: "native Graph relation reference",
+                }
+                .build()
+            })?;
+        memory.charge(0, record.len().saturating_mul(4) + 256)?;
+        let stored: StoredRelation = Key::decode(&record)?;
+        if stored.graph != graph.id {
+            return InvalidSnafu {
+                field: "native Graph relation scope",
+            }
+            .fail();
+        }
+        let shape = stored.shape()?;
+        Ok((stored, shape))
+    }
+
+    fn load_writer(
+        graph: Graph,
+        snapshot: &BranchSnapshot,
+        writer: u64,
+        memory: &mut Scratch<'_>,
+    ) -> Result<Option<Head>> {
+        memory.check(writer)?;
+        memory.charge(writer, 256)?;
+        if snapshot
+            .get(Key::record(b'w', &[writer]))
+            .context(NativeSnafu {
+                operation: "check Graph view writer",
+            })?
+            .as_deref()
+            != Some(graph.id.to_be_bytes().as_slice())
+        {
+            return InvalidSnafu {
+                field: "native Graph view writer",
+            }
+            .fail();
+        }
+        snapshot
+            .get(Key::record(b'h', &[writer]))
+            .context(NativeSnafu {
+                operation: "read Graph head",
+            })?
+            .map(|value| Key::decode(&value))
+            .transpose()
     }
 
     pub fn head(&self, writer: u64) -> Result<Option<u64>> {

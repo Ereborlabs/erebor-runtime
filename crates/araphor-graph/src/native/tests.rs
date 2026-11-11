@@ -282,6 +282,22 @@ fn point_members_preserve_selected_history_and_leases() -> TestResult {
         let point = current
             .member(17, relation, b"owner", key, &|_, _, _| Ok(None))?
             .ok_or("point")?;
+        let scoped =
+            fixture
+                .graph
+                .scoped_view(fixture.branch.snapshot()?, 17, relation, &|_, _, _| {
+                    Ok(None)
+                })?;
+        assert_eq!(scoped.writers().collect::<Vec<_>>(), [17]);
+        assert_eq!(scoped.head(17)?, current.head(17)?);
+        let selected = scoped
+            .member(17, relation, b"owner", key, &|_, _, _| Ok(None))?
+            .ok_or("scoped point")?;
+        assert_eq!(selected.properties(), point.properties());
+        assert_eq!(selected.endpoints, point.endpoints);
+        assert_eq!(selected.revision, point.revision);
+        assert_eq!(selected.property, point.property);
+        assert_eq!(selected.row, point.row);
         let mut visited = None;
         current.visit(
             relation,
@@ -373,6 +389,78 @@ fn point_members_preserve_selected_history_and_leases() -> TestResult {
     );
     drop(point);
     assert_eq!(held.load(Ordering::Acquire), 0);
+    let scoped =
+        fixture
+            .graph
+            .scoped_view(fixture.branch.read_at(first.revision)?, 17, 13, &reserve)?;
+    let point = scoped
+        .member(17, 13, b"owner", b"edge", &reserve)?
+        .ok_or("scoped historical point")?;
+    assert_eq!(point.revision, 100);
+    drop(scoped);
+    assert!(held.load(Ordering::Acquire) > 0);
+    assert_eq!(
+        point
+            .properties()
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("scoped properties")?
+            .value(point.row),
+        42
+    );
+    drop(point);
+    assert_eq!(held.load(Ordering::Acquire), 0);
+    Ok(())
+}
+
+#[test]
+fn scoped_views_check_metadata() -> TestResult {
+    for (tag, ids, value, unrelated) in [
+        (b'f', vec![12], vec![255], true),
+        (b'w', vec![19], 72_u64.to_be_bytes().to_vec(), true),
+        (b'g', vec![71, 11], 12_u64.to_be_bytes().to_vec(), false),
+        (b'f', vec![11], vec![255], false),
+        (b'v', vec![71, 17], 19_u64.to_be_bytes().to_vec(), false),
+        (b'w', vec![17], 72_u64.to_be_bytes().to_vec(), false),
+        (b'h', vec![17], vec![255], false),
+    ] {
+        let fixture = Fixture::new()?;
+        let mut tx = fixture.branch.write_tx()?;
+        tx.insert(Key::record(tag, &ids), value);
+        tx.commit()?;
+        let scoped = fixture
+            .graph
+            .scoped_view(fixture.branch.snapshot()?, 17, 11, &|_, _, _| Ok(None));
+        if unrelated {
+            let view = scoped?;
+            assert_eq!(view.writers().collect::<Vec<_>>(), [17]);
+            assert!(view
+                .member(17, 11, b"owner", b"missing", &|_, _, _| Ok(None))?
+                .is_none());
+            assert!(fixture.view().is_err());
+        } else {
+            assert!(scoped.is_err(), "accepted {tag:?} {ids:?}");
+        }
+    }
+    let fixture = Fixture::new()?;
+    for (writer, relation) in [(0, 11), (999, 11), (17, 0), (17, 999)] {
+        assert!(fixture
+            .graph
+            .scoped_view(fixture.branch.snapshot()?, writer, relation, &|_, _, _| Ok(
+                None
+            ),)
+            .is_err());
+    }
+    assert!(fixture
+        .graph
+        .scoped_view(fixture.branch.snapshot()?, 17, 11, &|_, _, _| {
+            InvalidSnafu {
+                field: "scoped reservation",
+            }
+            .fail()
+        },)
+        .is_err());
     Ok(())
 }
 

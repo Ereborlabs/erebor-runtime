@@ -151,6 +151,16 @@ impl Graph {
     ) -> Result<View> {
         View::new(*self, snapshot, selected, reserve)
     }
+
+    pub fn scoped_view(
+        &self,
+        snapshot: BranchSnapshot,
+        writer: u64,
+        relation: u64,
+        reserve: &Reserve<'_>,
+    ) -> Result<View> {
+        View::new_scoped(*self, snapshot, writer, relation, reserve)
+    }
 }
 
 #[cfg(test)]

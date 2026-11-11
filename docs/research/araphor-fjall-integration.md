@@ -73,6 +73,39 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Scoped native Graph reads are **Done** for retained property lookup.
+  `Graph::scoped_view` reads one relation and one writer through five metadata
+  point reads. Data keeps the existing layer, member, schema, reservation, and
+  canonical-candidate checks. The old whole-Graph setup is removed from
+  `Values::load`. All 14 native Graph cases pass in 0.72 seconds. All 24 native
+  Data domain cases pass in 2.57 seconds. Both opposite-order incident pairs
+  pass. Durable creation measures 49.130–91.787 ms. Public receipt measures
+  57.319–107.847 ms. Whole-test time is 2.26–2.32 seconds. The preceding native
+  pairs measure 46.825–86.908 ms for creation; these timings establish no
+  end-to-end gain. The matched DuckDB control measures 333.715–632.588 ms for
+  creation, 400.419–737.869 ms for public receipt, and 5.31–5.32 seconds for
+  the whole test. The 100-fold target remains **Not done**. Read
+  `scoped-graph-comparison.json`, `scoped-graph-build.json`,
+  `scoped-graph-native-tests.log`, and `scoped-data-tests.log` under
+  `output/araphor-fjall-migration-20261110`. The Graph test command enables
+  `native-store`; the earlier default-feature command selected zero tests and
+  supplies no qualification.
+
+- A package frontier experiment is **Not applied**. It compares normalized
+  coverage projections and adds shared claim dependency keys. Five focused
+  cases and all six matched incident runs pass, but the third notification
+  regresses in both pairs. The native control measures 86.701–87.694 ms from
+  collector receipt to durable creation. The experiment measures
+  109.166–111.005 ms. Public receipt measures 102.404–103.573 ms before and
+  125.486–125.510 ms after. The experiment also misses canonical event arrival
+  when the audit is already indexed and the coverage projection stays equal.
+  Coverage equality does not establish unchanged raw input. The source and
+  tests are restored to the preceding native implementation. Read
+  `coverage-frontier-comparison.json`, `coverage-claims-build.json`, and
+  `coverage-frontier-unapplied` under
+  `output/araphor-fjall-migration-20261110`. The patch remains an unapplied
+  artifact. No performance gain is claimed.
+
 - Aggregate component timers now separate wire checks, encoding, invocation,
   decoding, instantiation, guest calls, and cleanup. Graph callbacks also report
   their native service intervals. The unchanged diagnostic incident passes in

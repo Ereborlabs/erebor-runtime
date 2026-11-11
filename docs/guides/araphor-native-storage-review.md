@@ -135,6 +135,32 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Scoped Graph reads
+
+[Values::load](../../crates/araphor-data/src/analysis/native/managed/graph/projection.rs) receives an exact retained Graph property reference.
+  -> [NativeStore::read_at](../../crates/araphor-data/src/analysis/native/mod.rs) selects its historical Data cut.
+  -> [Graph::scoped_view](../../crates/araphor-graph/src/native/mod.rs) point-reads the selected relation and writer metadata.
+  -> [View::member](../../crates/araphor-graph/src/native/view.rs) reads the existing dictionaries, membership, and typed property chunk.
+  -> [Values::load](../../crates/araphor-data/src/analysis/native/managed/graph/projection.rs) checks the saved layer and complete member identity before it compares values.
+
+The reader uses the same private metadata loaders as the full Graph view. It
+does not enumerate other relations or writers. Its existing local cache uses
+graph, revision, writer, and relation as the key. Full Graph enumeration remains
+available to callers that need the complete view. Canonical selection still
+compares every distinct retained candidate, including a value sequence A, B, A.
+No durable format, index, or authority rule changes.
+
+The [Graph member cases](../../crates/araphor-graph/src/native/tests.rs) compare
+full and scoped node and edge reads. They check retained history after compaction,
+memory leases after the view closes, selected metadata errors, and isolation
+from unrelated metadata. All 14 cases pass with `native-store` enabled in
+0.72 seconds. The native Data domain suite passes all 24 cases in 2.57 seconds.
+Both matched incident pairs pass. Durable creation measures 49.130–91.787 ms;
+public receipt measures 57.319–107.847 ms. Whole-test time is 2.26–2.32 seconds.
+The pairs establish no end-to-end gain over the preceding native source.
+Result: **Done for the scoped reader**. The complete replacement and 100-fold
+performance proof remain **Not done**.
+
 ## Package-row replacement
 
 The current replacement uses native format 10. It rejects format 9 before Data reads
