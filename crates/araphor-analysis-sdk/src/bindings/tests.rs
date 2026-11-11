@@ -79,6 +79,7 @@ fn wit_declaration_parses() -> TestResult {
         .get("analysis-package")
         .ok_or("analysis world is absent")?;
     let mut imports = Vec::new();
+    let mut graph = false;
     for item in resolve.worlds[*world].imports.values() {
         let wit_parser::WorldItem::Interface { id, .. } = item else {
             return Err("unexpected world import".into());
@@ -87,10 +88,30 @@ fn wit_declaration_parses() -> TestResult {
         match interface.name.as_deref() {
             Some("types") => assert!(interface.functions.is_empty()),
             Some("host") => imports.extend(interface.functions.keys().map(String::as_str)),
+            Some("graph") => {
+                graph = true;
+                assert_eq!(
+                    interface
+                        .functions
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    ["[method]transaction.read", "[method]transaction.stage"]
+                );
+                let transaction = interface
+                    .types
+                    .get("transaction")
+                    .ok_or("Graph transaction resource is absent")?;
+                assert!(matches!(
+                    resolve.types[*transaction].kind,
+                    wit_parser::TypeDefKind::Resource
+                ));
+            }
             _ => return Err("unexpected interface import".into()),
         }
     }
     assert_eq!(imports, ["cancelled"]);
+    assert!(graph);
     let exports: Vec<_> = resolve.worlds[*world].exports.values().collect();
     let [wit_parser::WorldItem::Interface { id, .. }] = exports.as_slice() else {
         return Err("unexpected world export".into());
@@ -134,6 +155,12 @@ fn native_declaration_compiles() -> TestResult {
         "_Static_assert(ARAPHOR_ANALYSIS_CONTRACT_VERSION == {}, \"version mismatch\");",
         crate::CONTRACT_VERSION
     )?;
+    #[cfg(feature = "native")]
+    writeln!(
+        stdin,
+        "_Static_assert(ARAPHOR_ANALYSIS_ABI_VERSION == {}, \"ABI mismatch\");",
+        crate::native::ABI_VERSION
+    )?;
     for (name, code) in [
         ("INVALID", ErrorCode::Invalid as u32),
         ("INCOMPATIBLE", ErrorCode::Incompatible as u32),
@@ -152,7 +179,7 @@ fn native_declaration_compiles() -> TestResult {
     }
     stdin.write_all(
         br#"
-static uint32_t evaluate(const araphor_analysis_request_v1 *request,
+static uint32_t evaluate(const araphor_analysis_request_v2 *request,
                          araphor_analysis_response_v1 *response) {
     response->error.code = request->context.has_seed > 1
         ? ARAPHOR_ANALYSIS_INVALID : ARAPHOR_ANALYSIS_OK;
@@ -162,11 +189,11 @@ static void release(araphor_analysis_response_v1 *response) {
     response->private_data = 0;
 }
 int main(void) {
-    araphor_analysis_api_v1 api = {
-        ARAPHOR_ANALYSIS_CONTRACT_VERSION, sizeof(araphor_analysis_api_v1),
+    araphor_analysis_api_v2 api = {
+        ARAPHOR_ANALYSIS_ABI_VERSION, sizeof(araphor_analysis_api_v2),
         evaluate, release
     };
-    araphor_analysis_request_v1 request = {0};
+    araphor_analysis_request_v2 request = {0};
     request.context.has_seed = 2;
     araphor_analysis_response_v1 response = {0};
     uint32_t code = api.evaluate(&request, &response);

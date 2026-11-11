@@ -68,7 +68,26 @@ fn model_wire_keeps_contract() -> TestResult {
         packet.decode(&package, &evaluation)?.datasets[1].batches,
         data.batches
     );
+    let checked = package.check_evaluation(&evaluation)?;
+    for limit in [None, Some(usize::MAX)] {
+        assert_eq!(
+            packet.decode_checked(&checked, limit)?.datasets[1].batches,
+            data.batches
+        );
+    }
+    assert!(matches!(
+        packet.decode_checked(&checked, Some(0)),
+        Err(crate::Error::Contract {
+            code: ErrorCode::Limit,
+            ..
+        })
+    ));
     packet.datasets[1].name = "unknown".into();
+    assert!(
+        matches!(packet.decode_checked(&checked, None), Err(crate::Error::Contract {
+        code: ErrorCode::Invalid, field, ..
+    }) if field == "dataset name")
+    );
     assert!(
         matches!(packet.decode_model(&model), Err(crate::Error::Contract {
         code: ErrorCode::Invalid, field, ..

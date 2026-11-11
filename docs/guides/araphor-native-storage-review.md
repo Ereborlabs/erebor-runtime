@@ -95,6 +95,35 @@ snapshots require real package state. Traversal uses native node and adjacency
 indexes. One depth map spans the requested retained versions. Identity reads do
 not load property chunks. Selected properties retain the normal validation path.
 
+## Package evaluation
+
+[Runtime::evaluate_reserved](../../crates/araphor-package-runtime/src/lib.rs) sends the owned evaluation and host service to its existing blocking worker.
+  -> [Package::check_evaluation](../../crates/araphor-analysis-sdk/src/validation.rs) checks the immutable descriptor and current input once at the host boundary.
+  -> [HostAccess::bind](../../crates/araphor-package-runtime/src/host.rs) obtains Graph capability from that checked model.
+  -> [WasmExecution::evaluate_prepared](../../crates/araphor-package-runtime/src/wasm.rs) reuses the checked value for input encoding and output decoding.
+  -> [Output::decode_checked](../../crates/araphor-analysis-sdk/src/wire/output.rs) checks wire framing, output schemas, evidence, reasons, checkpoints, and the configured copy bound.
+
+The guest retains its own input checks across the Wasm boundary. Graph callbacks
+retain schema checks and current transaction authority. Native calls bind the
+same narrowed host after their checked input is constructed. A caller without
+declared Graph capability receives the same typed denial before any callback.
+Standalone output decoding keeps its existing error order. No ABI or durable
+format changes.
+
+The existing package event separates Graph binding, evaluation, output retention,
+Graph freezing, and final row counts. Adjacent timers use one completion time.
+Their sum equals the measured interval before microsecond truncation. Initial
+qualification measures evaluation medians of 7.043 and 6.569 ms for the two Causal
+calls. Binding is about 1.9 ms per call. Freezing is about 0.2 ms per call.
+These values identify the measured owner; they do not establish a latency gain.
+
+Ninety SDK cases and 31 Wasm runtime cases pass. The current ABI fixture uses
+native request and API v2 names. C and Rust sizes, alignments, and existing
+offsets remain checked. The additional host-pointer offset check passes.
+The new runtime case checks exact capability denial, zero service callbacks,
+an untouched invocation gate, and a successful ordinary retry. Read the current
+worklist for the paired incident measurements and remaining work.
+
 ## Package-row replacement
 
 The current replacement uses native format 10. It rejects format 9 before Data reads

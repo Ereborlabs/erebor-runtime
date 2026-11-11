@@ -250,21 +250,6 @@ impl Runtime {
                 .into());
         }
         let artifact = bundle.bundle().artifact(&package)?;
-        let host = match host {
-            Some(service) => {
-                let spec = artifact
-                    .descriptor
-                    .check_evaluation(&evaluation)
-                    .context(AnalysisContractSnafu)?
-                    .model()
-                    .graph
-                    .clone()
-                    .ok_or_else(|| PackageErrorCodeV1::Denied.error("Graph capability"))?;
-                Some(Arc::new(host::HostAccess { service, spec })
-                    as Arc<dyn sdk::InvocationService + Send + Sync>)
-            }
-            None => None,
-        };
         let wasm = match artifact.implementation(&evaluation.export)? {
             PackageImplementationV1::Wasm { .. } => Some(self.wasm()?),
             PackageImplementationV1::Native { .. } => {
@@ -336,6 +321,7 @@ impl Runtime {
                         .descriptor
                         .check_evaluation(&evaluation)
                         .context(AnalysisContractSnafu)?;
+                    let host = host::HostAccess::bind(&checked, host)?;
                     if let Some(host) = &host {
                         checked
                             .bind_host(host.as_ref())

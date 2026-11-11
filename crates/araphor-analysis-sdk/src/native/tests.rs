@@ -161,7 +161,7 @@ fn release_success_failure_and_repeat() -> TestResult {
     let evaluate = api.evaluate.ok_or("evaluate")?;
     let release = api.release.ok_or("release")?;
     for valid in [true, false] {
-        let request = invocation.request();
+        let request = invocation.request(std::ptr::null());
         let mut response = Response::default();
         let request = if valid { &request } else { std::ptr::null() };
         assert_eq!(
@@ -199,7 +199,7 @@ fn invalid_abi_values_are_errors() -> TestResult {
         .ok_or("invalid table accepted")?;
     assert_eq!(error.code(), ErrorCode::Incompatible);
     let mut api = Api::for_guest::<Detector>();
-    api.contract_version = 2;
+    api.contract_version = ABI_VERSION + 1;
     let error = unsafe { Invocation::new(&checked, || false)?.call(&api, None) }
         .err()
         .ok_or("mismatched contract accepted")?;
@@ -209,7 +209,7 @@ fn invalid_abi_values_are_errors() -> TestResult {
     let release = api.release.ok_or("release")?;
     for invalid in 0..6 {
         let mut invocation = Invocation::new(&checked, || false)?;
-        let mut request = invocation.request();
+        let mut request = invocation.request(std::ptr::null());
         match invalid {
             0 => request.context.has_seed = 2,
             1 => request.inputs = std::ptr::null(),
@@ -376,16 +376,17 @@ fn rust_layout_matches_header() -> TestResult {
     offset!(Context, "araphor_analysis_context_v1", time_utc_ns);
     offset!(Context, "araphor_analysis_context_v1", seed);
     offset!(Context, "araphor_analysis_context_v1", has_seed);
-    offset!(Request, "araphor_analysis_request_v1", previous_outputs);
+    offset!(Request, "araphor_analysis_request_v2", previous_outputs);
     offset!(
         Request,
-        "araphor_analysis_request_v1",
+        "araphor_analysis_request_v2",
         previous_output_count
     );
-    offset!(Request, "araphor_analysis_request_v1", context);
-    offset!(Request, "araphor_analysis_request_v1", checkpoint);
-    offset!(Request, "araphor_analysis_request_v1", cancelled);
-    offset!(Request, "araphor_analysis_request_v1", cancel_context);
+    offset!(Request, "araphor_analysis_request_v2", context);
+    offset!(Request, "araphor_analysis_request_v2", checkpoint);
+    offset!(Request, "araphor_analysis_request_v2", cancelled);
+    offset!(Request, "araphor_analysis_request_v2", cancel_context);
+    offset!(Request, "araphor_analysis_request_v2", host);
     layout!(Context, "araphor_analysis_context_v1");
     layout!(Window, "araphor_analysis_window_v1");
     layout!(Revision, "araphor_analysis_revision_v1");
@@ -397,9 +398,9 @@ fn rust_layout_matches_header() -> TestResult {
     layout!(Evidence, "araphor_analysis_evidence_link_v1");
     layout!(Reason, "araphor_analysis_reason_value_v1");
     layout!(NativeError, "araphor_analysis_error_v1");
-    layout!(Request, "araphor_analysis_request_v1");
+    layout!(Request, "araphor_analysis_request_v2");
     layout!(Response, "araphor_analysis_response_v1");
-    layout!(Api, "araphor_analysis_api_v1");
+    layout!(Api, "araphor_analysis_api_v2");
     drop(input);
     let output = compiler.wait_with_output()?;
     assert!(
@@ -528,7 +529,7 @@ fn native_prior_outputs_survive() -> TestResult {
     let release = api.release.ok_or("release")?;
     for invalid in 0..3 {
         let mut invocation = Invocation::new(&checked, || false)?;
-        let mut request = invocation.request();
+        let mut request = invocation.request(std::ptr::null());
         match invalid {
             0 => request.previous_outputs = std::ptr::null(),
             1 => request.previous_output_count = u64::MAX,

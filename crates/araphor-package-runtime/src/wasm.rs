@@ -191,7 +191,7 @@ impl WasmExecution {
         config
             .consume_fuel(fuel)
             .epoch_interruption(true)
-            .cranelift_opt_level(OptLevel::None)
+            .cranelift_opt_level(OptLevel::Speed)
             .cranelift_nan_canonicalization(true)
             .memory_reservation(256 * 1024 * 1024)
             .memory_reservation_for_growth(0)
@@ -245,7 +245,9 @@ impl WasmExecution {
     ) -> Result<sdk::Output> {
         control.check()?;
         let prepared = self.prepare(bytes, control)?;
-        self.evaluate_prepared(descriptor, evaluation, &prepared, control, copy_bytes, None, None)
+        self.evaluate_prepared(
+            descriptor, evaluation, &prepared, control, copy_bytes, None, None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -260,27 +262,18 @@ impl WasmExecution {
         host: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
     ) -> Result<sdk::Output> {
         control.check()?;
-        descriptor
-            .validate_evaluation(evaluation)
-            .context(crate::AnalysisContractSnafu)?;
-        if host.is_some() && descriptor.check_evaluation(evaluation)
-            .context(crate::AnalysisContractSnafu)?.model().graph.is_none()
-        {
-            return Err(Code::Denied.error("Graph capability").into());
-        }
-        let input = descriptor
+        let checked = descriptor
             .check_evaluation(evaluation)
-            .and_then(|checked| checked.encode())
             .context(crate::AnalysisContractSnafu)?;
+        let host = crate::host::HostAccess::bind(&checked, host)?;
+        let input = checked.encode().context(crate::AnalysisContractSnafu)?;
         control.check()?;
         let output =
             self.invoke_reserved(prepared, input.into(), control, copy_bytes, admission, host)?;
         let output = sdk::wire::Output::from(output);
-        let decoded = match copy_bytes {
-            Some(bytes) => output.decode_bounded(descriptor, evaluation, bytes),
-            None => output.decode(descriptor, evaluation),
-        }
-        .context(crate::AnalysisContractSnafu)?;
+        let decoded = output
+            .decode_checked(&checked, copy_bytes)
+            .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         Ok(decoded)
     }

@@ -8,6 +8,23 @@ pub(crate) struct HostAccess {
     pub(crate) spec: sdk::GraphSpec,
 }
 
+impl HostAccess {
+    pub(crate) fn bind(
+        checked: &sdk::CheckedEvaluation<'_>,
+        service: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
+    ) -> crate::Result<Option<Arc<dyn sdk::InvocationService + Send + Sync>>> {
+        let Some(service) = service else {
+            return Ok(None);
+        };
+        let spec = checked
+            .model()
+            .graph
+            .clone()
+            .ok_or_else(|| crate::PackageErrorCodeV1::Denied.error("Graph capability"))?;
+        Ok(Some(Arc::new(Self { service, spec })))
+    }
+}
+
 impl sdk::InvocationHost for HostAccess {
     fn read(&self, name: &str, arguments: &sdk::Dataset) -> sdk::Result<sdk::Input> {
         let schema = self.spec.read_schema(name, &arguments.name)?;

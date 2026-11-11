@@ -82,10 +82,18 @@ impl Output {
         copy_bytes: usize,
     ) -> Result<crate::Output> {
         let checked = package.check_evaluation(evaluation)?;
-        let output =
-            self.decode_parts(checked.model(), Some(copy_bytes), ErrorCode::Incompatible)?;
+        self.decode_checked(&checked, Some(copy_bytes))
+    }
+
+    /// Decode output for an evaluation that passed the SDK checks.
+    pub fn decode_checked(
+        &self,
+        checked: &crate::CheckedEvaluation<'_>,
+        copy_bytes: Option<usize>,
+    ) -> Result<crate::Output> {
+        let output = self.decode_parts(checked.model(), copy_bytes, ErrorCode::Incompatible)?;
         checked.validate_output(&output)?;
-        if output.allocated_bytes() > copy_bytes {
+        if copy_bytes.is_some_and(|bytes| output.allocated_bytes() > bytes) {
             return Err(Error::contract(ErrorCode::Limit, "output allocation bytes"));
         }
         Ok(output)

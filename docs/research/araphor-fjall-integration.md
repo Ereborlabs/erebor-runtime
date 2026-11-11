@@ -73,6 +73,28 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Host evaluation checks are consolidated at each execution boundary. The
+  checked host value supplies encoding, narrowed Graph capability, and bounded
+  output decoding. Guest, IPC, command, output, and current-authority checks
+  remain. The compiler uses Wasmtime's supported `Speed` mode. All 90 SDK
+  cases and 31 Wasm runtime cases pass. Current ABI fixtures preserve request
+  and table layout checks. The added host-pointer offset check also passes.
+  The unchanged release incident passes in two opposite-order pairs. Durable
+  creation measures 48.825–85.716 ms; public receipt measures 56.820–101.549 ms.
+  Whole-test time is 2.12–2.16 seconds. The paired DuckDB control measures
+  330.549–591.894 ms for durable creation and 392.560–693.307 ms for public
+  receipt. Its whole-test time is 5.08–5.14 seconds. Each run preserves
+  18 collector inputs, 16,384 bulk rows, and three durable creations.
+  These pairs establish no clear latency gain over the preceding native
+  release. The 100-fold target remains **Not done**. Read
+  `output/araphor-fjall-migration-20261110/checked-evaluation-comparison.json`,
+  `checked-evaluation-phases.json`, `checked-evaluation-build.json`,
+  `checked-evaluation-sdk-final.log`, `checked-evaluation-runtime.log`, and
+  `checked-evaluation-host-layout.log` in the same directory. Initial package
+  phase sums pass their exact interval check. The largest phase is evaluation,
+  with medians of 7.043 and 6.569 ms before check consolidation. Further
+  attribution is required before the next replacement.
+
 - A native shared-library preparation experiment is **Not applied**. Matched
   release pairs show no measured incident gain. The unchanged production source
   measures 49.939–91.869 ms from collector receipt to durable creation. The

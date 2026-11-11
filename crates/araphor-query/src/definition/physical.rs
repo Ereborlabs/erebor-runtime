@@ -1104,6 +1104,7 @@ impl PackageExec {
         )?;
         let started = Instant::now();
         owner.bind_graph(self, &source, &context).await?;
+        let bound = Instant::now();
         let (_admission, output, output_memory) = if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let output = self
@@ -1123,15 +1124,18 @@ impl PackageExec {
             evaluation = effective;
             (admission, output, memory)
         };
+        let evaluated = Instant::now();
         owner.control.check().map_err(external)?;
         for batch in output.batches() {
             owner.memory.retain_output(batch, &output_memory)?;
         }
         output_memory.try_resize(output.metadata_bytes())?;
+        let retained = Instant::now();
         let graph = match owner.bind_graph(self, &source, &context).await? {
             Some(host) => Some(host.freeze(&source, &context).await?),
             None => None,
         };
+        let frozen = Instant::now();
 
         let rows = |name: &str| {
             evaluation
@@ -1152,6 +1156,15 @@ impl PackageExec {
                     counts.2.saturating_add(rows(&port.after)),
                 )
             });
+        let input_rows = evaluation
+            .inputs
+            .iter()
+            .fold(0u64, |rows, input| rows.saturating_add(input.data.rows()));
+        let output_rows = output
+            .datasets
+            .iter()
+            .fold(0u64, |rows, data| rows.saturating_add(data.rows()));
+        let completed = Instant::now();
         erebor_telemetry::debug!(
             stage = "package",
             instance_id = %snapshot.managed().map_or("", |managed| managed.instance().spec.id.as_str()),
@@ -1161,9 +1174,14 @@ impl PackageExec {
             affected_rows = changed.0,
             before_rows = changed.1,
             after_rows = changed.2,
-            rows = evaluation.inputs.iter().fold(0u64, |rows, input| rows.saturating_add(input.data.rows())),
-            output_rows = output.datasets.iter().fold(0u64, |rows, data| rows.saturating_add(data.rows())),
-            elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            rows = input_rows,
+            output_rows,
+            bind_s = bound.duration_since(started).as_secs_f64(),
+            evaluation_s = evaluated.duration_since(bound).as_secs_f64(),
+            output_s = retained.duration_since(evaluated).as_secs_f64(),
+            graph_freeze_s = frozen.duration_since(retained).as_secs_f64(),
+            finish_s = completed.duration_since(frozen).as_secs_f64(),
+            elapsed_us = u64::try_from(completed.duration_since(started).as_micros()).unwrap_or(u64::MAX),
             "Package execution completed"
         );
         Ok(CallResult {
