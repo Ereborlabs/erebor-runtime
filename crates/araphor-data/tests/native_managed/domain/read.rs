@@ -2,6 +2,9 @@ use super::*;
 use araphor_data::{AnalysisPositionPageV1, Selection};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
+#[path = "read/history.rs"]
+mod history;
+
 #[test]
 fn change_reads_check_exact_dependency_indexes() -> TestResult {
     for corruption in ["missing", "revision", "extra"] {

@@ -18,9 +18,9 @@ fn cursors(page: &AnalysisPositionPageV1) -> Result<Vec<u64>, Box<dyn std::error
 
 #[test]
 fn append_pages_keep_the_original_cut_after_later_intake() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let source = identity("append");
-    pair.append(&source, 1, 6, 10)?;
+    fixture.append(&source, 1, 6, 10)?;
     let requests = requests(&[("events", &["source_cursor", "task_cookie"])])?;
     let selection = AnalysisSelectionV1::new([1; 16], vec![source.clone()]);
     let control = AnalysisReadControl::default();
@@ -29,11 +29,10 @@ fn append_pages_keep_the_original_cut_after_later_intake() -> TestResult {
         ..Default::default()
     };
     let mut native_cursor = AnalysisAppendRead::default();
-    let mut old_cursor = AnalysisAppendRead::default();
-    let cut = pair.native.view()?.revision();
+    let cut = fixture.native.view()?.revision();
     let mut after = None;
     for expected in [vec![1, 2], vec![3, 4], vec![5, 6]] {
-        let (native, current) = pair.native.read_append_tables_filtered(
+        let (native, current) = fixture.native.read_append_tables_filtered(
             &selection,
             &selection,
             read(&requests, AnalysisReadModeV1::Complete),
@@ -43,26 +42,65 @@ fn append_pages_keep_the_original_cut_after_later_intake() -> TestResult {
             &mut native_cursor,
             &mut |_| Ok(()),
         )?;
-        let (old, old_current) = pair.old.read_append_tables_filtered(
-            &selection,
-            &selection,
-            read(&requests, AnalysisReadModeV1::Complete),
-            after,
-            limits,
-            &control,
-            &mut old_cursor,
-            &mut |_| Ok(()),
-        )?;
         assert_eq!(cursors(&native)?, expected);
-        assert_eq!(native.tables, old.tables);
-        assert_eq!(native.scanned_through, old.scanned_through);
-        assert_eq!(native.exhausted, old.exhausted);
+        assert_table(
+            &native,
+            "events",
+            vec![
+                (
+                    "source_cursor",
+                    Arc::new(UInt64Array::from(expected.clone())),
+                ),
+                ("task_cookie", Arc::new(UInt64Array::from(expected.clone()))),
+            ],
+        )?;
+        assert_witnesses(
+            &native,
+            expected
+                .iter()
+                .map(|cursor| (source.clone(), *cursor))
+                .collect(),
+        );
+        assert_contexts(&native, &[]);
+        assert!(
+            native.extraction.missing_contexts.is_empty()
+                && native.extraction.missing_results.is_empty()
+        );
+        assert_eq!(native.extraction.sources.len(), 1);
+        let header = &native.extraction.sources[0];
+        assert_eq!(
+            header.receipt,
+            araphor_data::AnalysisSourceReceiptV1 {
+                identity: source.clone(),
+                cpu_id: 0,
+                contiguous_cursor: 6,
+                coverage_revision: 0,
+                retained_floor: 0,
+            }
+        );
+        assert_eq!(header.commit_revision, 1);
+        assert!(
+            header.pending.is_empty() && header.expired.is_empty() && header.recovery.is_empty()
+        );
+        assert_eq!(header.coverage_report, None);
+        assert_eq!(native.received_min, Some(10));
+        assert_eq!(
+            native.scanned_through,
+            StorePositionV1 {
+                commit_revision: 1,
+                ordinal: if expected[0] == 5 {
+                    u32::MAX
+                } else {
+                    *expected.last().ok_or("cursor")? as u32 - 1
+                },
+            }
+        );
         assert_eq!(native.extraction.meta.commit_revision, cut);
-        assert_eq!(current.commit_revision, old_current.commit_revision);
-        assert_eq!(current.commit_revision, pair.native.view()?.revision());
+        assert_eq!(current, fixture.native.view()?.meta());
+        assert_eq!(current.commit_revision, fixture.native.view()?.revision());
         after = Some(native.scanned_through);
         if expected[0] == 1 {
-            pair.append(&source, 7, 1, 20)?;
+            fixture.append(&source, 7, 1, 20)?;
         } else {
             assert!(current.commit_revision > cut);
         }
@@ -75,7 +113,7 @@ fn append_pages_keep_the_original_cut_after_later_intake() -> TestResult {
             ordinal: u32::MAX
         })
     );
-    let (page, current) = pair.native.read_append_tables_filtered(
+    let (page, current) = fixture.native.read_append_tables_filtered(
         &selection,
         &selection,
         read(&requests, AnalysisReadModeV1::Complete),
@@ -85,6 +123,26 @@ fn append_pages_keep_the_original_cut_after_later_intake() -> TestResult {
         &mut native_cursor,
         &mut |_| Ok(()),
     )?;
+    assert_table(
+        &page,
+        "events",
+        vec![
+            ("source_cursor", Arc::new(UInt64Array::from(vec![7]))),
+            ("task_cookie", Arc::new(UInt64Array::from(vec![7]))),
+        ],
+    )?;
+    assert_witnesses(&page, vec![(source.clone(), 7)]);
+    assert_contexts(&page, &[]);
+    assert_eq!(page.received_min, Some(20));
+    assert_eq!(
+        page.scanned_through,
+        StorePositionV1 {
+            commit_revision: 2,
+            ordinal: u32::MAX
+        }
+    );
+    assert_eq!(page.extraction.sources[0].receipt.contiguous_cursor, 7);
+    assert_eq!(page.extraction.sources[0].commit_revision, 2);
     assert_eq!(cursors(&page)?, [7]);
     assert!(page.exhausted);
     assert_eq!(page.extraction.meta, current);

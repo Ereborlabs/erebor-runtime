@@ -1,14 +1,15 @@
-use crate::analysis::AnalysisStore;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
-use araphor_analysis_sdk::arrow_array::{UInt32Array, UInt64Array};
-use snafu::ResultExt as _;
-
 use super::*;
-use crate :: { AnalysisContextVersionV1 , AnalysisReadModeV1 , AnalysisTableRead , ContextSensitivityV1 , EvidenceRetentionOwner , TraceBatchV1 , TraceFrameKindV1 , TraceFrameV1 , TraceStateV1 , ValidatedEvidenceBatchV1 } ;
 
-type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+fn open_retention(root: impl AsRef<std::path::Path>) -> Result<AnalysisStore> {
+    AnalysisStore::open_with_retention(
+        root,
+        RetentionLimitsV1 {
+            raw_max_age_ns: Some(24 * 60 * 60 * 1_000_000_000),
+            raw_max_bytes: Some(2 * 1024 * 1024 * 1024),
+        },
+    )
+}
+
 type Row = (u8, u64, u64, StorePositionV1);
 
 fn batch(first: u64, count: usize, received: u64) -> Result<ValidatedEvidenceBatchV1> {
@@ -256,7 +257,7 @@ fn raw_changes_snapshot() -> TestResult {
 fn raw_changes_retirement() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");
-    let store = AnalysisStore::open_retention(&root)?;
+    let store = open_retention(&root)?;
     let source = crate::analysis::tests::identity();
     let next = EvidenceIntakeIdentityV1 {
         source_epoch: 2,
@@ -389,7 +390,7 @@ fn raw_changes_retirement() -> TestResult {
 #[test]
 fn raw_changes_binding() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_retention(directory.path().join("analysis"))?;
+    let store = open_retention(directory.path().join("analysis"))?;
     let source = crate::analysis::tests::identity();
     let mut selection = AnalysisSelectionV1::tenant(source.tenant_id);
     selection.binding_ids.push([9; 16]);
@@ -587,7 +588,7 @@ fn trace_changes_retirement() -> TestResult {
     use crate::analysis::raw::tests::{trace_intent, trace_terminal};
 
     let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_retention(directory.path().join("analysis"))?;
+    let store = open_retention(directory.path().join("analysis"))?;
     let intent = trace_intent()?;
     let identity = &intent.bindings[0].identity;
     let state = store.accept_trace(&intent)?;

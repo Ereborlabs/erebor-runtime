@@ -88,6 +88,60 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Extraction fixtures now use their native owners. Nineteen store cases and
+  five Changes cases move under `analysis::native::extraction::tests`.
+  They keep the original source identities, workloads, timeouts, cancellation,
+  position ordering, raw byte counts, allocation checks, rotation, file faults,
+  retention, backup, and restore. Private lock and raw-index checks stay beside
+  the native owner. The missing-range fault damages a cloned published view;
+  changing only the mutable journal index cannot change that view. Four pure
+  type and budget units stay beside the extraction types. The private configured
+  scan and charge checks remain there as a separate unit.
+
+  The former paired integration fixture opens NativeStore on both sides after
+  public cutover. It is not an independent storage comparison. One native
+  fixture now replaces it. All 12 integration cases remain. Explicit typed Arrow
+  values and canonical projected schemas replace duplicate comparisons.
+  Assertions cover original Data revisions and ordinals, headers, pending and
+  recovery ranges, exact coverage reports, missing keys, witnesses, context
+  reference origins, frozen append cuts, and historical reads. Changes rows
+  follow commit order; context references use key order. A real native trace
+  metadata read replaces the stale Unsupported assertion. The first baseline
+  passes 11 cases and fails that stale assertion.
+
+  A real native publication case replaces the old GraphRows history fixture.
+  The package fixture stages the relationship removal through the existing transaction
+  facility. The case checks both historical result IDs, the unchanged first
+  snapshot, the current zero-edge result, explicit traversal IDs, scope denial,
+  and key and byte budgets. The original three-key outer selection remains
+  bounded by its private counter unit. The public reader admits its two
+  requested keys after traversal projection. No wider-scope restriction is
+  restored. The fixture retains its genuine package checkpoint after the first
+  publication. Graph lease-disable and Cow resolver mechanics are retired.
+
+  The final focused run passes all 12 extraction and 204 managed integration
+  cases. The recovery return-value assertion also passes in a later complete
+  12-case extraction run. Changed Rust formatting and whitespace checks pass.
+  Data unit compilation reports 290 diagnostics, down from 345, with no
+  diagnostics in the moved extraction cases. The complete unit target still
+  does not compile or run. These 24 moved units remain **unqualified**. The
+  existing ignored history case retains all 576 padded records and the exact
+  witness and segment measurements. Its former default-cap check now uses
+  the original explicit 64 MiB extraction budget because defaults are unbounded.
+  That case is not run. No production default or storage quota is added.
+
+  Read `native-extraction-baseline.log`, `native-extraction-expectations.log`,
+  `native-extraction-graph-history.log`, `native-extraction-graph-state.log`,
+  `native-extraction-graph-retained-state.log`, `native-extraction-contracts.log`,
+  `native-extraction-final-native.log`, `native-extraction-final-recovery.log`,
+  and `native-extraction-final-unit.log` under
+  `output/araphor-fjall-migration-20261110`. The release library check without
+  default features passes in 9.62 seconds; read
+  `native-extraction-final-default.log` in the same directory.
+  Result: **Done for native fixture ownership and the 13 integration case
+  qualifications; Not done for the moved unit cases and complete migration**.
+  No incident timing is measured.
+
 - Six native cases replace the complete saved-input replay and retained
   provenance families. The five replay cases preserve the historical trace
   cut, current read revocation, payload-free reference lookup, both calls,

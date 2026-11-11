@@ -2960,7 +2960,7 @@ The [managed journal tests](../../crates/araphor-data/src/analysis/managed/tests
 check bounded reads, arrivals after the captured cut, late gap repair, idle
 reads, unsupported selections, stale owners, cancellation, retirement,
 reopen, and unselected context keys. The existing
-[raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs)
+[raw change tests](https://github.com/Ereborlabs/erebor-runtime/blob/b9ec41380529f934a5e8f37234794d3d97b32ab2/crates/araphor-data/src/analysis/extraction/changes/tests.rs)
 also check source and trace retirement, binding filters, and replay floors.
 
 This Data API is a prerequisite. Query still uses complete captures for

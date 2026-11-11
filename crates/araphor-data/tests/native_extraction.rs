@@ -1,5 +1,3 @@
-
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Bound,
@@ -15,7 +13,8 @@ use araphor_data::{
     ValidatedEvidenceBatchV1,
 };
 use prost::Message as _;
-use sdk::arrow_array::{Array, StringArray, UInt64Array};
+use sdk::arrow_array::{Array, ArrayRef, BinaryArray, StringArray, UInt32Array, UInt64Array};
+use std::sync::Arc;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -106,18 +105,61 @@ fn read<'a>(
     }
 }
 
-struct Pair {
+fn assert_table(
+    page: &AnalysisPositionPageV1,
+    name: &str,
+    columns: Vec<(&str, ArrayRef)>,
+) -> TestResult {
+    let schema = &AnalysisStore::table_schemas()[name];
+    let mut columns = columns
+        .into_iter()
+        .map(|(name, array)| Ok((schema.index_of(name)?, array)))
+        .collect::<Result<Vec<_>, sdk::arrow_schema::ArrowError>>()?;
+    columns.sort_by_key(|(index, _)| *index);
+    let schema =
+        Arc::new(schema.project(&columns.iter().map(|(index, _)| *index).collect::<Vec<_>>())?);
+    let expected = sdk::RecordBatch::try_new(
+        schema,
+        columns.into_iter().map(|(_, array)| array).collect(),
+    )?;
+    assert_eq!(page.tables.get(name).ok_or("table absent")?, &[expected]);
+    Ok(())
+}
+
+fn assert_witnesses(page: &AnalysisPositionPageV1, expected: Vec<(EvidenceIntakeIdentityV1, u64)>) {
+    let expected = expected
+        .into_iter()
+        .map(|(identity, cursor)| araphor_data::AnalysisWitnessV1 {
+            identity: identity.into(),
+            cursor,
+            expires_utc_ns: 0,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(page.extraction.witnesses, expected);
+}
+
+fn assert_contexts(page: &AnalysisPositionPageV1, expected: &[araphor_data::AnalysisContextRefV1]) {
+    assert_eq!(page.extraction.references.len(), expected.len());
+    for (actual, expected) in page.extraction.references.iter().zip(expected) {
+        assert_eq!(actual.context(), Some(expected));
+        assert!(actual.result().is_none());
+        assert_eq!(
+            actual.origins(),
+            &[araphor_data::AnalysisReferenceOriginV1::Context]
+        );
+    }
+}
+
+struct Fixture {
     native: NativeStore,
-    old: AnalysisStore,
     _directory: tempfile::TempDir,
 }
 
-impl Pair {
+impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         Ok(Self {
             native: NativeStore::open(&directory.path().join("native"))?,
-            old: AnalysisStore::open(directory.path().join("old"))?,
             _directory: directory,
         })
     }
@@ -131,14 +173,11 @@ impl Pair {
     ) -> araphor_data::Result<()> {
         self.native
             .accept_validated_batch(source.clone(), batch(first, count, intake)?)?;
-        self.old
-            .accept_validated_batch(source.clone(), batch(first, count, intake)?)?;
         Ok(())
     }
 
     fn contexts(&self, contexts: &[AnalysisContextVersionV1]) -> araphor_data::Result<()> {
         self.native.commit_contexts(contexts)?;
-        self.old.commit_contexts(contexts)?;
         Ok(())
     }
 
@@ -157,86 +196,38 @@ impl Pair {
             encoded_report: report.encode_to_vec(),
         };
         self.native.accept_validated_coverage(input())?;
-        self.old.accept_validated_coverage(input())?;
         Ok(())
     }
 
-    fn compare(
+    fn capture(
         &self,
         selection: &AnalysisSelectionV1,
         requests: &AnalysisTableRequests,
         mode: AnalysisReadModeV1,
         limits: AnalysisExtractLimits,
     ) -> Result<AnalysisPositionPageV1, Box<dyn std::error::Error>> {
-        let control = AnalysisReadControl::default();
-        let native = self
-            .native
-            .read_tables(selection, read(requests, mode), limits, &control)?;
-        let old = self
-            .old
-            .read_tables(selection, read(requests, mode), limits, &control)?;
-        assert_eq!(native.tables, old.tables);
-        assert_eq!(native.scanned_through, old.scanned_through);
-        assert_eq!(native.exhausted, old.exhausted);
-        assert_eq!(native.received_min, old.received_min);
-        assert_eq!(native.extraction.witnesses, old.extraction.witnesses);
-        assert_eq!(
-            native.extraction.missing_contexts,
-            old.extraction.missing_contexts
-        );
-        let refs = |page: &AnalysisPositionPageV1| {
-            page.extraction
-                .references
-                .iter()
-                .map(|reference| {
-                    (
-                        reference.context().cloned(),
-                        reference.result().cloned(),
-                        reference.origins().to_vec(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(refs(&native), refs(&old));
-        assert_eq!(
-            native.extraction.meta.commit_revision,
-            old.extraction.meta.commit_revision
-        );
-        assert_eq!(
-            native.extraction.meta.schema_version,
-            old.extraction.meta.schema_version
-        );
-        assert_eq!(
-            native.extraction.sources.len(),
-            old.extraction.sources.len()
-        );
-        let head = native.extraction.meta.commit_revision;
-        for (native, old) in native
-            .extraction
-            .sources
-            .iter()
-            .zip(&old.extraction.sources)
-        {
-            assert_eq!(native.receipt, old.receipt);
-            assert!(native.commit_revision <= old.commit_revision);
-            assert!(old.commit_revision <= head);
-            assert_eq!(native.pending, old.pending);
-            assert_eq!(native.coverage_report, old.coverage_report);
-        }
-        Ok(native)
+        let page = self.native.read_tables(
+            selection,
+            read(requests, mode),
+            limits,
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(page.extraction.meta, self.native.view()?.meta());
+        assert!(page.extraction.missing_results.is_empty());
+        Ok(page)
     }
 }
 
 #[test]
 fn native_arrow_matches_current_inputs_and_headers() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let a = identity("a");
     let b = identity("b");
-    pair.append(&a, 1, 3, 10)?;
-    pair.append(&b, 1, 2, 20)?;
-    pair.append(&a, 5, 1, 30)?;
-    pair.coverage(&a)?;
-    pair.contexts(&[
+    fixture.append(&a, 1, 3, 10)?;
+    fixture.append(&b, 1, 2, 20)?;
+    fixture.append(&a, 5, 1, 30)?;
+    fixture.coverage(&a)?;
+    fixture.contexts(&[
         context("zeta", 2, 1),
         context("alpha", 3, 2),
         context("alpha", 1, 0),
@@ -277,12 +268,167 @@ fn native_arrow_matches_current_inputs_and_headers() -> TestResult {
         ),
     ])?;
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    let page = pair.compare(
+    let page = fixture.capture(
         &selection,
         &requests,
         AnalysisReadModeV1::Complete,
         AnalysisExtractLimits::default(),
     )?;
+    assert_table(
+        &page,
+        "events",
+        vec![
+            (
+                "node_id",
+                Arc::new(StringArray::from(vec!["a", "a", "a", "b", "b", "a"])),
+            ),
+            (
+                "task_cookie",
+                Arc::new(UInt64Array::from(vec![1, 2, 3, 1, 2, 5])),
+            ),
+            (
+                "source_cursor",
+                Arc::new(UInt64Array::from(vec![1, 2, 3, 1, 2, 5])),
+            ),
+            (
+                "commit_revision",
+                Arc::new(UInt64Array::from(vec![1, 1, 1, 2, 2, 3])),
+            ),
+            (
+                "ordinal",
+                Arc::new(UInt32Array::from(vec![0, 1, 2, 0, 1, 0])),
+            ),
+            (
+                "received_utc_ns",
+                Arc::new(UInt64Array::from(vec![10, 10, 10, 20, 20, 30])),
+            ),
+        ],
+    )?;
+    assert_table(
+        &page,
+        "coverage",
+        vec![
+            ("node_id", Arc::new(StringArray::from(vec!["a", "a", "b"]))),
+            ("source_epoch", Arc::new(UInt64Array::from(vec![1, 1, 1]))),
+            (
+                "kind",
+                Arc::new(StringArray::from(vec!["receipt", "pending", "receipt"])),
+            ),
+            (
+                "state",
+                Arc::new(StringArray::from(vec!["reported", "pending", "unknown"])),
+            ),
+            (
+                "first_cursor",
+                Arc::new(UInt64Array::from(vec![None, Some(4), None])),
+            ),
+            (
+                "last_cursor",
+                Arc::new(UInt64Array::from(vec![None, Some(4), None])),
+            ),
+            (
+                "coverage_revision",
+                Arc::new(UInt64Array::from(vec![1, 1, 0])),
+            ),
+        ],
+    )?;
+    assert_table(
+        &page,
+        "context_versions",
+        vec![
+            (
+                "owner_id",
+                Arc::new(StringArray::from(vec!["alpha", "alpha", "zeta"])),
+            ),
+            (
+                "entity_key",
+                Arc::new(BinaryArray::from_iter_values([vec![1], vec![3], vec![2]])),
+            ),
+            ("owner_revision", Arc::new(UInt64Array::from(vec![0, 2, 1]))),
+            (
+                "commit_revision",
+                Arc::new(UInt64Array::from(vec![5, 5, 5])),
+            ),
+            (
+                "body",
+                Arc::new(BinaryArray::from_iter_values([
+                    vec![1; 16],
+                    vec![3; 16],
+                    vec![2; 16],
+                ])),
+            ),
+        ],
+    )?;
+    assert_witnesses(
+        &page,
+        (1..=3)
+            .map(|cursor| (a.clone(), cursor))
+            .chain((1..=2).map(|cursor| (b.clone(), cursor)))
+            .chain([(a.clone(), 5)])
+            .collect(),
+    );
+    let contexts = [
+        context("alpha", 1, 0),
+        context("alpha", 3, 2),
+        context("zeta", 2, 1),
+    ]
+    .into_iter()
+    .map(|context| araphor_data::AnalysisContextRefV1 {
+        key: context.key,
+        commit_revision: 5,
+    })
+    .collect::<Vec<_>>();
+    assert_contexts(&page, &contexts);
+    assert!(page.extraction.missing_contexts.is_empty());
+    assert_eq!(page.received_min, Some(10));
+    assert_eq!(
+        page.scanned_through,
+        StorePositionV1 {
+            commit_revision: 5,
+            ordinal: u32::MAX
+        }
+    );
+    assert!(page.exhausted);
+    for (source, identity, contiguous, coverage) in [
+        (&page.extraction.sources[0], &a, 3, 1),
+        (&page.extraction.sources[1], &b, 2, 0),
+    ] {
+        assert_eq!(
+            source.receipt,
+            araphor_data::AnalysisSourceReceiptV1 {
+                identity: identity.clone(),
+                cpu_id: 0,
+                contiguous_cursor: contiguous,
+                coverage_revision: coverage,
+                retained_floor: 0,
+            }
+        );
+        assert!(source.expired.is_empty());
+        assert!(source.recovery.is_empty());
+    }
+    assert_eq!(
+        page.extraction.sources[0].pending,
+        [araphor_data::AnalysisGapV1 {
+            first_cursor: 4,
+            last_cursor: 4,
+            commit_revision: 5
+        }]
+    );
+    assert!(page.extraction.sources[1].pending.is_empty());
+    assert_eq!(
+        page.extraction.sources[0].coverage_report,
+        Some(
+            CoverageReport {
+                source_id: a.source_id.to_vec(),
+                source_epoch: 1,
+                cpu_id: 0,
+                revision: 1,
+                ..Default::default()
+            }
+            .encode_to_vec()
+        )
+    );
+    assert_eq!(page.extraction.sources[1].coverage_report, None);
     assert_eq!(
         page.extraction
             .sources
@@ -335,10 +481,10 @@ fn native_arrow_matches_current_inputs_and_headers() -> TestResult {
 
 #[test]
 fn pages_filters_and_consumed_ordinals_match() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let a = identity("a");
-    pair.append(&a, 1, 6, 10)?;
-    pair.append(&a, 7, 3, 20)?;
+    fixture.append(&a, 1, 6, 10)?;
+    fixture.append(&a, 7, 3, 20)?;
     let requests = requests(&[(
         "events",
         &[
@@ -348,7 +494,7 @@ fn pages_filters_and_consumed_ordinals_match() -> TestResult {
             "received_utc_ns",
         ],
     )])?;
-    let mut selection = AnalysisSelectionV1::new([1; 16], vec![a]);
+    let mut selection = AnalysisSelectionV1::new([1; 16], vec![a.clone()]);
     selection.cursor_from = Bound::Included(2);
     selection.cursor_until = Bound::Included(8);
     let limits = AnalysisExtractLimits {
@@ -357,13 +503,89 @@ fn pages_filters_and_consumed_ordinals_match() -> TestResult {
     };
     let mut after = None;
     let mut cursors = Vec::new();
+    let mut pages = [vec![2, 3], vec![4, 5], vec![6, 7], vec![8]].into_iter();
     loop {
-        let page = pair.compare(
+        let page = fixture.capture(
             &selection,
             &requests,
             AnalysisReadModeV1::Page(after),
             limits,
         )?;
+        let expected = pages.next().ok_or("extra page")?;
+        let revisions = expected
+            .iter()
+            .map(|cursor| if *cursor <= 6 { 1 } else { 2 })
+            .collect::<Vec<_>>();
+        let ordinals = expected
+            .iter()
+            .map(|cursor| {
+                if *cursor <= 6 {
+                    *cursor as u32 - 1
+                } else {
+                    *cursor as u32 - 7
+                }
+            })
+            .collect::<Vec<_>>();
+        let received = expected
+            .iter()
+            .map(|cursor| if *cursor <= 6 { 10 } else { 20 })
+            .collect::<Vec<_>>();
+        assert_table(
+            &page,
+            "events",
+            vec![
+                (
+                    "source_cursor",
+                    Arc::new(UInt64Array::from(expected.clone())),
+                ),
+                (
+                    "commit_revision",
+                    Arc::new(UInt64Array::from(revisions.clone())),
+                ),
+                ("ordinal", Arc::new(UInt32Array::from(ordinals.clone()))),
+                (
+                    "received_utc_ns",
+                    Arc::new(UInt64Array::from(received.clone())),
+                ),
+            ],
+        )?;
+        assert_witnesses(
+            &page,
+            expected.iter().map(|cursor| (a.clone(), *cursor)).collect(),
+        );
+        assert_contexts(&page, &[]);
+        assert!(page.extraction.missing_contexts.is_empty());
+        assert_eq!(page.received_min, received.iter().copied().min());
+        let source = &page.extraction.sources[0];
+        assert_eq!(
+            source.receipt,
+            araphor_data::AnalysisSourceReceiptV1 {
+                identity: a.clone(),
+                cpu_id: 0,
+                contiguous_cursor: 9,
+                coverage_revision: 0,
+                retained_floor: 0,
+            }
+        );
+        assert_eq!(source.commit_revision, 2);
+        assert!(
+            source.pending.is_empty() && source.expired.is_empty() && source.recovery.is_empty()
+        );
+        assert_eq!(source.coverage_report, None);
+        assert_eq!(
+            page.scanned_through,
+            if page.exhausted {
+                StorePositionV1 {
+                    commit_revision: 2,
+                    ordinal: u32::MAX,
+                }
+            } else {
+                StorePositionV1 {
+                    commit_revision: *revisions.last().ok_or("revision")?,
+                    ordinal: *ordinals.last().ok_or("ordinal")?,
+                }
+            }
+        );
         for batch in page.tables.get("events").into_iter().flatten() {
             let values = batch
                 .column_by_name("source_cursor")
@@ -376,14 +598,36 @@ fn pages_filters_and_consumed_ordinals_match() -> TestResult {
             break;
         }
     }
+    assert!(pages.next().is_none());
     assert_eq!(cursors, (2..=8).collect::<Vec<_>>());
     selection.received_from = Bound::Included(20);
-    let page = pair.compare(
+    let page = fixture.capture(
         &selection,
         &requests,
         AnalysisReadModeV1::Complete,
         AnalysisExtractLimits::default(),
     )?;
+    assert_table(
+        &page,
+        "events",
+        vec![
+            ("source_cursor", Arc::new(UInt64Array::from(vec![7, 8]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![2, 2]))),
+            ("ordinal", Arc::new(UInt32Array::from(vec![0, 1]))),
+            ("received_utc_ns", Arc::new(UInt64Array::from(vec![20, 20]))),
+        ],
+    )?;
+    assert_witnesses(&page, vec![(a.clone(), 7), (a.clone(), 8)]);
+    assert_contexts(&page, &[]);
+    assert_eq!(page.received_min, Some(20));
+    assert!(page.exhausted);
+    assert_eq!(
+        page.scanned_through,
+        StorePositionV1 {
+            commit_revision: 2,
+            ordinal: u32::MAX
+        }
+    );
     assert_eq!(
         page.tables["events"]
             .iter()
@@ -396,19 +640,19 @@ fn pages_filters_and_consumed_ordinals_match() -> TestResult {
 
 #[test]
 fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let source = identity("a");
-    pair.append(&source, 1, 1, 10)?;
-    pair.contexts(&[context("zeta", 4, 1)])?;
-    let before = pair.native.view()?;
-    pair.append(&source, 2, 1, 20)?;
-    pair.contexts(&[
+    fixture.append(&source, 1, 1, 10)?;
+    fixture.contexts(&[context("zeta", 4, 1)])?;
+    let before = fixture.native.view()?;
+    fixture.append(&source, 2, 1, 20)?;
+    fixture.contexts(&[
         context("zeta", 3, 2),
         context("alpha", 2, 2),
         context("alpha", 1, 1),
     ])?;
-    let middle = pair.native.view()?;
-    pair.contexts(&[context("alpha", 9, 3)])?;
+    let middle = fixture.native.view()?;
+    fixture.contexts(&[context("alpha", 9, 3)])?;
     let requests = requests(&[
         ("events", &["source_cursor", "commit_revision", "ordinal"]),
         (
@@ -426,12 +670,78 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
         commit_revision: before.revision(),
         ordinal: u32::MAX,
     };
-    let page = pair.compare(
+    let page = fixture.capture(
         &selection,
         &requests,
         AnalysisReadModeV1::Changes(after),
         AnalysisExtractLimits::default(),
     )?;
+    assert_table(
+        &page,
+        "events",
+        vec![
+            ("source_cursor", Arc::new(UInt64Array::from(vec![2]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![3]))),
+            ("ordinal", Arc::new(UInt32Array::from(vec![0]))),
+        ],
+    )?;
+    assert_table(
+        &page,
+        "context_versions",
+        vec![
+            (
+                "owner_id",
+                Arc::new(StringArray::from(vec!["alpha", "alpha", "zeta", "alpha"])),
+            ),
+            (
+                "entity_key",
+                Arc::new(BinaryArray::from_iter_values([
+                    vec![1],
+                    vec![2],
+                    vec![3],
+                    vec![9],
+                ])),
+            ),
+            (
+                "owner_revision",
+                Arc::new(UInt64Array::from(vec![1, 2, 2, 3])),
+            ),
+            (
+                "commit_revision",
+                Arc::new(UInt64Array::from(vec![4, 4, 4, 5])),
+            ),
+        ],
+    )?;
+    let references = [
+        ("alpha", 1, 1, 4),
+        ("alpha", 2, 2, 4),
+        ("alpha", 9, 3, 5),
+        ("zeta", 3, 2, 4),
+    ]
+    .into_iter()
+    .map(
+        |(owner, entity, revision, commit_revision)| araphor_data::AnalysisContextRefV1 {
+            key: context(owner, entity, revision).key,
+            commit_revision,
+        },
+    )
+    .collect::<Vec<_>>();
+    assert_contexts(&page, &references);
+    assert_witnesses(&page, vec![(source.clone(), 2)]);
+    assert!(page.extraction.missing_contexts.is_empty());
+    assert_eq!(page.received_min, Some(20));
+    assert_eq!(
+        page.scanned_through,
+        StorePositionV1 {
+            commit_revision: 5,
+            ordinal: u32::MAX
+        }
+    );
+    assert!(page.exhausted);
+    assert_eq!(page.extraction.sources.len(), 1);
+    assert_eq!(page.extraction.sources[0].commit_revision, 3);
+    assert_eq!(page.extraction.sources[0].receipt.contiguous_cursor, 2);
+    assert!(page.extraction.sources[0].pending.is_empty());
     assert_eq!(
         page.tables["context_versions"]
             .iter()
@@ -439,7 +749,7 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
             .sum::<usize>(),
         4
     );
-    let historical = pair.native.read_tables_at(
+    let historical = fixture.native.read_tables_at(
         &middle,
         &selection,
         read(&requests, AnalysisReadModeV1::Changes(after)),
@@ -447,6 +757,34 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
         &AnalysisReadControl::default(),
         Some(&BTreeSet::from(["alpha".to_owned()])),
     )?;
+    assert_table(
+        &historical,
+        "events",
+        vec![
+            ("source_cursor", Arc::new(UInt64Array::from(vec![2]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![3]))),
+            ("ordinal", Arc::new(UInt32Array::from(vec![0]))),
+        ],
+    )?;
+    assert_table(
+        &historical,
+        "context_versions",
+        vec![
+            (
+                "owner_id",
+                Arc::new(StringArray::from(vec!["alpha", "alpha"])),
+            ),
+            (
+                "entity_key",
+                Arc::new(BinaryArray::from_iter_values([vec![1], vec![2]])),
+            ),
+            ("owner_revision", Arc::new(UInt64Array::from(vec![1, 2]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![4, 4]))),
+        ],
+    )?;
+    assert_contexts(&historical, &references[..2]);
+    assert_witnesses(&historical, vec![(source.clone(), 2)]);
+    assert_eq!(historical.received_min, Some(20));
     assert_eq!(
         historical.tables["context_versions"]
             .iter()
@@ -463,7 +801,7 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
         middle.revision()
     );
     assert!(historical.exhausted);
-    let first = pair.native.read_tables_at(
+    let first = fixture.native.read_tables_at(
         &before,
         &selection,
         read(&requests, AnalysisReadModeV1::Complete),
@@ -471,6 +809,45 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
         &AnalysisReadControl::default(),
         None,
     )?;
+    assert_table(
+        &first,
+        "events",
+        vec![
+            ("source_cursor", Arc::new(UInt64Array::from(vec![1]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![1]))),
+            ("ordinal", Arc::new(UInt32Array::from(vec![0]))),
+        ],
+    )?;
+    assert_table(
+        &first,
+        "context_versions",
+        vec![
+            ("owner_id", Arc::new(StringArray::from(vec!["zeta"]))),
+            (
+                "entity_key",
+                Arc::new(BinaryArray::from_iter_values([vec![4]])),
+            ),
+            ("owner_revision", Arc::new(UInt64Array::from(vec![1]))),
+            ("commit_revision", Arc::new(UInt64Array::from(vec![2]))),
+        ],
+    )?;
+    assert_contexts(
+        &first,
+        &[araphor_data::AnalysisContextRefV1 {
+            key: context("zeta", 4, 1).key,
+            commit_revision: 2,
+        }],
+    );
+    assert_witnesses(&first, vec![(source.clone(), 1)]);
+    assert_eq!(
+        first.scanned_through,
+        StorePositionV1 {
+            commit_revision: 2,
+            ordinal: u32::MAX
+        }
+    );
+    assert_eq!(first.received_min, Some(10));
+    assert!(first.exhausted);
     assert_eq!(
         first.tables["context_versions"]
             .iter()
@@ -478,29 +855,65 @@ fn changes_use_sorted_headers_and_exact_historical_cut() -> TestResult {
             .sum::<usize>(),
         1
     );
+    for (page, revision, contiguous) in [(&page, 3, 2), (&historical, 3, 2), (&first, 1, 1)] {
+        assert_eq!(page.extraction.sources.len(), 1);
+        let header = &page.extraction.sources[0];
+        assert_eq!(
+            header.receipt,
+            araphor_data::AnalysisSourceReceiptV1 {
+                identity: source.clone(),
+                cpu_id: 0,
+                contiguous_cursor: contiguous,
+                coverage_revision: 0,
+                retained_floor: 0,
+            }
+        );
+        assert_eq!(header.commit_revision, revision);
+        assert!(
+            header.pending.is_empty() && header.expired.is_empty() && header.recovery.is_empty()
+        );
+        assert_eq!(header.coverage_report, None);
+    }
     Ok(())
 }
 
 #[test]
 fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let source = identity("a");
-    pair.append(&source, 1, 2, 10)?;
-    pair.contexts(&[context("native", 1, 1)])?;
+    fixture.append(&source, 1, 2, 10)?;
+    fixture.contexts(&[context("native", 1, 1)])?;
     let request = requests(&[("context_versions", &["owner_id", "entity_key"])])?;
     let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
     selection.contexts = Selection::Exact(vec![context("missing", 2, 1).key]);
-    let page = pair.compare(
+    let page = fixture.capture(
         &selection,
         &request,
         AnalysisReadModeV1::Complete,
         AnalysisExtractLimits::default(),
     )?;
+    assert!(page.tables.is_empty());
+    assert_eq!(
+        page.extraction.missing_contexts,
+        [context("missing", 2, 1).key]
+    );
+    assert_contexts(&page, &[]);
+    assert_witnesses(&page, Vec::new());
+    assert!(page.extraction.sources.is_empty());
+    assert_eq!(page.received_min, None);
+    assert_eq!(
+        page.scanned_through,
+        StorePositionV1 {
+            commit_revision: 2,
+            ordinal: u32::MAX
+        }
+    );
+    assert!(page.exhausted);
     assert_eq!(page.extraction.missing_contexts.len(), 1);
     let control = AnalysisReadControl::default();
     control.cancel()?;
     assert!(matches!(
-        pair.native.read_tables(
+        fixture.native.read_tables(
             &selection,
             read(&request, AnalysisReadModeV1::Complete),
             AnalysisExtractLimits::default(),
@@ -519,7 +932,7 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             ..Default::default()
         },
     ] {
-        assert!(pair
+        assert!(fixture
             .native
             .read_tables(
                 &selection,
@@ -530,7 +943,7 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             .is_err());
     }
     let events = requests(&[("events", &["task_cookie"])])?;
-    assert!(pair
+    assert!(fixture
         .native
         .read_tables(
             &selection,
@@ -544,7 +957,7 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
         .is_err());
     let notifications = BTreeMap::from([("notifications".to_owned(), None)]);
     assert!(matches!(
-        pair.native.read_tables(
+        fixture.native.read_tables(
             &selection,
             read(&notifications, AnalysisReadModeV1::Metadata),
             AnalysisExtractLimits::default(),
@@ -555,8 +968,8 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             ..
         })
     ));
-    pair.native.enable_notification_owner()?;
-    assert!(pair
+    fixture.native.enable_notification_owner()?;
+    assert!(fixture
         .native
         .read_tables(
             &selection,
@@ -565,27 +978,82 @@ fn missing_keys_cancellation_and_limits_are_not_silent() -> TestResult {
             &AnalysisReadControl::default()
         )
         .is_ok());
-    let unsupported = BTreeMap::from([("traces".to_owned(), None)]);
-    assert!(matches!(
-        pair.native.read_tables(
-            &selection,
-            read(&unsupported, AnalysisReadModeV1::Metadata),
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default()
-        ),
-        Err(Error::Package {
-            code: Code::Unsupported,
-            ..
-        })
-    ));
+    let source = araphor_data::TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+    let intent = araphor_data::TraceIntentV1 {
+        tenant_id: [1; 16],
+        request_id: [3; 16],
+        bindings: vec![araphor_data::TraceBindingV1 {
+            binding_id: [9; 16],
+            namespace_uid: "namespace-a".into(),
+            identity: araphor_data::TraceIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "node-a".into(),
+                node_boot_id: [2; 16],
+                request_id: [3; 16],
+                execution_id: [3; 16],
+                source_sha256: source.sha256,
+            },
+        }],
+        source,
+        authority: b"authorized-input".to_vec(),
+        accepted_unix_ns: 100,
+        deadline_unix_ns: 10_000,
+        host_sensitive: false,
+    };
+    let state = fixture.native.accept_trace(&intent)?;
+    let request = requests(&[(
+        "traces",
+        &[
+            "request_id",
+            "request_revision",
+            "cancel_requested",
+            "last_sequence",
+        ],
+    )])?;
+    let page = fixture.capture(
+        &selection,
+        &request,
+        AnalysisReadModeV1::Metadata,
+        Default::default(),
+    )?;
+    assert_table(
+        &page,
+        "traces",
+        vec![
+            (
+                "request_id",
+                Arc::new(BinaryArray::from_iter_values([[3; 16]])),
+            ),
+            (
+                "request_revision",
+                Arc::new(UInt64Array::from(vec![state.revision])),
+            ),
+            (
+                "cancel_requested",
+                Arc::new(sdk::arrow_array::BooleanArray::from(vec![false])),
+            ),
+            ("last_sequence", Arc::new(UInt64Array::from(vec![0]))),
+        ],
+    )?;
+    assert_eq!(page.extraction.trace_reads(), &[[3; 16]]);
+    assert_contexts(&page, &[]);
+    assert_witnesses(&page, Vec::new());
+    let elided = BTreeMap::from([("traces".to_owned(), None)]);
+    let page = fixture.capture(
+        &selection,
+        &elided,
+        AnalysisReadModeV1::Metadata,
+        Default::default(),
+    )?;
+    assert!(page.tables.is_empty());
     Ok(())
 }
 
 #[test]
 fn fragmented_payload_is_bounded_before_assembly() -> TestResult {
-    let pair = Pair::new()?;
-    pair.contexts(&[context("native", 1, 1)])?;
-    let (key, _) = pair
+    let fixture = Fixture::new()?;
+    fixture.contexts(&[context("native", 1, 1)])?;
+    let (key, _) = fixture
         .native
         .view()?
         .snapshot()
@@ -594,11 +1062,11 @@ fn fragmented_payload_is_bounded_before_assembly() -> TestResult {
         .ok_or("context")??;
     let mut manifest = vec![1];
     manifest.extend_from_slice(&(u64::from(u32::MAX) + 1).to_be_bytes());
-    let mut tx = pair.native.write()?;
+    let mut tx = fixture.native.write()?;
     tx.native().insert(key, manifest);
     tx.commit([])?;
     let request = requests(&[("context_versions", &["body"])])?;
-    let error = pair
+    let error = fixture
         .native
         .read_tables(
             &AnalysisSelectionV1::tenant([1; 16]),
@@ -623,17 +1091,17 @@ fn fragmented_payload_is_bounded_before_assembly() -> TestResult {
 
 #[test]
 fn context_headers_release_temporary_storage() -> TestResult {
-    let pair = Pair::new()?;
+    let fixture = Fixture::new()?;
     let contexts = (1..=20)
         .map(|entity| context("native", entity, 1))
         .collect::<Vec<_>>();
-    pair.contexts(&contexts)?;
+    fixture.contexts(&contexts)?;
     let requests = requests(&[("context_versions", &["owner_id", "entity_key", "body"])])?;
     let all = AnalysisSelectionV1::tenant([1; 16]);
     let mut exact = all.clone();
     exact.contexts = Selection::Exact(contexts.iter().map(|context| context.key.clone()).collect());
     let extract = |selection: &AnalysisSelectionV1| {
-        pair.native.read_tables(
+        fixture.native.read_tables(
             selection,
             read(&requests, AnalysisReadModeV1::Complete),
             AnalysisExtractLimits::default(),

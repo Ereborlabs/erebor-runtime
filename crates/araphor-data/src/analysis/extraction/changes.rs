@@ -1,16 +1,11 @@
 use super::*;
 
-#[cfg(test)]
-mod tests;
-
 pub(in crate::analysis) struct RemovedRange {
     pub(in crate::analysis) identity: RawIdentity,
     pub(in crate::analysis) first: u64,
     pub(in crate::analysis) last: u64,
     pub(in crate::analysis) revision: u64,
 }
-
-
 
 impl AnalysisExtractionV1 {
     pub(super) fn remove_raw(

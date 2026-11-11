@@ -4,6 +4,48 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native extraction units](../../crates/araphor-data/src/analysis/native/extraction/tests.rs),
+[selection cases](../../crates/araphor-data/src/analysis/native/extraction/tests/selection.rs),
+[position cases](../../crates/araphor-data/src/analysis/native/extraction/tests/positions.rs),
+[lifecycle cases](../../crates/araphor-data/src/analysis/native/extraction/tests/lifecycle.rs),
+and [Changes cases](../../crates/araphor-data/src/analysis/native/extraction/tests/changes.rs)
+with the [integration fixture](../../crates/araphor-data/tests/native_extraction.rs)
+and [Graph history case](../../crates/araphor-data/tests/native_managed/domain/read/history.rs).
+Nineteen store units and five Changes units now belong to native extraction.
+Private lock, raw-index, byte-count, and allocation checks stay at that owner.
+Four pure units and the extracted scan/charge boundary unit remain beside
+[extraction types](../../crates/araphor-data/src/analysis/extraction.rs).
+
+Native event reads still use cancellable raw access. Metadata reads use the
+published immutable index. The lock case checks those boundaries and keeps the
+original deadlines. The missing-range case changes a cloned DataView index;
+it does not change the live published root. The Changes fixtures retain the
+original identities and the verified former raw-retention test policy.
+No production storage limit is added.
+
+The integration fixture now opens one native store. Its former two stores
+both used NativeStore, so their equal output was not independent proof. All
+12 cases remain and assert explicit typed values, canonical projected schemas,
+original positions, source headers, coverage reports, witness order, context
+origins, append cuts, and history. Changes rows use `(revision, key)` order;
+references use key order. Native trace metadata replaces the old Unsupported
+expectation. Graph history uses native package-fixture mutations and Data commit.
+It keeps both versions, current-winner selection, zero current edges, the exact
+old snapshot, traversal scope, and budgets. The private unit keeps the three-key outer selection
+and its limit-two rejection assertion. The public traversal reads two requested keys
+and admits that input under limit two. No resolver or Graph lease flag is added.
+
+The final run passes 12 extraction and 204 managed integration cases. A later
+complete extraction run also passes the exact recovery return-value assertion.
+Changed Rust formatting, whitespace checks, and the release library check
+without default features pass. The Data unit target reports 290 compile
+diagnostics, down from 345; it still
+does not compile or run. The moved 24 units remain unqualified. Their ignored
+history case keeps the full workload and measurements, with an explicit
+64 MiB extraction budget for its cap check. That case is not run. Read
+`native-extraction-*` evidence under `output/araphor-fjall-migration-20261110`.
+Complete migration and incident performance remain open.
+
 Read the [saved-input cases](../../crates/araphor-data/tests/native_managed/storage/replay.rs),
 [trace case](../../crates/araphor-data/tests/native_managed/storage/replay/trace.rs),
 [corruption case](../../crates/araphor-data/tests/native_managed/storage/replay/corruption.rs),

@@ -23,6 +23,9 @@ mod results;
 mod source;
 mod trace;
 
+#[cfg(test)]
+mod tests;
+
 impl NativeStore {
     pub fn subscription_metadata(
         &self,

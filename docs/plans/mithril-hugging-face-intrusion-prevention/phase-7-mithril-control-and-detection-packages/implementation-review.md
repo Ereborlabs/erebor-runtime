@@ -205,8 +205,8 @@ Use these source tests to check each owner boundary:
 | Boundary | Test reading route |
 | --- | --- |
 | Shared wire decoding | [evidence tests](../../../../crates/araphor-data/src/evidence.rs): `query_input_values`, `query_input_size_bounds`, `query_input_invalid_frames`, `query_input_shared_bytes`. |
-| Snapshot and rotation | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_extract_rotation`, `analysis_extract_lock_waits`, and position-page cases. |
-| Selection bounds | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_selection_key_limits` fills the combined six-list budget and the separate Node budget. One extra key rejects each input. |
+| Snapshot and rotation | [extraction tests](https://github.com/Ereborlabs/erebor-runtime/blob/b9ec41380529f934a5e8f37234794d3d97b32ab2/crates/araphor-data/src/analysis/extraction.rs): `analysis_extract_rotation`, `analysis_extract_lock_waits`, and position-page cases. |
+| Selection bounds | [extraction tests](https://github.com/Ereborlabs/erebor-runtime/blob/b9ec41380529f934a5e8f37234794d3d97b32ab2/crates/araphor-data/src/analysis/extraction.rs): `analysis_selection_key_limits` fills the combined six-list budget and the separate Node budget. One extra key rejects each input. |
 | Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
 | Temporary input ownership | [engine tests](../../../../crates/araphor-data/src/query/engine.rs) check repeated scans, source lifetime, resource limits, and cancellation. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
 | Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs) check exact values, time bounds, bucket boundaries, and UInt64 sequence adjacency. QueryFixture retains a test-only DuckDB comparison for the reviewed templates. |
