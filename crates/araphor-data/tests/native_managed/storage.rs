@@ -6,6 +6,9 @@ use araphor_data::analysis::{
 use araphor_data::{ManagedAttempt, ManagedCapture, ManagedRead, ManagedReceipt, ManagedRequest};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
+#[path = "storage/calls.rs"]
+mod calls;
+
 struct StorageFixture {
     instance: ManagedInstance,
     model: sdk::Model,

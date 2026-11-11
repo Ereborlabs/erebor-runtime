@@ -73,6 +73,21 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Four managed call lifecycle cases now use the native owner. The cases retain
+  independent outputs 12 and 103, then 22 and 203; exact invocation context,
+  image and export identities; checkpoint schemas and values; historical
+  result reads; package collection; and backup, restore, and reopen.
+  Rejected publication keeps both call heads and the Data revision unchanged.
+  Pending retries, completed retries, guard order, stale sibling attempts,
+  changed input and coverage, incompatible checkpoints, changed parameters,
+  and recovered attempts retain their assertions. Native result and attempt
+  counts replace the old SQL count query. The four old cases are removed;
+  shared fixtures for other cases remain. The focused run passes 130 managed
+  cases in 29.96 seconds and 18 raw cases in 1.09 seconds. Read
+  `native-owner-contracts.log` under `output/araphor-fjall-migration-20261110`.
+  Result: **Done for these four fixture ports**. This result establishes no
+  incident latency gain. Complete Data unit qualification remains **Not done**.
+
 - Native raw witness pins now use one group for each result, original segment,
   and expiry. Each group contains exact adjacent cursor ranges. Sparse holes
   and different expiries remain separate. Managed and typed result records

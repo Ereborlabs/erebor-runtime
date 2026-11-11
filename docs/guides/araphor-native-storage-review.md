@@ -4,6 +4,16 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+The [native managed call cases](../../crates/araphor-data/tests/native_managed/storage/calls.rs)
+replace four old lifecycle cases. Read the shared
+[storage fixture](../../crates/araphor-data/tests/native_managed/storage.rs)
+first. The cases check two independent checkpoints, current and historical
+call identity, atomic failure, guard order, backup, restore, and reopen.
+They also check stale attempts and every existing checkpoint eligibility guard.
+Native result and attempt counts replace the old SQL count query. The focused
+run passes 130 managed cases and 18 raw cases. Other Data unit fixtures remain
+open. This fixture retirement establishes no latency gain.
+
 The five unused SQL storage files and five empty legacy package modules are
 removed. The two `ResolvedInput` SQL files remain active DataFusion queries.
 Historical package review links use the verified DuckDB control source revision.
