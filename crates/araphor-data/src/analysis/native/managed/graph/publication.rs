@@ -1,10 +1,19 @@
-use std :: { collections :: { BTreeMap , BTreeSet } , sync :: Arc } ;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use araphor_analysis_sdk as sdk;
 use araphor_graph::native::{Graph, LayerRequest, Pending, Prepared};
 
 use super::{origin::GraphOrigin, ManagedGraphJournal};
-use crate :: analysis :: { managed :: { source :: { import :: PreparedDerived , SourceEvidence } , GraphProof , PreparedMemory } , native :: { DataWrite , ManagedCommit , NativeStore } } ;
+use crate::analysis::{
+    managed::{
+        source::{import::PreparedDerived, SourceEvidence},
+        GraphProof, PreparedMemory,
+    },
+    native::{DataWrite, ManagedCommit, NativeStore},
+};
 use crate::{ManagedReceipt, PackageErrorCodeV1 as Code, Result};
 
 pub(in crate::analysis::native::managed) struct PreparedGraph {
@@ -230,11 +239,12 @@ impl PreparedGraph {
         self,
         tx: &mut DataWrite<'_>,
         input: &ManagedCommit<'_>,
+        contracts: &BTreeMap<u64, sdk::Package>,
         receipt: &ManagedReceipt,
         results: &BTreeMap<u64, u64>,
         memory: &mut PreparedMemory<'_>,
     ) -> Result<Pending> {
-        tx.admit_managed_graph(&input.attempt.1.spec, false)?;
+        tx.check_managed_graph(&input.attempt.1.spec, contracts)?;
         let current = tx.store.view()?;
         let mut requests = Vec::new();
         let mut writers = BTreeSet::new();

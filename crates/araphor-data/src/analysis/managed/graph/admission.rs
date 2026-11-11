@@ -13,14 +13,14 @@ pub(in crate::analysis) struct GraphDeclarations {
 impl ManagedSpec {
     pub(in crate::analysis) fn graph_declarations(
         &self,
-        mut contract: impl FnMut(&ManagedCall) -> Result<sdk::Package>,
+        mut contract: impl FnMut(u64, &ManagedCall) -> Result<sdk::Package>,
     ) -> Result<GraphDeclarations> {
         let mut declarations = GraphDeclarations {
             relations: BTreeMap::new(),
             calls: Vec::new(),
         };
         for (id, call) in &self.manifest.calls {
-            let package = contract(call)?;
+            let package = contract(*id, call)?;
             let model = package
                 .exports
                 .iter()

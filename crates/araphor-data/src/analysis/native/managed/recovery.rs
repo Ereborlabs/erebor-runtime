@@ -4,7 +4,10 @@ use araphor_graph::native::Graph;
 use snafu::ResultExt as _;
 
 use super::{CallHead, InstanceRecord, ManagedGraph, Records, VersionRecord};
-use crate :: { analysis :: native :: { DataView , NativeStore } , AnalysisReadControl , NativeStateSnafu , NativeStorageSnafu , Result } ;
+use crate::{
+    analysis::native::{DataView, NativeStore},
+    AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result,
+};
 
 impl DataView {
     pub(in crate::analysis::native) fn validate_managed(&mut self) -> Result<()> {
@@ -62,7 +65,7 @@ impl DataView {
             owners.insert(id);
             let admission = row
                 .spec
-                .graph_declarations(|call| self.managed_contract(&row.spec, call))?;
+                .graph_declarations(|_, call| self.managed_contract(&row.spec, call))?;
             if !admission.calls.is_empty() {
                 let graph = graphs.entry(id).or_insert_with(|| ManagedGraph {
                     graph: id,

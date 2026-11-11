@@ -2,6 +2,9 @@ use super::*;
 use araphor_data::{analysis::native::ManagedGraphTransaction, ManagedBudget};
 use sdk::arrow_array::{ArrayRef, BinaryArray, StructArray, UInt64Array, UInt8Array};
 
+#[path = "graph/contracts.rs"]
+mod contracts;
+
 pub(super) struct Budget;
 impl ManagedBudget for Budget {
     fn limit(&self) -> usize {

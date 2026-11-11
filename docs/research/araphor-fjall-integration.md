@@ -69,9 +69,41 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs with direct finding relation construction measure durable creation at 44.157–82.437 ms. The measured gain against DuckDB is 7.34 to 9.87 fold. The 100-fold target is not met. |
+| Performance | Matched release runs with qualified Graph contract reuse measure durable creation at 44.222–74.645 ms. The measured gain against DuckDB is 7.56 to 10.37 fold. The 100-fold target is not met. |
 
 Current evidence:
+
+- Graph publication reuses returned-call contracts already checked against the
+  current view under the same Data writer. An unreturned manifest call still
+  loads its current contract. The existing all-call declaration and complete
+  stored-mapping checks remain. The publication permits additional mappings
+  retained for a candidate version. Admission, version preparation, revival,
+  and recovery keep their existing contract reads. No new cache or format is
+  added. Two native regressions check an unreturned relation change, rollback,
+  same-attempt success after repair, and publication from a capture made before
+  a candidate extends the writer union. The final focused run passes
+  120 managed cases in 12.63 seconds and six lifecycle cases in 0.30 seconds.
+  Both matched unchanged incident pairs pass. Median Graph staging falls from
+  3.194–3.200 ms to 1.604–1.666 ms. Durable creation measures
+  44.222–74.645 ms after the replacement and 46.543–81.769 ms before it.
+  Public receipt measures 52.252–90.227 ms after the replacement. Whole-test
+  time measures 2.20–2.25 seconds. Matched DuckDB creation measures
+  338.981–644.293 ms; public receipt measures 409.746–747.479 ms; whole-test
+  time measures 5.35–5.37 seconds. The paired creation gain is 7.56–10.37 fold.
+  Workload hashes, profiles, and measurement boundaries remain equal.
+  The 100-fold target remains **Not done**. These pairs do not establish a
+  sustained latency bound. Read `graph-contracts-build.json`,
+  `graph-contracts-comparison.json`, `graph-contracts-stages.json`, and
+  `graph-contracts-final-native.log` under
+  `output/araphor-fjall-migration-20261110`.
+
+- A compile-only Data unit diagnostic after profile retirement reports
+  887 errors, including cascading errors. The command is `cargo test --offline
+  -p araphor-data --lib --no-run --message-format=json`. The largest groups are
+  obsolete managed and dependency fixtures. This diagnostic runs no tests and
+  does not identify 887 production defects. Read `post-profile-fixtures.json`
+  and `post-profile-fixtures-build.jsonl` in the same evidence directory.
+  The complete Data unit target remains **Not done**.
 
 - The complete legacy profile SQL fixture family is removed. Ten native cases
   replace the remaining root, captured-context, state, notice, and Arrow cases.

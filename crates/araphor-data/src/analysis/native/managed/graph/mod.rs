@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::{InstanceRecord, Records};
+use crate::analysis::managed::graph::GraphDeclarations;
 
 mod authority;
 mod cuts;
@@ -160,7 +161,31 @@ impl DataWrite<'_> {
     }
 
     pub(super) fn admit_managed_graph(&mut self, spec: &ManagedSpec, create: bool) -> Result<()> {
-        let admission = spec.graph_declarations(|call| self.managed_contract(spec, call))?;
+        let admission = spec.graph_declarations(|_, call| self.managed_contract(spec, call))?;
+        self.stage_graph_admission(spec, create, admission)
+    }
+
+    fn check_managed_graph(
+        &mut self,
+        spec: &ManagedSpec,
+        contracts: &BTreeMap<u64, sdk::Package>,
+    ) -> Result<()> {
+        let admission = spec.graph_declarations(|id, call| {
+            contracts
+                .get(&id)
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| self.managed_contract(spec, call))
+        })?;
+        self.stage_graph_admission(spec, false, admission)
+    }
+
+    fn stage_graph_admission(
+        &mut self,
+        spec: &ManagedSpec,
+        create: bool,
+        admission: GraphDeclarations,
+    ) -> Result<()> {
         if admission.calls.is_empty() {
             return Ok(());
         }

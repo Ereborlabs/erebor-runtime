@@ -135,6 +135,34 @@ The new runtime case checks exact capability denial, zero service callbacks,
 an untouched invocation gate, and a successful ordinary retry. Read the current
 worklist for the paired incident measurements and remaining work.
 
+## Graph publication contracts
+
+[NativeStore::commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) compares prepared returned-call contracts with the current view under the Data writer.
+  -> [PreparedGraph::stage](../../crates/araphor-data/src/analysis/native/managed/graph/publication.rs) passes those qualified contracts to Graph mapping admission.
+  -> [DataWrite::check_managed_graph](../../crates/araphor-data/src/analysis/native/managed/graph/mod.rs) reuses each returned-call contract and loads each unreturned manifest call normally.
+  -> [ManagedSpec::graph_declarations](../../crates/araphor-data/src/analysis/managed/graph/admission.rs) checks the declarations of all manifest calls.
+  -> [DataWrite::stage_graph_admission](../../crates/araphor-data/src/analysis/native/managed/graph/mod.rs) retains the original complete mapping validation and required mapping checks.
+  -> [Graph::stage](../../crates/araphor-graph/src/native/write.rs) retains native declaration, parent, member, and endpoint checks before publication.
+
+The same writer remains held between current contract validation and reuse.
+Additional mappings can belong to a prepared candidate version. The check
+permits those mappings. Admission, revival, version preparation, and recovery
+use their existing contract lookup path. No public API, cache, or format changes.
+
+The two [publication cases](../../crates/araphor-data/tests/native_managed/graph/contracts.rs)
+check a distinct unreturned relation and a retained candidate writer. A changed
+required relation rejects with the existing conflict and no Data or journal
+advance. Repair permits the same attempt. A capture that precedes candidate
+preparation can publish without removing the added writer or changing the live
+generation. Reopen preserves the mapping.
+
+The final focused run passes 120 managed cases and six lifecycle cases. Both
+matched unchanged incident pairs pass. Median Graph staging falls from
+3.194–3.200 ms to 1.604–1.666 ms. Creation measures 44.222–74.645 ms; public
+receipt measures 52.252–90.227 ms; whole-test time measures 2.20–2.25 seconds.
+The matched DuckDB gain is 7.56–10.37 fold. The 100-fold target remains
+**Not done**. Read the current worklist for source hashes and complete evidence.
+
 ## Causal relation construction
 
 [Causal::detect_model](../../crates/araphor-analysis-builtins/src/causal/descriptor.rs) constructs the one finding relation that the export declares.

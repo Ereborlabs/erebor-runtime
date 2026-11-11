@@ -221,7 +221,16 @@ impl NativeStore {
         let pending = prepared
             .graph
             .take()
-            .map(|graph| graph.stage(&mut tx, input, &receipt, &results, &mut prepared.memory))
+            .map(|graph| {
+                graph.stage(
+                    &mut tx,
+                    input,
+                    &prepared.contracts,
+                    &receipt,
+                    &results,
+                    &mut prepared.memory,
+                )
+            })
             .transpose()?;
         tx.publish_managed_graph(input, &receipt, selected_id, &results, &mut prepared.memory)?;
         let graph_at = std::time::Instant::now();
