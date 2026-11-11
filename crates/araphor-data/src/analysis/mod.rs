@@ -53,7 +53,7 @@ pub use extraction::{
     AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
     AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
 };
-pub use graph::{GraphCommit, GraphManifest, GraphSourceSummary};
+pub use graph::{GraphManifest, GraphSourceSummary};
 
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use inputs::InputSubscription;

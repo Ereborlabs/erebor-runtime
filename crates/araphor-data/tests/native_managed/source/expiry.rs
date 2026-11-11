@@ -106,11 +106,7 @@ fn retained_healthy_expiry() -> TestResult {
     };
     let before = store.view()?.revision();
     let error = store
-        .commit_managed_graph(
-            store.prepare_managed(&input)?,
-            Some(packet(scope.clone(), 3000)),
-            || Ok(()),
-        )
+        .commit_managed_graph(store.prepare_managed(&input)?, || Ok(()))
         .unwrap_err();
     assert!(matches!(
         error,

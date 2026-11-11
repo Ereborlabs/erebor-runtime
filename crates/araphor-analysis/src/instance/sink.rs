@@ -103,9 +103,7 @@ impl Publication {
         now: u64,
         batches: &[sdk::RecordBatch],
         control: &AnalysisReadControl,
-         capture: Option<
-            &araphor_data::analysis::native::NotificationCapture,
-        >,
+        capture: Option<&araphor_data::analysis::native::NotificationCapture>,
     ) -> crate::Result<crate::NotificationUpdate> {
         let Mode::Notification {
             router,
@@ -129,7 +127,6 @@ impl Publication {
             budget.as_ref(),
             &check,
             &mut |delivery| Ok(sink.deliver(delivery)),
-            
             capture,
         )
     }
@@ -282,15 +279,13 @@ impl DataSink for Publication {
                             now,
                             &batches,
                             control,
-                            
                             captured.snapshot().notification_capture(),
                         )
                         .map_err(|source| araphor_query::Error::Sql {
                             source: DataFusionError::External(Box::new(source)),
                         })?;
-                    
+
                     return Ok(update.publication);
-                    
                 })
                 .await?;
             if let Some((revision, completed)) = result {
@@ -383,12 +378,7 @@ impl DataSink for Publication {
                             .graph
                             .as_ref()
                             .ok_or_else(|| Code::Incomplete.error("managed graph owner"))?
-                            .convert_graph(
-                                &task,
-                                &captured,
-                                format!("graph:{}", uuid::Uuid::new_v4()),
-                                control,
-                            )?,
+                            .convert_graph(&task, &captured, control)?,
                     ),
                     _ => None,
                 };
@@ -453,25 +443,21 @@ impl DataSink for Publication {
                                     owner
                                         .query
                                         .store()
-                                        .commit_managed_graph(
-                                            prepared,
-                                            Some(converted.packet),
-                                            || {
-                                                control.check()?;
-                                                if evaluate {
-                                                    crate::graph::GraphConversion::check_deadline(
-                                                        deadline,
-                                                    )?;
-                                                }
-                                                Ok(())
-                                            },
-                                        )?
+                                        .commit_managed_graph(prepared, || {
+                                            control.check()?;
+                                            if evaluate {
+                                                crate::graph::GraphConversion::check_deadline(
+                                                    deadline,
+                                                )?;
+                                            }
+                                            Ok(())
+                                        })?
                                         .0
                                 } else {
                                     owner
                                         .query
                                         .store()
-                                        .commit_managed_graph(prepared, None, || control.check())?
+                                        .commit_managed_graph(prepared, || control.check())?
                                         .0
                                 }
                             }

@@ -73,6 +73,25 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- The unused SQL-era `GraphCommit` packet is removed from Data, Analysis,
+  exports, and fixtures. Native publication already used the prepared sealed
+  source; it did not read packet contents. Graph conversion still checks the
+  captured source, returned calls, historical authority, selected input,
+  progress, completion, and deadline. Its reservations remain held through
+  the commit. Data still commits native Graph state and consumed progress
+  together. No replacement packet or compatibility path is added.
+  The new native position case rejects future and swapped record positions
+  after real admission. Both sealing and selection reject the changed input.
+  Rejection preserves the complete native Data prefix, metadata, and original
+  journal head. The same attempt then commits valid input; public reads check
+  consumed cursor two and both retained record keys. The old private capture
+  mutation assertion remains, but its Data unit fixture is not qualified.
+  The focused runs pass 132 managed, 18 raw, six lifecycle, four Analysis
+  instance, and 13 notification cases. Read
+  `native-graph-packet-retirement.log` and `native-graph-packet-analysis.log` under
+  `output/araphor-fjall-migration-20261110`. This removal establishes no
+  incident latency gain. Complete migration qualification remains **Not done**.
+
 - Derived Query input receipts now bind the exact pruned selection and the
   revisions of materialized parent inputs. The old native receipt could give
   different bounded inputs one ID. It could also keep a child ID unchanged

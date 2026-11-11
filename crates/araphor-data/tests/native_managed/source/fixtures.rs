@@ -298,9 +298,8 @@ pub(super) fn publish(
         selected: &output.datasets[0],
         selected_schema: &attempt.instance().spec.manifest.selected_schema,
     };
-    let packet = packet(scope(), attempt.request().time_utc_ns);
     store
-        .commit_managed_graph(store.prepare_managed(&input)?, Some(packet), || {
+        .commit_managed_graph(store.prepare_managed(&input)?, || {
             if reject {
                 Err(Code::Denied.error("test guard"))
             } else {
@@ -308,51 +307,6 @@ pub(super) fn publish(
             }
         })
         .map(|(receipt, _)| receipt)
-}
-
-pub(crate) fn packet(scope: ProcessorScopeV1, time: u64) -> GraphCommit {
-    let metadata = GraphManifest {
-        schema_version: araphor_data::GRAPH_SCHEMA_VERSION,
-        scope: scope.clone(),
-        first_cursor: 1,
-        last_cursor: 1,
-        input_manifest: GraphRevisionV1 {
-            evidence: Vec::new(),
-            coverage: Vec::new(),
-            context: Vec::new(),
-            missing_ranges: Vec::new(),
-        },
-        facts: Vec::new(),
-        packages: Vec::new(),
-        missing_ranges: Vec::new(),
-        input_positions: Vec::new(),
-        previous_result_id: None,
-        context_notice_revision: 0,
-        witness_deadline_utc_ns: 2000,
-    };
-    GraphCommit {
-        input_proof: None,
-        request: AnalysisResultCommitV1 {
-            scope: scope.clone(),
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "unused".into(),
-            body: Vec::new(),
-            created_utc_ns: time,
-            witnesses: Vec::new(),
-            context_refs: Vec::new(),
-        },
-        metadata,
-        contexts: Vec::new(),
-        proofs: Vec::new(),
-        record_proofs: Vec::new(),
-        sources: Vec::new(),
-        removed: Vec::new(),
-        advance: true,
-        expire: false,
-    }
 }
 
 pub(super) fn records(cursors: &[u64]) -> Vec<DiscoveryRecordIdV1> {

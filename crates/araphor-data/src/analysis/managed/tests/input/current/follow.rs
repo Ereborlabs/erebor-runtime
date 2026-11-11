@@ -101,7 +101,7 @@ fn graph_reopen_uses_selected_call_subset() -> TestResult {
     let attempt = graph
         .store
         .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-    let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+    let receipt = publish(&graph, &fixture, &captured, &attempt)?;
     assert_eq!(receipt.results.len(), 3);
     assert!(receipt.results.contains_key(&13));
     assert!(!receipt.results.contains_key(&12));
@@ -135,7 +135,7 @@ fn graph_reopen_rejects_corruption() -> TestResult {
         let attempt = graph
             .store
             .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-        let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+        let receipt = publish(&graph, &fixture, &captured, &attempt)?;
         let result = receipt.graph.as_ref().ok_or("Graph result absent")?;
         graph.store.verify_state()?;
         {
@@ -217,7 +217,7 @@ fn graph_publication_requires_a_graph_producer() -> TestResult {
         .store
         .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
     let before = fixture.commit_state(&graph.store)?;
-    let error = publish(&graph, &fixture, &captured, &attempt, None)
+    let error = publish(&graph, &fixture, &captured, &attempt)
         .err()
         .ok_or("Graph publication without a producer succeeded")?;
     assert!(matches!(
@@ -374,7 +374,6 @@ fn publish(
     fixture: &Fixture,
     captured: &ManagedCapture,
     attempt: &ManagedAttempt,
-    source_revision: Option<u64>,
 ) -> TestResult<ManagedReceipt> {
     let mut evaluations = vec![
         fixture.evaluation(attempt.request(), 10, Some(captured))?,
@@ -411,30 +410,17 @@ fn publish(
         name: "selected".into(),
         batches: outputs[0].datasets[0].batches.clone(),
     };
-    let mut sources = captured.contract.sources.clone();
-    if let Some(revision) = source_revision {
-        sources.first_mut().ok_or("source guard absent")?.1 = revision;
+    for record in &graph.snapshot.input_manifest.evidence {
+        let page = graph
+            .store
+            .read_page(&record.stream, record.durable_cursor)?;
+        let observed = page
+            .records
+            .into_iter()
+            .find(|observed| observed.cursor == record.durable_cursor)
+            .ok_or("Graph fixture journal record absent")?;
+        assert!(observed.position.commit_revision <= attempt.captured_revision());
     }
-    let mut request = graph.request.clone();
-    request.body.clear();
-    let mut metadata = crate::analysis::graph::GraphManifest::from_snapshot(&graph.snapshot);
-    metadata.input_positions = metadata
-        .input_manifest
-        .evidence
-        .iter()
-        .map(|record| -> TestResult<_> {
-            let page = graph
-                .store
-                .read_page(&record.stream, record.durable_cursor)?;
-            let observed = page
-                .records
-                .into_iter()
-                .find(|observed| observed.cursor == record.durable_cursor)
-                .ok_or("Graph fixture journal record absent")?;
-            assert!(observed.position.commit_revision <= attempt.captured_revision());
-            Ok((record.clone(), observed.position))
-        })
-        .collect::<TestResult<_>>()?;
     let (receipt, result) = graph.store.commit_managed_graph(
         graph.store.prepare_managed(&ManagedCommit {
             control: &crate::AnalysisReadControl::default(),
@@ -446,18 +432,6 @@ fn publish(
             selected: &selected,
             selected_schema: &fixture.model.outputs[0].schema,
         })?,
-        Some(crate::analysis::graph::GraphCommit {
-            input_proof: None,
-            request,
-            metadata,
-            contexts: Vec::new(),
-            proofs: Vec::new(),
-            record_proofs: Vec::new(),
-            sources,
-            removed: Vec::new(),
-            advance: true,
-            expire: false,
-        }),
         || Ok(()),
     )?;
     assert_eq!(
@@ -484,7 +458,7 @@ fn graph_follow_retains_prefix() -> TestResult {
             if !before_admission {
                 append(&graph, same_source)?;
             }
-            let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+            let receipt = publish(&graph, &fixture, &captured, &attempt)?;
             assert!(receipt.commit_revision > captured.revision());
             assert_eq!(
                 fixture.current(&graph.store)?.progress,
@@ -589,7 +563,6 @@ fn graph_empty_step_has_no_publication() -> TestResult {
             selected: &selected,
             selected_schema: &fixture.model.outputs[0].schema,
         })?,
-        None,
         || Ok(()),
     )?;
     assert!(receipt.results.is_empty());
@@ -644,7 +617,7 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
         let attempt = graph
             .store
             .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-        let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+        let receipt = publish(&graph, &fixture, &captured, &attempt)?;
         let original = receipt.graph.as_ref().ok_or("Graph publication")?;
         let mut request = graph.request.clone();
         request.body.clear();
@@ -839,7 +812,7 @@ fn finite_graph_rejects_changes() -> TestResult {
                         .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
                 append(&graph, same_source)?;
                 let before = fixture.commit_state(&graph.store)?;
-                let error = publish(&graph, &fixture, &captured, &attempt, None)
+                let error = publish(&graph, &fixture, &captured, &attempt)
                     .err()
                     .ok_or("finite stale publication succeeded")?;
                 assert!(matches!(
@@ -945,23 +918,8 @@ fn graph_follow_rejects_future() -> TestResult {
     ));
     assert_eq!(fixture.commit_state(&graph.store)?, before);
     captured.contract.sources = original;
-    let attempt = graph
+    let _attempt = graph
         .store
         .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-    let before = fixture.commit_state(&graph.store)?;
-    let error = publish(
-        &graph,
-        &fixture,
-        &captured,
-        &attempt,
-        Some(before.meta.commit_revision + 1),
-    )
-    .err()
-    .ok_or("future Graph publication succeeded")?;
-    assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::AnalysisConflict { .. })
-    ));
-    assert_eq!(fixture.commit_state(&graph.store)?, before);
     Ok(())
 }

@@ -383,19 +383,11 @@ pub(super) fn publish(
             Ok(())
         }
     };
-    if let ManagedDestination::Graph { source, .. } = &attempt.instance().spec.destination {
-        let scope = araphor_data::ProcessorScopeV1 {
-            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
-            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
-            identity: source.clone(),
-        };
-        Ok(store
-            .commit_managed_graph(
-                prepared,
-                Some(super::source::packet(scope, attempt.request().time_utc_ns)),
-                check,
-            )?
-            .0)
+    if matches!(
+        attempt.instance().spec.destination,
+        ManagedDestination::Graph { .. }
+    ) {
+        Ok(store.commit_managed_graph(prepared, check)?.0)
     } else {
         Ok(store.commit_managed(prepared, check)?)
     }

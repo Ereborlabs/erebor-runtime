@@ -6,6 +6,8 @@ use araphor_data::{
 
 #[path = "read/damage.rs"]
 mod damage;
+#[path = "read/proofs.rs"]
+mod proofs;
 
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct Manifest {

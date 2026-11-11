@@ -41,7 +41,6 @@ impl NativeStore {
     pub fn commit_managed_graph(
         &self,
         prepared: super::super::PreparedManagedCommit<'_>,
-        packet: Option<crate::GraphCommit>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<(ManagedReceipt, Option<crate::AnalysisResultReceiptV1>)> {
         if !matches!(
@@ -52,9 +51,6 @@ impl NativeStore {
             }
         ) {
             return Err(Code::Invalid.error("managed source publication destination"));
-        }
-        if packet.is_some() != prepared.source.is_some() {
-            return Err(Code::Incomplete.error("managed source selection receipt"));
         }
         let cursor = prepared.source.as_ref().map(|source| source.selection.last);
         self.commit_managed_projection(prepared, |_, _, _, _| Ok(()), check)

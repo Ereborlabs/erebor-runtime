@@ -54,7 +54,7 @@ pub use analysis::{
     AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1,
     ContextSensitivityV1, CoverageChanges, CoverageRecord, CoverageReportRef,
-    EvidenceRetentionOwner, EvidenceStoreOutcomeV1, GraphCommit, GraphManifest, InputSubscription,
+    EvidenceRetentionOwner, EvidenceStoreOutcomeV1, GraphManifest, InputSubscription,
     ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
     RetentionLimitsV1, RetentionStepV1, SegmentFile, Selection, StorageHealthV1, StorageUsageV1,
     StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceOutputPageV1,

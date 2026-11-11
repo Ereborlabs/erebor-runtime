@@ -4,10 +4,9 @@ use araphor_data::{
         native::{ManagedCommit, ManagedReturn},
         PackageResultRefV1,
     },
-    AnalysisExtractLimits, AnalysisResultCommitV1, DiscoveryCoverageStateV1, DiscoveryCoverageV1,
-    DiscoveryRecordIdV1, DiscoveryRecordV1, GraphCommit, GraphFactV1, GraphFactValueV1,
-    GraphManifest, GraphReplayInputV1, GraphRevisionV1, ManagedAttempt, ManagedGraphOperation,
-    ProcessorClassV1, ProcessorScopeV1,
+    AnalysisExtractLimits, DiscoveryCoverageStateV1, DiscoveryCoverageV1, DiscoveryRecordIdV1,
+    DiscoveryRecordV1, GraphFactV1, GraphFactValueV1, GraphReplayInputV1, GraphRevisionV1,
+    ManagedAttempt, ManagedGraphOperation, ProcessorClassV1, ProcessorScopeV1,
 };
 use std::collections::BTreeSet;
 
@@ -20,7 +19,6 @@ mod read;
 
 #[path = "source/fixtures.rs"]
 mod fixtures;
-pub(super) use fixtures::packet;
 
 #[test]
 fn source_empty_gate() -> TestResult {
@@ -55,7 +53,7 @@ fn source_empty_gate() -> TestResult {
         selected_schema: &instance.spec.manifest.selected_schema,
     };
     let (receipt, progress) =
-        store.commit_managed_graph(store.prepare_managed(&input)?, None, || Ok(()))?;
+        store.commit_managed_graph(store.prepare_managed(&input)?, || Ok(()))?;
     assert!(receipt.graph.is_none());
     assert!(progress.is_none());
     assert!(store.processor_result(&scope())?.is_none());

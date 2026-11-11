@@ -4,6 +4,21 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [Graph conversion](../../crates/araphor-analysis/src/graph/native/commit.rs)
+with the [managed sink](../../crates/araphor-analysis/src/instance/sink.rs)
+and [native publication](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs).
+Conversion keeps source identity, returned-call identity, sealed input selection,
+progress, completion, and deadline checks. Its memory reservations remain held
+through the Data commit. Data derives publication and consumed progress from
+the prepared native source. The unused SQL-era `GraphCommit` packet and its
+exports, UUID, and fixture builders are removed. No replacement packet is added.
+The [native position case](../../crates/araphor-data/tests/native_managed/source/read/proofs.rs)
+rejects future and swapped record positions after admission. Each rejection
+preserves all native Data records, metadata, and the original journal head.
+The same attempt then commits valid input. Public reads check consumed cursor
+two and both retained record keys. The old private capture-tamper assertion
+remains in its unit fixture; that target still needs its native fixture port.
+
 The [native managed call cases](../../crates/araphor-data/tests/native_managed/storage/calls.rs)
 replace four old lifecycle cases. Read the shared
 [storage fixture](../../crates/araphor-data/tests/native_managed/storage.rs)

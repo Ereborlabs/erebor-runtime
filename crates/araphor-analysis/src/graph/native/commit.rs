@@ -1,8 +1,6 @@
 use std::sync::{Arc, Weak};
 
-use araphor_data::{
-    analysis::GraphCommit, AnalysisReadControl, AnalysisResultCommitV1, PackageErrorCodeV1 as Code,
-};
+use araphor_data::{AnalysisReadControl, PackageErrorCodeV1 as Code};
 use araphor_query::definition::ExecutionReceipt;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
@@ -10,7 +8,6 @@ use datafusion::execution::TaskContext;
 use super::{GraphPublication, GraphRun, Projection};
 
 pub(crate) struct GraphConversion {
-    pub(crate) packet: GraphCommit,
     pub(crate) completed: bool,
     pub(crate) deadline: u64,
     pub(crate) expired: bool,
@@ -22,7 +19,6 @@ impl GraphPublication {
         &self,
         context: &TaskContext,
         receipt: &ExecutionReceipt,
-        result_id: String,
         control: &AnalysisReadControl,
     ) -> araphor_query::Result<GraphConversion> {
         control.check()?;
@@ -62,7 +58,7 @@ impl GraphPublication {
                     .ok_or_else(|| Code::Incomplete.error("source input selection"))
             })
             .map_err(|source| araphor_query::Error::Sql { source })?;
-        let (consumed, _, accepted, coverage) = captured
+        let (_, _, accepted, _) = captured
             .progress
             .ok_or_else(|| Code::Invalid.error("source publication progress"))?;
         let deadline = captured.metadata.witness_deadline_utc_ns;
@@ -70,31 +66,7 @@ impl GraphPublication {
         if !selection.expired() {
             Projection::check_deadline(deadline)?;
         }
-        let packet = GraphCommit {
-            input_proof: selection.prefix().cloned(),
-            request: AnalysisResultCommitV1 {
-                scope: captured.metadata.scope.clone(),
-                expected_cursor: consumed,
-                consumed_cursor: last.max(consumed),
-                coverage_revision: coverage,
-                context_revision: 0,
-                result_id,
-                body: Vec::new(),
-                created_utc_ns: source.time_utc_ns(),
-                witnesses: Vec::new(),
-                context_refs: Vec::new(),
-            },
-            metadata: captured.metadata,
-            contexts: Vec::new(),
-            proofs: Vec::new(),
-            record_proofs: Vec::new(),
-            removed: Vec::new(),
-            sources: Vec::new(),
-            advance: last > consumed,
-            expire: false,
-        };
         Ok(GraphConversion {
-            packet,
             completed: last >= accepted,
             deadline,
             expired: selection.expired(),
