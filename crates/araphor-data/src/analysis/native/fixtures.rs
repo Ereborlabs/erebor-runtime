@@ -37,7 +37,7 @@ impl NativeStore {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(in crate::analysis) fn crash_path(root: &Path, point: &str) {
         if std::env::var("ARAPHOR_CRASH_POINT").as_deref() == Ok(point)
             && std::env::var_os("ARAPHOR_CRASH_ROOT").is_some_and(|value| Path::new(&value) == root)

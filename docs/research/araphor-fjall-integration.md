@@ -42,6 +42,12 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Native backup and restore now have process-exit checks at eight actual
+  durability boundaries. Three focused tests pass in 1.47 seconds. They check
+  exact raw pages and native context state, final backup publication, incomplete
+  restore rejection, recovery epochs, source readiness, and unchanged backup
+  files. The replaced SQL backup and restore crash cases are removed. Read
+  `output/araphor-fjall-migration-20261110/native-crash-final.log`.
 - Commit `abdc4694e` contains the connected production cutover. Its qualification
   uses native format 9. The package-row replacement keeps metadata in `P`,
   and the original artifact body has a disjoint same-ID

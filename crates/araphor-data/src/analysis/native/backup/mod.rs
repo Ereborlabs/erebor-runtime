@@ -13,9 +13,9 @@ use crate::{
     NativeStorageSnafu, Result,
 };
 
+mod budget;
 mod files;
 mod restore;
-mod budget;
 use budget::BackupBudget;
 
 impl NativeStore {
@@ -79,7 +79,10 @@ impl NativeStore {
         self.check()?;
         self.require_capacity(true)?;
         let create_parent = match fs::symlink_metadata(parent) {
-            Ok(_) => { Self::private_directory(parent)?; false }
+            Ok(_) => {
+                Self::private_directory(parent)?;
+                false
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
             Err(source) => return Err(source).context(IoSnafu { path: parent }),
         };
@@ -91,6 +94,8 @@ impl NativeStore {
         })?;
         self.seal_raw()?;
         let view = self.view()?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "backup.sealed");
         let raw = self.raw.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "raw owner lock",
@@ -135,7 +140,10 @@ impl NativeStore {
         let mut budget = BackupBudget::new(self, manifest)?;
         budget.check(3 + usize::from(create_parent))?;
         if create_parent {
-            fs::DirBuilder::new().mode(0o700).create(parent).context(IoSnafu { path: parent })?;
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(parent)
+                .context(IoSnafu { path: parent })?;
             Self::sync_directory(&self.root)?;
         }
         let staged = tempfile::Builder::new()
@@ -145,20 +153,27 @@ impl NativeStore {
             .context(IoSnafu { path: parent })?;
         let engine = staged.path().join("fjall");
         let mut denied = None;
-        let exported = self.database
-            .checkpoint_with(&engine, |path, bytes| budget.admit(&engine, path, bytes).map_err(|error| {
-                denied = Some(error);
-                std::io::Error::other("checkpoint admission refused")
-            }))
+        let exported = self
+            .database
+            .checkpoint_with(&engine, |path, bytes| {
+                budget.admit(&engine, path, bytes).map_err(|error| {
+                    denied = Some(error);
+                    std::io::Error::other("checkpoint admission refused")
+                })
+            })
             .inspect_err(|_| {
                 if self.database.inner().is_poisoned() {
                     self.poison();
                 }
             });
-        if let Some(error) = denied { return Err(error); }
+        if let Some(error) = denied {
+            return Err(error);
+        }
         exported.context(NativeStorageSnafu {
-                operation: "export native checkpoint",
-            })?;
+            operation: "export native checkpoint",
+        })?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "backup.exported");
         let database_files = Self::checkpoint_files(&engine, true)?;
         let database_bytes = database_files
             .iter()
@@ -169,10 +184,23 @@ impl NativeStore {
                 }
                 .build()
             })?;
-        budget.manifest.database_files.sort_unstable_by(|left, right| left.file_name.cmp(&right.file_name));
-        if database_files.iter().map(|file| (&file.file_name, file.bytes))
-            .ne(budget.manifest.database_files.iter().map(|file| (&file.file_name, file.bytes))) {
-            return NativeStateSnafu { field: "checkpoint admission inventory" }.fail();
+        budget
+            .manifest
+            .database_files
+            .sort_unstable_by(|left, right| left.file_name.cmp(&right.file_name));
+        if database_files
+            .iter()
+            .map(|file| (&file.file_name, file.bytes))
+            .ne(budget
+                .manifest
+                .database_files
+                .iter()
+                .map(|file| (&file.file_name, file.bytes)))
+        {
+            return NativeStateSnafu {
+                field: "checkpoint admission inventory",
+            }
+            .fail();
         }
         budget.check(2)?;
         let mut manifest = budget.manifest;
@@ -211,6 +239,8 @@ impl NativeStore {
         let usage = crate::StorageUsageV1::inspect(&self.root, 0, slots, Some(&raw), self.storage)?;
         self.storage.check_append(usage, reserve)?;
         drop(raw);
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "backup.synced");
         rustix::fs::renameat_with(
             rustix::fs::CWD,
             staged.path(),
@@ -221,6 +251,8 @@ impl NativeStore {
         .map_err(std::io::Error::from)
         .context(IoSnafu { path: destination })?;
         Self::sync_directory(parent)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "backup.published");
         Ok(manifest)
     }
 }

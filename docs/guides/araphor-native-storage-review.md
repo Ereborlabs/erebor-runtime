@@ -137,6 +137,15 @@ Restore verifies store identity, raw receipts, history, and the committed cut
 before it clears that marker. It advances the recovery epoch. An existing
 DuckDB directory is rejected; it is not opened as an empty native database.
 
+[Native crash checks](../../crates/araphor-data/tests/native_crash.rs) terminate
+a child process at four backup and four restore boundaries. Only the final
+backup publication exposes a restorable target. An interrupted restore keeps
+its pending marker and rejects repeated opens. A complete restore advances the
+recovery epoch once. The checks compare exact raw pages, native contexts,
+source metadata, and every file listed in the backup manifest. They also check
+backup retry after later input. The three focused tests pass in 1.47 seconds.
+The old SQL backup and restore crash tests are removed.
+
 ## Verification and limits
 
 - The focused native lifecycle suite passes six cases. It covers raw recovery,
