@@ -39,10 +39,24 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs measure durable creation below 100 ms. The measured gain against DuckDB is 6.45 to 7.36 fold. The 100-fold target is not met. |
+| Performance | Matched release runs at `d429b0d08` measure durable creation below 100 ms. The measured gain against DuckDB is 6.70 to 7.30 fold. The 100-fold target is not met. |
 
 Current evidence:
 
+- The connected release at `d429b0d08` passes two opposite-order incident
+  pairs against the saved successful DuckDB release. Native durable creation
+  is 49.947–88.429 ms; DuckDB is 334.639–601.712 ms. Paired gains are
+  6.70–7.30 fold. Native public receipt is 59.273–123.986 ms; DuckDB is
+  396.252–702.923 ms. Whole-test time is 2.12–2.23 seconds native and
+  5.10–5.13 seconds DuckDB. Each run has 18 collector inputs, 16,384 bulk
+  rows, and three durable creations. The workload hashes, release profiles,
+  logging, and compiler-idle checks match. These runs meet the measured
+  sub-100 ms creation target. They do not meet the 100-fold target or prove
+  a sustained latency bound. The journal and resume corrections establish
+  lifecycle behavior; these pairs do not establish a new latency gain over
+  the preceding native version. Read
+  `output/araphor-fjall-migration-20261110/cdc-replacement-comparison.json` and
+  `cdc-replacement-provenance.json` in the same directory.
 - Ordinary Query now calls `subscribe_inputs_since` with its saved consumed
   position. A partial position uses the previous Data cut and replays the
   original commit; a whole-commit position starts after that cut. The existing

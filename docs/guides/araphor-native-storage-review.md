@@ -4,6 +4,13 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+The connected release at `d429b0d08` passes two matched incident pairs.
+Durable notification creation is 49.947–88.429 ms, a measured 6.70–7.30-fold
+gain against DuckDB. Public receipt is 59.273–123.986 ms. Whole-test time is
+2.12–2.23 seconds native and 5.10–5.13 seconds DuckDB. The 100-fold target
+remains **Not done**. These short pairs do not establish a sustained latency
+bound or a new gain from the journal/resume corrections alone.
+
 ## Reading order
 
 1. [Public Data exports](../../crates/araphor-data/src/analysis/mod.rs) select the
