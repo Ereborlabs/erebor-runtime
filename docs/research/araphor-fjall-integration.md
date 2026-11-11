@@ -42,6 +42,14 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- The release diagnostic with adjacent managed commit timers passes the
+  unchanged incident in 2.07 seconds. Durable creation is 51.461, 76.219,
+  and 86.388 ms; public receipt is 59.879, 88.493, and 102.181 ms. Nine
+  package commits have median Graph staging of 4.870 ms, validation of
+  1.885 ms, and durable commit of 1.001 ms. The eight inner timers sum to
+  the existing transaction-work interval. This is an unpaired diagnostic;
+  it establishes no new gain. Read
+  `output/araphor-fjall-migration-20261110/native-phases-breakdown.json`.
 - Four native coverage checks pass in 0.81 seconds. The bounded change case
   checks six exact reports, point reads, no-op retries, conflicting content,
   and rejected references with a changed Data revision. Native batches can

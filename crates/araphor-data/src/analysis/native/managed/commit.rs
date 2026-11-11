@@ -98,6 +98,7 @@ impl NativeStore {
             return Err(Code::Incomplete.error("managed witness lifetime"));
         }
         let segments = self.resolve_witnesses(&prepared.evidence.witnesses, tx.revision - 1)?;
+        let validated_at = std::time::Instant::now();
         let (mut packets, mut step, mut receipt) = ManagedReceipt::bind(
             input.attempt,
             input.completed,
@@ -143,6 +144,7 @@ impl NativeStore {
         step.origins = imported.history();
         step.proofs = imported.selected_proofs()?;
         step.source = imported.source_step(&mut prepared.derived)?;
+        let derived_at = std::time::Instant::now();
         let (owner, mut instance) = tx.complete_managed_attempt(input.attempt, &receipt)?;
         if input.attempt.switches_version() {
             for call in instance.spec.manifest.calls.keys() {
@@ -184,6 +186,7 @@ impl NativeStore {
             body: ResultBody::Selected(step),
         };
         let selected_id = tx.stage_result(&selected)?;
+        let results_at = std::time::Instant::now();
         for (id, record) in &records {
             tx.stage_result_references(
                 spec.tenant,
@@ -214,12 +217,14 @@ impl NativeStore {
         if prepared.graph.is_none() {
             tx.check_unwritten_expiry(input, &prepared.memory)?;
         }
+        let references_at = std::time::Instant::now();
         let pending = prepared
             .graph
             .take()
             .map(|graph| graph.stage(&mut tx, input, &receipt, &results, &mut prepared.memory))
             .transpose()?;
         tx.publish_managed_graph(input, &receipt, selected_id, &results, &mut prepared.memory)?;
+        let graph_at = std::time::Instant::now();
         if let Some(source) = prepared.source.take() {
             tx.publish_source(
                 input,
@@ -230,7 +235,9 @@ impl NativeStore {
                 &mut prepared.memory,
             )?;
         }
+        let source_at = std::time::Instant::now();
         let projected = projection(&mut tx, input, &receipt, &mut prepared.memory)?;
+        let projected_at = std::time::Instant::now();
         instance.spec = spec.clone();
         if instance.generation != input.attempt.0.capture.generation {
             instance.lifecycle = tx.revision;
@@ -293,6 +300,14 @@ impl NativeStore {
             publication_revision = receipt.selected.commit_revision,
             writer_acquire_s = acquired.duration_since(started).as_secs_f64(),
             transaction_work_s = prepared_at.duration_since(acquired).as_secs_f64(),
+            validation_s = validated_at.duration_since(acquired).as_secs_f64(),
+            derived_s = derived_at.duration_since(validated_at).as_secs_f64(),
+            results_s = results_at.duration_since(derived_at).as_secs_f64(),
+            references_s = references_at.duration_since(results_at).as_secs_f64(),
+            graph_s = graph_at.duration_since(references_at).as_secs_f64(),
+            source_s = source_at.duration_since(graph_at).as_secs_f64(),
+            projection_s = projected_at.duration_since(source_at).as_secs_f64(),
+            finalization_s = prepared_at.duration_since(projected_at).as_secs_f64(),
             commit_s = committed.duration_since(prepared_at).as_secs_f64(),
             elapsed_s = committed.duration_since(started).as_secs_f64(),
             "Managed commit timing completed"

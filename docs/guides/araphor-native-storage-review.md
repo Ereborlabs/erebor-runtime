@@ -61,6 +61,13 @@ owner. [Raw recovery](../../crates/araphor-data/src/analysis/native/recovery.rs)
 must preserve every acknowledged raw commit. Changed native metadata or engine
 poison requires reopen. A failed package attempt cannot advance consumed input.
 
+The existing post-commit timing event divides transaction work into validation,
+derived values, results, references, Graph staging, Source publication,
+projection, and final state. Adjacent timers cover that interval exactly.
+They change no operation order. The release incident diagnostic passes in
+2.07 seconds. Its largest inner phase is Graph staging at 4.870 ms median.
+Read the current worklist for the measured notification boundaries and limits.
+
 Ordinary Graph table projections do not require package state. Explicit complete
 snapshots require real package state. Traversal uses native node and adjacency
 indexes. One depth map spans the requested retained versions. Identity reads do
