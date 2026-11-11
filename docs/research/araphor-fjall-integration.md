@@ -69,7 +69,7 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Thirteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Matched release runs at `d429b0d08` measure durable creation below 100 ms. The measured gain against DuckDB is 6.70 to 7.30 fold. The 100-fold target is not met. |
+| Performance | Matched release runs at `eb2e5c16d` measure durable creation at 47.035–83.606 ms. The measured gain against DuckDB is 7.01 to 8.04 fold. The 100-fold target is not met. |
 
 Current evidence:
 
@@ -87,8 +87,15 @@ Current evidence:
   `profile-gap-before-valid.log`, `profile-gap-verified-proof.log`, and
   `profile-gap-final-native.log` under
   `output/araphor-fjall-migration-20261110`. Ten other legacy profile cases
-  remain. This parity change establishes no incident latency gain. The latest
-  paired incident timing still covers the preceding scoped-reader source.
+  remain. This parity change establishes no incident latency gain over the
+  preceding native source. Both current production incident pairs pass with
+  unchanged test and definition hashes. Creation measures 47.035–83.606 ms;
+  public receipt measures 55.053–99.452 ms. Whole-test time is 2.10–2.12 seconds.
+  Matched DuckDB creation measures 333.982–620.317 ms, with public receipt at
+  393.711–713.503 ms and whole-test time at 5.11–5.12 seconds. The paired
+  creation gain is 7.01–8.04 fold. The 100-fold target remains **Not done**.
+  Read `profile-parity-comparison.json` and `profile-parity-build.json` in the
+  same evidence directory.
 
 - Scoped native Graph reads are **Done** for retained property lookup.
   `Graph::scoped_view` reads one relation and one writer through five metadata

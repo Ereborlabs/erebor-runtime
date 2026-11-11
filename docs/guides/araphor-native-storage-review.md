@@ -353,8 +353,11 @@ pass, including later expiry, exact head conflicts, cancellation, and stamped
 corruption. The final native managed suite passes 108 cases in 2.34 seconds.
 Six native lifecycle cases pass in 0.14 seconds. The four legacy SQL gap cases
 are removed. Result: **Done for these gap contracts**. Ten other legacy profile
-cases and the complete replacement remain **Not done**. This source has no new
-incident timing measurement.
+cases and the complete replacement remain **Not done**. Both current production
+incident pairs pass. Durable creation measures 47.035–83.606 ms; public receipt
+measures 55.053–99.452 ms. Whole-test time is 2.10–2.12 seconds. The paired gain
+against DuckDB is 7.01–8.04 fold. This parity change establishes no latency gain
+over the preceding native source. The 100-fold target remains **Not done**.
 
 [Processor history](../../crates/araphor-data/tests/native_managed/progress/history.rs)
 walks the same processor key backward through native snapshots. Each stored
