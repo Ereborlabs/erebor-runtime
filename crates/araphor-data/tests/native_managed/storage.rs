@@ -8,6 +8,8 @@ use sdk::arrow_array::{StringArray, UInt64Array};
 
 #[path = "storage/calls.rs"]
 mod calls;
+#[path = "storage/output.rs"]
+mod output;
 #[path = "storage/terminal.rs"]
 mod terminal;
 
@@ -39,6 +41,20 @@ impl StorageFixture {
         store: &NativeStore,
         id: &str,
         description: String,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_scope(
+            store,
+            id,
+            description,
+            AnalysisSelectionV1::new([1; 16], Vec::new()),
+        )
+    }
+
+    fn new_scope(
+        store: &NativeStore,
+        id: &str,
+        description: String,
+        selection: AnalysisSelectionV1,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scalar = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let mut rows = sdk::Port::new("rows", scalar.clone());
@@ -100,7 +116,7 @@ impl StorageFixture {
             manifest: ManagedManifest { format: 1, planner: "datafusion-55/sql-call-1".into(), definition: revision, selected_schema: model.outputs[0].schema.clone(),
                 calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall { image: pin.clone(), package: image.bundle().root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value), increment => {increment}")], dependencies: Default::default() })).collect(),
             },
-        }, grant: PackageGrantV1 { principal: "fixture".into(), revision: 1, selection: AnalysisSelectionV1::new([1; 16], Vec::new()), expires_utc_ns: None, authorization_id: Some("definition-grant".into()) } };
+        }, grant: PackageGrantV1 { principal: "fixture".into(), revision: 1, selection, expires_utc_ns: None, authorization_id: Some("definition-grant".into()) } };
         Ok(Self {
             instance: fixture.admit(store)?,
             model,

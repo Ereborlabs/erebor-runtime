@@ -59,7 +59,8 @@ The current source uses the native Data owner through the public storage API.
 The connected replacement removes the SQL Data owner, SQL Graph backend,
 caller backend switches, DuckDB dependencies, and vendored DuckDB code.
 The default production release build and unchanged incident pass. SQL-only
-fixture ports, finite-history collection, and complete qualification remain open.
+fixture ports, reference-safe history maintenance, and complete qualification
+remain open.
 
 | Owner | Current work and completion proof |
 | --- | --- |
@@ -79,10 +80,46 @@ Remaining functional work:
 - Complete retained-history collection and recovery qualification. Native
   MVCC currently retains all history. Data startup validation still scans
   retained source memberships. Original journal collection is already active.
+  Derive the native history floor from retained references. Valid references
+  can keep that floor at zero. No age, size, or revision-count window is
+  authorized by this work or by storage quota removal.
 
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Eight native cases replace the complete old SQL result-reference family.
+  The native baseline passes five and fails three. Live selected
+  reads accepted swapped call bindings and changed dependency records.
+  Live reads now use the same dependency-set and per-call metadata checks as
+  startup. They check the selected result's native dependency prefix and use
+  point reads for its returned calls. No checkpoint or global history scan
+  is added. Scope checks still precede integrity checks. Startup retains its
+  deeper call, evidence, checkpoint, and full reference-index validation.
+  The native cases preserve historical schema, implementation pins, receipts,
+  cancellation, the last successful head, all seven corruption cases, and
+  all four dependency faults. Exact maps bind both selected dependencies to
+  their saved result and revision. Both replacement targets remain valid.
+  Reopen checks the exact native reference-index error, rather than a generic
+  open failure. The old file and its module declaration are removed.
+  All eight focused cases pass in 0.28 seconds. The focused Data run passes
+  149 managed, 18 raw, six lifecycle, and eight backup cases. All 15 native
+  Query integration cases pass in 7.28 seconds. Five native Analysis Instance
+  cases pass in 1.59 seconds; 13 notification cases pass in 0.33 seconds.
+  Data library test compilation still fails with 737 diagnostics from old
+  fixtures and removed APIs. These are compile diagnostics, not 737 established
+  production defects. The next fixture work repairs the shared native imports,
+  publication helper, and result inspection before the remaining SQL probes.
+  Read `native-selected-integrity-baseline.log`,
+  `native-selected-integrity-after.log`, and
+  `native-selected-integrity-contracts.log`,
+  `native-selected-integrity-query.log`,
+  `native-selected-integrity-analysis.log`, and
+  `native-selected-integrity-lib.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for live selected metadata parity and result-reference
+  fixture retirement**. Complete migration qualification and incident
+  performance remain **Not done**. No new incident timing is measured.
 
 - Nine native cases replace the complete old SQL terminal family. They check
   claim ownership, failure guards, lifecycle and activation, five corruption

@@ -12,7 +12,7 @@ fn native_request(id: &str) -> ManagedRequest {
     input
 }
 
-fn capture_target(
+pub(super) fn capture_target(
     store: &NativeStore,
     current: &ManagedInstance,
     target: &ManagedInstance,
@@ -43,7 +43,7 @@ fn capture_target(
         .state)
 }
 
-fn attempt_record(
+pub(super) fn attempt_record(
     view: &DataView,
     id: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {

@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use super::{results::ResultBody, results::StoredResult, CallHead, InstanceRecord, Records};
 use crate::analysis::native::{DataView, NativeStore};
-use crate :: { AnalysisReadControl , InstanceResultKindV1 , InstanceResultV1 , ManagedAttempt , ManagedInstance , ManagedSpec , PackageErrorCodeV1 as Code , Result } ;
+use crate::{
+    AnalysisReadControl, InstanceResultKindV1, InstanceResultV1, ManagedAttempt, ManagedInstance,
+    ManagedSpec, PackageErrorCodeV1 as Code, Result,
+};
 
 impl NativeStore {
     pub fn managed_changes(
@@ -160,7 +163,7 @@ impl NativeStore {
         if view.store_uuid != self.view()?.store_uuid {
             return Err(Code::Conflict.error("managed result store"));
         }
-        let (_, stored) = StoredResult::load(
+        let (id, stored) = StoredResult::load(
             instance.spec.tenant,
             name,
             |key| Records::read(key, &view.snapshot),
@@ -193,6 +196,24 @@ impl NativeStore {
         stored.check_identity(instance.spec.tenant, name, view.metadata_revision)?;
         stored.check(&attempt.0, &attempt.1.spec)?;
         self.check_captured_progress(&attempt.0.capture)?;
+        if let ResultBody::Selected(step) = &stored.body {
+            step.check_dependencies(&attempt.0)?;
+            view.check_dependencies(id, instance.spec.tenant, &step.dependencies, control)
+                .map_err(|error| match error {
+                    crate::Error::Package {
+                        code: Code::Conflict,
+                        field: "managed change owner",
+                        ..
+                    } => Code::Invalid.error("managed selected edges"),
+                    error => error,
+                })?;
+            let receipt = attempt
+                .receipt()
+                .ok_or_else(|| Code::Missing.error("managed result receipt"))?;
+            for (call, reference) in &receipt.results {
+                view.selected_call(&attempt.0, &attempt.1.spec, *call, reference, control)?;
+            }
+        }
         let current = match &stored.body {
             ResultBody::Call(_) => {
                 view.managed_current(&instance.spec, &stored, &attempt, now, control)?

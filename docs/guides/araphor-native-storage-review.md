@@ -4,6 +4,29 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [selected result reads](../../crates/araphor-data/src/analysis/native/managed/read.rs)
+with [recovery metadata checks](../../crates/araphor-data/src/analysis/native/managed/result_recovery.rs)
+and the [eight result-reference cases](../../crates/araphor-data/tests/native_managed/storage/output.rs).
+The live read checks scope before integrity. A selected read checks its saved
+dependency set, its exact native dependency prefix, and each returned call by
+point lookup. Each call must bind the saved instance, attempt, call ID, result
+revision, and receipt revision. The same helper serves startup. Live metadata
+reads do not load checkpoint records. Startup retains its deeper call and
+evidence checks and its full reference-index check. Native proof preserves
+errors from scope checks, historical schema, receipt pins, exact dependency maps,
+valid replacement targets, unchanged Call reads after edge faults, and exact
+native reopen errors. The reproduced baseline passes five cases and fails
+three; the correction passes all eight. The old SQL result-reference family
+and its module declaration are removed. Final focused proof passes 149 managed,
+18 raw, six lifecycle, eight backup, 15 native Query, five native Instance, and
+13 notification cases. The final Data library test compile still fails with
+737 diagnostics from old fixtures and removed APIs. Read
+`native-selected-integrity-contracts.log`,
+`native-selected-integrity-query.log`,
+`native-selected-integrity-analysis.log`, and
+`native-selected-integrity-lib.log` under
+`output/araphor-fjall-migration-20261110`.
+
 Read [startup settlement](../../crates/araphor-data/src/analysis/native/managed/terminal.rs)
 with the [candidate-promotion case](../../crates/araphor-data/tests/native_managed/storage/terminal.rs).
 The outcome index has one entry for each owner and terminal revision. Startup
@@ -25,8 +48,9 @@ and selected results. Both stores reopen after the source commits its 22 and
 33 outputs. Restore keeps its earlier 2 and 3 outputs. Full Data records,
 metadata, and history remain exact. The old terminal file and module
 declaration are removed; other old fixtures remain. The focused run passes
-141 managed, 18 raw, six lifecycle, and eight backup cases. Data library test
-compilation still has 776 diagnostics from old fixtures and removed APIs.
+141 managed, 18 raw, six lifecycle, and eight backup cases. At that source state,
+Data library test compilation has 776 diagnostics from old fixtures and
+removed APIs. The later result-reference retirement is recorded above.
 Read `native-terminal-retirement-contracts.log` and
 `native-terminal-retirement-lib.log` under
 `output/araphor-fjall-migration-20261110`.

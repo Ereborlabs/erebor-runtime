@@ -2,10 +2,18 @@ use std::{collections::BTreeMap, ops::RangeBounds as _};
 
 use snafu::ResultExt as _;
 
-use super::{results::ResultBody, Records};
+use super::{
+    results::{ResultBody, StoredResult},
+    Records,
+};
 use crate::analysis::managed::{Attempt, Record, Step};
 use crate::analysis::native::{DataView, NativeStore};
-use crate :: { AnalysisContextRefV1 , AnalysisReadControl , AnalysisWitnessV1 , ManagedDestination , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
+use crate::analysis::PackageResultRefV1;
+use crate::ManagedSpec;
+use crate::{
+    AnalysisContextRefV1, AnalysisReadControl, AnalysisWitnessV1, ManagedDestination,
+    NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
+};
 
 impl DataView {
     pub(super) fn validate_success(&self, attempt: &Attempt) -> Result<()> {
@@ -43,28 +51,15 @@ impl DataView {
             _ => return Err(Code::Invalid.error("managed success destination")),
         }
         self.check_step_evidence(attempt, step, spec)?;
-        let mut expected = attempt.capture.dependencies.clone();
-        expected.extend(receipt.results.values().cloned());
-        expected.sort_by(|left, right| left.result_id.cmp(&right.result_id));
-        expected.dedup();
-        if step.dependencies != expected {
-            return Err(Code::Invalid.error("managed selected dependencies"));
-        }
+        step.check_dependencies(attempt)?;
         let mut derived = Vec::new();
         let mut origins = BTreeMap::new();
         let mut proofs = BTreeMap::new();
         for (call, reference) in &receipt.results {
-            let (id, stored, saved) =
-                self.result_owner(tenant, &reference.result_id, &control, &mut |_| Ok(()))?;
+            let (id, stored) = self.selected_call(attempt, spec, *call, reference, &control)?;
             let ResultBody::Call(record) = &stored.body else {
                 return Err(Code::Invalid.error("managed success call body"));
             };
-            if saved.0 != *attempt
-                || record.call != *call
-                || stored.revision != receipt.commit_revision
-            {
-                return Err(Code::Invalid.error("managed selected call binding"));
-            }
             self.check_call_record(id, attempt, record, step, spec)?;
             derived = crate::AnalysisContextRefV1::join(&derived, &record.derived)?;
             for origin in &record.origins {
@@ -109,6 +104,45 @@ impl DataView {
             return Err(Code::Invalid.error("managed derived evidence union"));
         }
         Ok(())
+    }
+
+    pub(super) fn selected_call(
+        &self,
+        attempt: &Attempt,
+        spec: &ManagedSpec,
+        call: u64,
+        reference: &PackageResultRefV1,
+        control: &AnalysisReadControl,
+    ) -> Result<(u64, StoredResult)> {
+        control.check()?;
+        let (id, stored) = StoredResult::read(
+            attempt.capture.tenant,
+            &reference.result_id,
+            self.metadata_revision,
+            |key| Records::read(key, &self.snapshot),
+            &mut |_| control.check(),
+        )?
+        .ok_or_else(|| Code::Missing.error("managed result"))?;
+        let ResultBody::Call(record) = &stored.body else {
+            return Err(Code::Invalid.error("managed success call body"));
+        };
+        let receipt = attempt
+            .receipt
+            .as_ref()
+            .ok_or_else(|| Code::Missing.error("managed success receipt"))?;
+        if stored.owner()
+            != (
+                attempt.capture.instance.as_str(),
+                attempt.request.id.as_str(),
+            )
+            || record.call != call
+            || stored.revision != reference.commit_revision
+            || stored.revision != receipt.commit_revision
+        {
+            return Err(Code::Invalid.error("managed selected call binding"));
+        }
+        stored.check(attempt, spec)?;
+        Ok((id, stored))
     }
 
     fn check_step_evidence(
@@ -273,8 +307,28 @@ impl DataView {
     }
 }
 
+impl Step {
+    pub(super) fn check_dependencies(&self, attempt: &Attempt) -> Result<()> {
+        let receipt = attempt
+            .receipt
+            .as_ref()
+            .ok_or_else(|| Code::Missing.error("managed success receipt"))?;
+        let mut expected = attempt.capture.dependencies.clone();
+        expected.extend(receipt.results.values().cloned());
+        expected.sort_by(|left, right| left.result_id.cmp(&right.result_id));
+        expected.dedup();
+        if self.dependencies != expected {
+            return Err(Code::Invalid.error("managed selected dependencies"));
+        }
+        Ok(())
+    }
+}
+
 impl NativeStore {
-    pub(in crate::analysis::native) fn validate_result_recovery(&self, counts: &mut super::super::capacity::RevisionCounts) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_result_recovery(
+        &self,
+        counts: &mut super::super::capacity::RevisionCounts,
+    ) -> Result<()> {
         let current = self.view()?;
         let control = AnalysisReadControl::default();
         let mut expected_results = BTreeMap::new();

@@ -22,7 +22,6 @@ mod journal;
 mod lifecycle;
 mod memory;
 mod metadata;
-mod output;
 mod removal;
 mod renewal;
 mod replay;
