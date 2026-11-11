@@ -22,6 +22,12 @@ Read the [current worklist](../research/araphor-fjall-integration.md#current-rep
 for the failure-first regression and qualification limits. The separate private
 verifier fixture port remains open. No new latency gain is measured by these checks.
 
+The fifteen old package catalogue/image cases are replaced by sixteen native
+cases. The positive dependency-order case remains valid after reopen. Public
+package reads retain reader admission and cancellation. The 33 MiB artifact
+workload and the existing failure assertions remain. Read the same worklist
+for exact checks. Private verifier and witness ports remain open.
+
 ## Production integration status, 2026-11-09
 
 The active user goal approves the complete production migration described in

@@ -231,11 +231,11 @@ retain mixed implementations, native dependency order, exact bytes, malformed
 archives and payload slots, every fixture payload slot, and standalone external
 dependencies. [Bundle OCI tests](../../crates/araphor-package/src/oci/tests.rs)
 retain a fixed prechange manifest digest and archive length.
-[Descriptor agreement tests](../../crates/araphor-data/src/analysis/packages/tests.rs)
+[Descriptor agreement tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests.rs)
 check the decode error, install rollback, and rejection after reopen.
 [Revision tests](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/package/lifecycle/revisions.rs)
 retain immutable retry, changed-content rejection, reopen, and a 33 MiB artifact.
-[Package quota tests](../../crates/araphor-data/src/analysis/packages/tests.rs)
+[Package quota tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests.rs)
 retain charges from actual stored descriptor and artifact lengths.
 [Backup tests](../../crates/araphor-data/src/analysis/backup.rs) retain restore
 and malformed-input checks. [Graph recovery tests](https://github.com/Ereborlabs/erebor-runtime/blob/6a25ba1b34dbaa0a553b1883058938683ce7aaab/crates/araphor-analysis_back/src/graph/tests/storage_recovery.rs)
@@ -244,7 +244,7 @@ artifact-qualified tests; opaque buffer round trips do not prove execution.
 
 [Image contract tests](../../crates/araphor-package/src/tests.rs) retain typed
 inputs and outputs, parameters, checkpoint declarations, reasons, native
-dependencies, and fixture buffers. [Image storage tests](../../crates/araphor-data/src/analysis/packages/tests/image.rs)
+dependencies, and fixture buffers. [Image storage tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests/image.rs)
 cover atomic installation, exact retries, collection, tenants, revision reads,
 reopen, and digest rejection. [Control image tests](../../crates/mithril-control/src/client_grpc/tests/packages.rs)
 cover the authenticated image request and inspection path. These links name

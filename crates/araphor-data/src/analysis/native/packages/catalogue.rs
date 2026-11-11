@@ -66,10 +66,12 @@ impl PackageHeader {
         )?
         .ok_or_else(missing)?;
         let bytes = Records::payload(&Self::key(id), &mut get)?.ok_or_else(missing)?;
-        let saved: Self = Records::decode(&bytes)?;
-        let expected = Self::from_package(package, revision, |identity| {
+        let mut saved: Self = Records::decode(&bytes)?;
+        let mut expected = Self::from_package(package, revision, |identity| {
             Records::find(identity, &mut get)?.ok_or_else(missing)
         })?;
+        saved.dependencies.sort_unstable();
+        expected.dependencies.sort_unstable();
         if saved != expected {
             return Err(missing());
         }

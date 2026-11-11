@@ -1971,7 +1971,7 @@ The [Wasm Graph case](../../crates/araphor-analysis/src/graph/tests/execution.rs
 executes Process, Credentials and Kubernetes components through native Query
 plans. The [Discovery corpus cases](../../crates/araphor-analysis/src/discovery/output/tests/baseline.rs)
 execute the original atoms, merge, groups and compare exports. The
-[Data image cases](../../crates/araphor-data/src/analysis/packages/tests/image.rs)
+[Data image cases](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests/image.rs)
 check complete closure, rollback, authority, exact revisions and tenant isolation.
 The [public install case](../../crates/mithril-control/src/client_grpc/tests/packages.rs)
 checks authenticated image installation without execution.
@@ -3757,7 +3757,7 @@ checks validate physical payload bindings.
 
 [Inert admission assertions](../../crates/araphor-data/src/analysis/mod.rs)
 count nine execution relations at the test boundary. The
-[image tests](../../crates/araphor-data/src/analysis/packages/tests/image.rs) and
+[image tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests/image.rs) and
 [definition tests](../../crates/araphor-data/src/analysis/definitions/tests.rs)
 use this assertion and retain their artifact, tenant, digest, retry, and
 recovery checks. No production inspection API is added.

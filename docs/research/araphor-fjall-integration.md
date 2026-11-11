@@ -43,6 +43,21 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Sixteen native catalogue/image cases pass in 13.85 seconds and replace
+  fifteen old SQL cases. The retained dependency-order regression first fails
+  on reopen. `PackageHeader::check` now sorts only its temporary ID vectors
+  before comparison. Reopen preserves the reordered stored vector and exact
+  image digest. The nine malformed-row branches keep their exact status,
+  retry, and source errors. Public package revision and image reads use one
+  configured reader permit and one view. Sixteen occupied slots, cancellation
+  priority, and full permit release pass. The unchanged 33 MiB artifact,
+  shared and explicit dependency uninstall, definition roots, reinstall,
+  backup, and no-execution assertions pass. The separate private verifier and
+  witness fixtures remain open. These changes establish no new incident gain.
+  After old fixture removal, all 22 native context cases pass in 34.59 seconds
+  and all 26 native package cases pass in 14.03 seconds. Existing warnings remain.
+  Read `output/araphor-fjall-migration-20261110/package-order-before.log` and
+  `package-catalogue-final.log` in the same directory.
 - Five unused SQL storage files and five empty legacy package modules are
   removed. The production Data library passes `cargo check --offline -p
   araphor-data --lib` in 11.77 seconds. Existing warnings remain. The two

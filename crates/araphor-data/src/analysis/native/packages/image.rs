@@ -2,7 +2,11 @@ use araphor_discovery_definition::ImagePin;
 use serde::Deserialize;
 
 use super::{PackageRecord, PackageRevisionV1, Records};
-use crate :: { analysis :: native :: { DataView , DataWrite , NativeStore } , AnalysisConflictSnafu , AnalysisReadControl , NativeStateSnafu , PackageBundle , PackageBundleV1 , PackageErrorCodeV1 as Code , PackageRefV1 , Result } ;
+use crate::{
+    analysis::native::{DataView, DataWrite, NativeStore},
+    AnalysisConflictSnafu, AnalysisReadControl, NativeStateSnafu, PackageBundle, PackageBundleV1,
+    PackageErrorCodeV1 as Code, PackageRefV1, Result,
+};
 
 #[derive(Deserialize)]
 pub(super) struct ImageRecord {
@@ -100,6 +104,8 @@ impl NativeStore {
         revision: Option<&str>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageBundle>> {
+        control.check()?;
+        let _permit = self.reserve_reader()?;
         self.view()?
             .package_image(tenant, package, revision, control)
     }
@@ -110,6 +116,8 @@ impl NativeStore {
         pin: &ImagePin,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageBundle>> {
+        control.check()?;
+        let _permit = self.reserve_reader()?;
         self.view()?.retained_package_image(tenant, pin, control)
     }
 }

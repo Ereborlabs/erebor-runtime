@@ -126,6 +126,43 @@ and 5.03–5.09 seconds DuckDB. The measured creation target is met in these run
 the 100-fold requirement is not met. These short pairs do not establish a
 sustained latency guarantee. Read the current worklist for exact report paths.
 
+## Package image reads
+
+[NativeStore::package_revision_until](../../crates/araphor-data/src/analysis/native/packages/mod.rs) receives a tenant, exact package revision, and read control.
+  -> [AnalysisReadControl::check](../../crates/araphor-data/src/analysis/read.rs) rejects cancellation before capacity admission.
+  -> [NativeStore::reserve_reader](../../crates/araphor-data/src/analysis/native/admission.rs) holds one configured reader permit.
+  -> [DataView::package_revision](../../crates/araphor-data/src/analysis/native/packages/mod.rs) joins metadata and the original body from one captured cut.
+
+The default `package_revision` call uses that same path. The public
+`package_image` and `retained_package_image` calls also hold one reader permit.
+Captured DataView reads and staged DataWrite reads keep their existing lifetime.
+The image closure reader authenticates artifacts and the saved bundle digest.
+
+[PackageHeader::check](../../crates/araphor-data/src/analysis/native/packages/catalogue.rs)
+sorts its two temporary dependency-ID vectors before comparison. Dependency order
+has no semantic effect. Missing, extra, or duplicate IDs still fail comparison.
+The check does not change stored metadata, descriptors, artifacts, or the format.
+
+[Row tests](../../crates/araphor-data/tests/native_packages/catalogue/rows.rs)
+preserve the nine malformed-row errors and their status and retry categories.
+The positive ordering case reverses only retained metadata. Live image reads and
+reopen succeed. The stored vector stays reversed and the image digest stays equal.
+[Image tests](../../crates/araphor-data/tests/native_packages/catalogue/images.rs)
+keep the 33 MiB unqualified Native artifact and its exact round trip without
+execution. Sixteen held public read permits reject package reads. Cancellation
+takes priority. All sixteen permits are available after the checks.
+[Lifecycle tests](../../crates/araphor-data/tests/native_packages/catalogue/lifecycle.rs)
+retain shared dependencies, explicit dependency images, foreign tenant images,
+definition roots, guarded uninstall, and reinstall after reopen.
+
+The no-execution assertion checks managed instances, versions, calls, attempts,
+Graph records, managed results, processor results, and the Discovery enable flag.
+The native activation subscription owns a database handle. The restart fixture
+drops that handle before it reopens the store. All no-activation assertions remain.
+Sixteen native cases replace the fifteen old SQL cases; the positive dependency
+ordering case is separate from the malformed-row matrix. Read the current
+worklist for verification results. Private verifier and witness ports remain open.
+
 ## Package context collection
 
 [NativeStore::collect_package](../../crates/araphor-data/src/analysis/native/packages/collection.rs) receives one tenant and package revision.

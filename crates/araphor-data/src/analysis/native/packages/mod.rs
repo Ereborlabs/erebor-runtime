@@ -196,6 +196,33 @@ impl DataView {
 }
 
 impl NativeStore {
+    pub fn package_revision(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+    ) -> Result<Option<PackageRevisionV1>> {
+        self.package_revision_until(
+            tenant,
+            package,
+            revision,
+            &crate::AnalysisReadControl::default(),
+        )
+    }
+
+    pub fn package_revision_until(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+        control: &crate::AnalysisReadControl,
+    ) -> Result<Option<PackageRevisionV1>> {
+        control.check()?;
+        let _permit = self.reserve_reader()?;
+        self.view()?
+            .package_revision(tenant, package, revision, control)
+    }
+
     pub fn install_package(
         &self,
         revisions: &[PackageRevisionV1],

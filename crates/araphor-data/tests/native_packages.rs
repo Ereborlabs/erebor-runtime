@@ -10,6 +10,9 @@ use araphor_discovery_definition::{Definition, ImagePin, Program, ResolvedDefini
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_packages/catalogue.rs"]
+mod catalogue;
+
 fn artifact(name: &str, revision: &str, sql: &str) -> PackageArtifactV1 {
     PackageArtifactV1 {
         descriptor: sdk::Package::new(
