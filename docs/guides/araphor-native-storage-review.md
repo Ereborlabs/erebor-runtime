@@ -12,7 +12,8 @@ for qualification and remaining work. Earlier SQL review records are historical.
 2. [Original raw intake](../../crates/araphor-data/src/analysis/native/source/raw.rs)
    appends event payloads once. [RawIndex](../../crates/araphor-data/src/analysis/raw/index.rs)
    indexes those original spans. A published DataView binds that raw prefix to
-   one native snapshot.
+   one native snapshot. [Coverage reads](../../crates/araphor-data/src/analysis/native/source/coverage.rs)
+   preserve the public API through one captured view and an actual reader permit.
 3. [Input registration](../../crates/araphor-data/src/analysis/native/inputs/registration.rs)
    and [input checkpoints](../../crates/araphor-data/src/analysis/native/inputs/checkpoint.rs)
    retain subscription progress. [Query progress](../../crates/araphor-query/src/stream/progress.rs)
@@ -167,6 +168,13 @@ The old SQL backup and restore crash tests are removed.
   retry stability, conflicting-content rejection, and multi-report batches.
   The old SQL commit-revision uniqueness rule is removed. One native batch
   can contain several reports; each report retains its own source and revision.
+- [Coverage parity cases](../../crates/araphor-data/tests/native_raw/coverage.rs)
+  check arrival after capture, exact receipt history through expiry and reopen,
+  backup and restore, source and tenant scope, damaged unselected bodies,
+  reference corruption, cancellation, and unchanged progress. Four fixture
+  cases pass in 0.21 seconds. Three default-feature cases pass in 0.43 seconds.
+  The five replaced SQL cases are removed. The historical-corruption case
+  still requires a native port.
 - The focused native lifecycle suite passes six cases. It covers raw recovery,
   backup and restore, Required byte and age bounds, rollback, restart, retirement
   before expiry, witness expiry, and maintenance while ordinary admission fails.

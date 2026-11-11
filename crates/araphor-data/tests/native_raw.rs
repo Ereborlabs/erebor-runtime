@@ -9,6 +9,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[path = "native_raw/freshness.rs"]
 mod freshness;
 
+#[path = "native_raw/coverage.rs"]
+mod coverage_tests;
+
 #[path = "native_raw/recovery.rs"]
 mod recovery;
 

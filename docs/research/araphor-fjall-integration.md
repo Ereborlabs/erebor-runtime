@@ -42,6 +42,17 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- The original public `coverage_changes` and `coverage_report` methods now
+  use the native owner. Each read holds a reader permit and captures one
+  Data view. Four focused cases pass in 0.21 seconds. They check an arrival
+  after capture, persisted references, backup and restore, tenant and source
+  scope, damaged unselected reports, corrupt references, and mid-read
+  cancellation. Three default-feature cases pass in 0.43 seconds, including
+  exact receipt history through raw expiry and reopen. The five replaced
+  SQL cases and their local history helpers are removed. The historical
+  corruption case remains pending its native port. Read
+  `output/araphor-fjall-migration-20261110/native-coverage-parity.log` and
+  `output/araphor-fjall-migration-20261110/native-coverage-default.log`.
 - Staged Graph contracts now read package metadata through the same native
   transaction. Full-image authentication still reads the complete artifact.
   The public rollback regression fails on the old body read and passes on the

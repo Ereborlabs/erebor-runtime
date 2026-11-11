@@ -2,7 +2,10 @@ use super::super::{DataView, DataWrite, NativeStore};
 use super::{Records, Report, Sources};
 use crate::analysis::raw::RawReceipt;
 use crate::{AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result};
-use crate :: { AnalysisSelectionV1 , AnalysisSourceReceiptV1 , CoverageRecord , CoverageReportRef , EvidenceIntakeIdentityV1 , StorePositionV1 , ValidatedCoverageV1 } ;
+use crate::{
+    AnalysisSelectionV1, AnalysisSourceReceiptV1, CoverageRecord, CoverageReportRef,
+    EvidenceIntakeIdentityV1, StorePositionV1, ValidatedCoverageV1,
+};
 use snafu::ResultExt as _;
 use std::ops::Bound::{Excluded, Included};
 impl DataView {
@@ -94,6 +97,8 @@ impl DataView {
             )),
             Included(Sources::boundary(&selection.tenant_id, self.revision)),
         )) {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            control.test_read_step()?;
             control.check()?;
             let (key, bytes) = row.context(NativeStorageSnafu {
                 operation: "read coverage changes",
@@ -166,6 +171,32 @@ impl DataView {
 }
 
 impl NativeStore {
+    pub fn coverage_changes(
+        &self,
+        selection: &AnalysisSelectionV1,
+        after: StorePositionV1,
+        control: &AnalysisReadControl,
+    ) -> Result<crate::CoverageChanges> {
+        control.check()?;
+        let _permit = self.reserve_reader()?;
+        let view = self.view()?;
+        Ok(crate::CoverageChanges {
+            meta: view.meta(),
+            reports: view.coverage_changes(selection, after, control)?,
+        })
+    }
+
+    pub fn coverage_report(
+        &self,
+        selection: &AnalysisSelectionV1,
+        reference: &CoverageReportRef,
+        control: &AnalysisReadControl,
+    ) -> Result<CoverageRecord> {
+        control.check()?;
+        let _permit = self.reserve_reader()?;
+        self.view()?.coverage_report(selection, reference, control)
+    }
+
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
         self.require_retention()?;
         let revision = input.revision;
