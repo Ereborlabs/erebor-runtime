@@ -5,6 +5,10 @@ revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the ea
 SQL implementation. Read the [native storage review](araphor-native-storage-review.md)
 for the current owners and checks.
 
+Retired definition and core test links use source revision
+`8e2ecd1d28593b03596a856e153bd0a30ba7e6fd`. The current native cases are in
+[core and definition proof](araphor-native-storage-review.md).
+
 Current execution storage is in
 [Checked journal references](araphor-retained-execution-review.md#checked-journal-references).
 The saved-output query and host alias sections below describe historical
@@ -198,14 +202,14 @@ holds the current permission lock through the Data write. This owner checks
 permission even when a SQL or PRQL definition has no image pins. A package
 call also requires current trust in its exact image digest.
 
--> [AnalysisStore::admit_definition](../../crates/araphor-data/src/analysis/definitions.rs)
+-> [AnalysisStore::admit_definition](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/definitions.rs)
 checks exact retained image references and saves captured text, generated
 SQL, metadata, and pins. The SHA-256 content revision includes every saved
 field. An exact retry returns the original commit revision. Changed content
 creates another immutable revision. A retry of an older revision does not
 change the latest selection.
 
--> [AnalysisStore::validate_definitions](../../crates/araphor-data/src/analysis/definitions.rs)
+-> [AnalysisStore::validate_definitions](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/definitions.rs)
 checks saved identities, content digests, store revisions, and exact image
 pins during store open. Inspection checks content and image pins again.
 
@@ -1438,7 +1442,7 @@ The verification counts below describe earlier source states.
 Read the [definition tests](../../crates/araphor-discovery-definition/src/tests.rs),
 [YAML tests](../../crates/araphor-discovery-definition/src/file/tests.rs),
 [Query tests](../../crates/araphor-query/src/definition/tests.rs),
-[Data tests](../../crates/araphor-data/src/analysis/definitions/tests.rs),
+[Data tests](https://github.com/Ereborlabs/erebor-runtime/blob/8e2ecd1d28593b03596a856e153bd0a30ba7e6fd/crates/araphor-data/src/analysis/definitions/tests.rs),
 [authority tests](../../crates/mithril-control/src/client_auth/packages/tests.rs),
 and [RPC tests](../../crates/mithril-control/src/client_grpc/tests/packages.rs).
 The tests cover source capture, strict forms, native planning, typed calls,
@@ -3758,7 +3762,7 @@ checks validate physical payload bindings.
 [Inert admission assertions](../../crates/araphor-data/src/analysis/mod.rs)
 count nine execution relations at the test boundary. The
 [image tests](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/tests/image.rs) and
-[definition tests](../../crates/araphor-data/src/analysis/definitions/tests.rs)
+[definition tests](https://github.com/Ereborlabs/erebor-runtime/blob/8e2ecd1d28593b03596a856e153bd0a30ba7e6fd/crates/araphor-data/src/analysis/definitions/tests.rs)
 use this assertion and retain their artifact, tenant, digest, retry, and
 recovery checks. No production inspection API is added.
 
@@ -3805,7 +3809,7 @@ package lifecycle retires as one model. Shared artifact and evidence behavior
 remain. Query and the native Managed owner retain execution responsibility.
 
 [Image installation](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/packages/image.rs) retains code and an exact dependency closure.
-  -> [Definition admission](../../crates/araphor-data/src/analysis/definitions.rs) retains the admitted program and exact image pins without execution.
+  -> [Definition admission](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/definitions.rs) retains the admitted program and exact image pins without execution.
 
 [Instance subscriptions](../../crates/araphor-analysis/src/instance/subscription.rs) consume work from the Query stream.
   -> [Native Data reads](../../crates/araphor-data/src/analysis/extraction.rs) capture source inputs and [prior state](../../crates/araphor-data/src/analysis/managed/capture.rs) in one snapshot.

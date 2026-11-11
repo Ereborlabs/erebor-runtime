@@ -34,7 +34,7 @@ mod extraction;
 mod fixtures;
 mod health;
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use fixtures::StorageFault;
+pub use fixtures::{RawIndexFixture, StorageFault};
 pub(in crate::analysis) mod inputs;
 mod managed;
 pub(in crate::analysis) use managed::FindingRead;

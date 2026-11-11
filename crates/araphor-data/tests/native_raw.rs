@@ -15,6 +15,9 @@ mod coverage_tests;
 #[path = "native_raw/recovery.rs"]
 mod recovery;
 
+#[path = "native_raw/store.rs"]
+mod store;
+
 fn identity() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

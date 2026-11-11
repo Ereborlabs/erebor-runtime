@@ -4,6 +4,48 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [core store cases](../../crates/araphor-data/tests/native_store/core.rs),
+[core raw cases](../../crates/araphor-data/tests/native_raw/store.rs), and
+[definition cases](../../crates/araphor-data/tests/native_packages/catalogue/definitions.rs)
+with [native fixture support](../../crates/araphor-data/src/analysis/native/fixtures.rs),
+[raw recovery](../../crates/araphor-data/src/analysis/native/source/raw.rs), and
+[definition storage](../../crates/araphor-data/src/analysis/native/packages/definitions.rs).
+These thirteen cases replace their complete old SQL families. They preserve
+exact receipts, raw spans, retry behavior, bulk rollback, page bounds, large
+coverage reports, schema checks, private directories, and abrupt crash replay.
+The schema fault must leave the complete native key/value inventory unchanged
+after refused reopen. The raw fault removes one committed segment end after
+a metadata anchor. Cached page bytes and positions remain exact. Recovery and
+reopen must reject `raw segment baseline` at the published metadata cut.
+The final relation-head proof uses one explicit metadata commit and preserves
+all four original relation change times. Raw-only commits keep their native
+append behavior. DuckDB version, `COPY`, and SQL table checks are retired.
+
+Definition proof keeps captured source after file replacement and deletion,
+labels, description, tenant scope, revision history, cancellation, exact guard
+errors, image pins, and activation silence. Its D-record fault changes only
+the encoded name and preserves the record key, tenant, revision, and F head.
+Live lookup and startup must report their specific identity errors. The shared
+native no-execution check includes managed records, both result owners, and
+reference records. The old shared SQL helper and empty definition shell are
+removed. The existing raw index fixture now belongs to the native fixture
+owner. It keeps counts and receipt reads and adds only a source-scoped range
+count from the immutable published index. It remains test-only. Its three
+[existing callers](../../crates/araphor-data/tests/raw_index.rs) pass in
+0.07 seconds. Their native Metadata read preserves exact selected revisions
+2 and 4 and excludes foreign revision 3. The checkpoint keeps the logical
+revision unchanged when there are no consumers. Expiry preserves original
+metadata and removes the payload file. Both current and held-view payload reads
+report expiry, while captured receipt metadata remains exact. Append failure
+blocks live reads and writes. Genuine recovery precedes the current root
+comparison; no fixture readiness bypass is added. The focused run also passes
+eight native store, 24 raw, and 31 package cases. The release library check without
+default features and formatting of changed Rust files pass. Data unit compilation
+has 388 diagnostics, down from 420. That unit target still does not compile or run.
+Read the `native-core-*` evidence
+under `output/araphor-fjall-migration-20261110`. Complete migration qualification
+and incident performance remain open.
+
 Read the [36 native control cases](../../crates/araphor-data/tests/native_managed/storage/control.rs)
 with the [activation classifier](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs)
 and [original-log activation proof](../../crates/araphor-data/tests/native_managed/lifecycle/activation.rs).

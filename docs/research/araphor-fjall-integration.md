@@ -88,6 +88,61 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Thirteen native cases replace the complete core Data and definition case
+  families. Eight store cases preserve receipt revisions, original raw spans,
+  retry behavior, bulk rollback, page bounds, coverage history, schema checks,
+  private-directory checks, and abrupt crash replay. The workloads still use
+  opaque frame bytes, 513 small records, nine 128 KiB records, a batch larger
+  than the intake batch size, the maximum node ID, and a report larger than
+  4 MiB. A schema fault preserves the complete native key/value inventory
+  across a refused reopen. Mutable native journal files can change during
+  engine recovery; logical inventory equality is the integrity check.
+
+  The page fault removes a real committed raw-segment end after a metadata
+  anchor. Cached reads keep their original bytes, positions, size, and cursor.
+  Recovery and reopen reject the exact `raw segment baseline` error. The final
+  relation-head check uses an explicit metadata commit after the raw scenario.
+  It preserves all four original relation change times. Raw-only commits do not
+  write a native demand-head projection. DuckDB version, `COPY`, and SQL table
+  existence checks are removed with that backend.
+
+  Five definition cases preserve file capture before file replacement and
+  deletion, description, labels, tenant scope, revisions, read cancellation,
+  exact authority errors, guard calls, image pins, and activation silence.
+  The identity fault changes only the saved definition body in its actual
+  native D record. It retains the key, tenant, original revision, and head.
+  Live lookup rejects `retained definition identity`; startup rejects
+  `definition record identity`. The native no-execution check covers managed
+  records, both result owners, and references. The old definition shell and
+  shared SQL inspection helper are removed. Root identity, batch, and result
+  helpers remain for other unit families.
+
+  The existing test-only raw index fixture now belongs to the native fixture
+  owner. It captures one immutable published raw index. Its existing counts
+  and receipt API remains. The owner-scoped range count preserves the exact
+  five-span proof. All three existing raw-index cases also pass in 0.07 seconds.
+  Their Metadata read uses the supported coverage projection. Source snapshot
+  revisions 2 and 4 exclude the foreign input at revision 3. A checkpoint with
+  no consumers keeps the logical Data revision unchanged. Expiry keeps the
+  original metadata counts while it removes both payload records and their
+  segment file. Current and held-view payload reads report expiry; old receipt
+  metadata remains exact. After an actual append failure, live view, write,
+  and fixture reads stay blocked. Genuine recovery restores the accepted root
+  before its counts and receipt are compared. Close, reopen, and retry still
+  preserve the captured root. No readiness bypass or demand-head API is added.
+  The focused run passes eight native store, 24 raw, and 31 package cases.
+  The release library check without default features and formatting of changed
+  Rust files pass. Data unit compilation has 388 diagnostics, down from 420.
+  That unit target still does not compile or run.
+  Read `native-core-first.log`, `native-core-raw-first.log`,
+  `native-core-contracts.log`, `native-core-definitions.log`,
+  `native-core-index-callers.log`, `native-core-index-contracts.log`,
+  `native-core-default.log`, and `native-core-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for these thirteen native cases and their SQL fixture
+  retirement**. Complete migration qualification and incident performance
+  remain **Not done**. No new incident timing is measured.
+
 - Thirty-six native cases replace the complete old lifecycle, history,
   renewal, removal, status, and version case families. They preserve authority
   guards, exact receipts, checkpoint reads, scope checks, corruption matrices,
@@ -1277,7 +1332,7 @@ the running package definition owns that work.
 | [Table extraction](../../crates/araphor-data/src/analysis/extraction.rs#L1767) and [Arrow table builders](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) | Read exact key/prefix/range selections from a pinned view. Build requested Arrow columns. Reuse immutable Arrow chunks. Remove SQL staging and complete-table reconstruction from ordinary change reads. |
 | [Query sources](../../crates/araphor-query/src/sources/mod.rs), [change contracts](../../crates/araphor-query/src/definition/package/changes.rs#L9), [progress](../../crates/araphor-query/src/stream/progress.rs), and [saved execution](../../crates/araphor-query/src/stream/physical/runtime.rs) | Bind the new views, log positions, and affected-key reads to existing providers. Keep native plans, package-call operators, joins, filters, windows, and declared change contracts. A CDC signal does not make arbitrary SQL incremental. |
 | [Notification processing](../../crates/araphor-analysis/src/notification/reactive.rs), [saves](../../crates/araphor-analysis/src/notification/store.rs#L133), [attempts](../../crates/araphor-analysis/src/notification/attempt.rs), and [Data notification indexes](../../crates/araphor-data/src/analysis/notification.rs) | Replace per-obligation context commits and repeated lookup cycles with one bounded preparation and batch save. Keep route selection, retry, escalation, ordering, and pending-before-effect behavior. Route changes must reevaluate their affected existing findings. |
-| [Contexts](../../crates/araphor-data/src/analysis/context.rs), [packages](../../crates/araphor-data/src/analysis/packages/mod.rs), [definitions](../../crates/araphor-data/src/analysis/definitions.rs), [progress](../../crates/araphor-data/src/analysis/progress.rs), and [trace](../../crates/araphor-data/src/analysis/trace.rs) | Replace their SQL records and indexes, including exact version references, installation, lifecycle, coverage, trace intent, and completion. Preserve existing artifact and raw-file ownership. |
+| [Contexts](../../crates/araphor-data/src/analysis/context.rs), [packages](../../crates/araphor-data/src/analysis/packages/mod.rs), [definitions](https://github.com/Ereborlabs/erebor-runtime/blob/5028dbeba6ad19ceb86375cf33b4dd56f6392993/crates/araphor-data/src/analysis/definitions.rs), [progress](../../crates/araphor-data/src/analysis/progress.rs), and [trace](../../crates/araphor-data/src/analysis/trace.rs) | Replace their SQL records and indexes, including exact version references, installation, lifecycle, coverage, trace intent, and completion. Preserve existing artifact and raw-file ownership. |
 | [Retention](../../crates/araphor-data/src/analysis/retention.rs), [capacity](../../crates/araphor-data/src/analysis/capacity.rs), [validation](../../crates/araphor-data/src/analysis/schema.rs), [backup](../../crates/araphor-data/src/analysis/backup.rs), and [recovery](../../crates/araphor-data/src/analysis/connection.rs#L288) | Replace database-specific operations and accounting. Coordinate native history, CDC floors, evidence pins, file deletion, branch deletion, and reopen. A native snapshot alone is not a complete Data backup. |
 | [Cargo dependencies](../../Cargo.toml), [Graph feature](../../crates/araphor-graph/Cargo.toml), and [storage fixtures](../../crates/mithril-e2e/src/discovery/data_store.rs) | Pin both forks. Remove DuckDB dependencies and vendor patches once no caller requires them. Replace database-file inspection and SQL corruption fixtures with equivalent native checks. Keep the selected incident's workload and assertions. |
 

@@ -1,13 +1,5 @@
-use araphor_discovery_definition::ResolvedDefinition;
-use crate::analysis::AnalysisStore;
-use crate::{AnalysisReadControl, PackageErrorCodeV1 as Code};
-use std::collections::BTreeMap;
-
-use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
-
-
 use super::*;
-use crate::analysis::tests::assert_no_execution;
+use araphor_data::analysis::AnalysisStore;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -26,10 +18,10 @@ fn resolved(name: &str, sql: &str) -> TestResult<ResolvedDefinition> {
     )?)
 }
 
-fn sql_image() -> crate::PackageBundleV1 {
+fn sql_image() -> araphor_data::PackageBundleV1 {
     use araphor_analysis_sdk as sdk;
 
-    let artifact = crate::PackageArtifactV1 {
+    let artifact = araphor_data::PackageArtifactV1 {
         descriptor: sdk::Package::new(
             "definition-image",
             "1",
@@ -42,9 +34,9 @@ fn sql_image() -> crate::PackageBundleV1 {
                 )],
             )],
         ),
-        implementations: vec![crate::PackageImplementationV1::Sql {
+        implementations: vec![araphor_data::PackageImplementationV1::Sql {
             export: "count".into(),
-            program: crate::SqlModelV1 {
+            program: araphor_data::SqlModelV1 {
                 outputs: BTreeMap::from([(
                     "rows".into(),
                     "SELECT 1::BIGINT UNSIGNED AS count".into(),
@@ -54,7 +46,7 @@ fn sql_image() -> crate::PackageBundleV1 {
         }],
         fixtures: Vec::new(),
     };
-    crate::PackageBundleV1 {
+    araphor_data::PackageBundleV1 {
         schema_version: 1,
         root: artifact.reference(),
         artifacts: vec![artifact],
@@ -66,7 +58,7 @@ fn inspect(
     tenant: [u8; 16],
     name: &str,
     revision: Option<u64>,
-) -> crate::Result<Option<ResolvedDefinition>> {
+) -> araphor_data::Result<Option<ResolvedDefinition>> {
     Ok(store
         .definition(tenant, name, revision, &AnalysisReadControl::default())?
         .map(|(definition, _)| definition))
@@ -100,7 +92,7 @@ fn definition_retains_captured_source() -> TestResult {
     std::fs::write(&source, "SELECT 99 AS count")?;
     std::fs::remove_file(&source)?;
     let store = AnalysisStore::open(&root)?;
-    let notices = store.subscribe_activations();
+    let notices = store.subscribe_activations()?;
     let committed = store.admit_definition([1; 16], &captured, || Ok(()))?;
     assert_eq!(committed, store.meta()?.commit_revision);
     let saved = store.meta()?;
@@ -132,9 +124,9 @@ fn definition_retains_captured_source() -> TestResult {
     );
     assert_no_execution(&store)?;
     assert!(!notices.has_changed()?);
-    drop(store);
+    drop((notices, store));
     let reopened = AnalysisStore::open(&root)?;
-    let notices = reopened.subscribe_activations();
+    let notices = reopened.subscribe_activations()?;
     assert_eq!(
         reopened.admit_definition([1; 16], &captured, || Ok(()))?,
         committed
@@ -196,7 +188,7 @@ fn definition_revisions_and_tenants() -> TestResult {
     cancelled.cancel()?;
     assert!(matches!(
         store.definition([1; 16], "counts", None, &cancelled),
-        Err(crate::Error::AnalysisReadCancelled { .. })
+        Err(araphor_data::Error::AnalysisReadCancelled { .. })
     ));
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
@@ -217,9 +209,11 @@ fn definition_check_is_atomic() -> TestResult {
     assert!(matches!(
         store.admit_definition([1; 16], &definition, || {
             checked = true;
-            crate::AnalysisReadDeniedSnafu.fail()
+            Err(araphor_data::Error::AnalysisReadDenied {
+                location: snafu::location!(),
+            })
         }),
-        Err(crate::Error::AnalysisReadDenied { .. })
+        Err(araphor_data::Error::AnalysisReadDenied { .. })
     ));
     assert!(checked);
     assert_eq!(store.meta()?, before);
@@ -230,9 +224,11 @@ fn definition_check_is_atomic() -> TestResult {
     assert!(matches!(
         store.admit_definition([1; 16], &definition, || {
             checked = true;
-            crate::AnalysisReadDeniedSnafu.fail()
+            Err(araphor_data::Error::AnalysisReadDenied {
+                location: snafu::location!(),
+            })
         }),
-        Err(crate::Error::AnalysisReadDenied { .. })
+        Err(araphor_data::Error::AnalysisReadDenied { .. })
     ));
     assert!(checked);
     assert_eq!(store.meta()?, before);
@@ -249,7 +245,7 @@ fn definition_check_is_atomic() -> TestResult {
 fn definition_requires_exact_image() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
-    let image = crate::PackageBundle::try_from(sql_image())?;
+    let image = araphor_data::PackageBundle::try_from(sql_image())?;
     let sql = "SELECT * FROM \"definition-image\".\"1\".count()";
     let definition = Definition {
         name: "package-counts".into(),
@@ -274,7 +270,7 @@ fn definition_requires_exact_image() -> TestResult {
         let before = store.meta()?;
         assert!(matches!(
             store.admit_definition([1; 16], &resolved, || Ok(())),
-            Err(crate::Error::Package {
+            Err(araphor_data::Error::Package {
                 code: Code::Missing,
                 field: "definition image",
                 ..
@@ -289,7 +285,7 @@ fn definition_requires_exact_image() -> TestResult {
     let before = store.meta()?;
     assert!(matches!(
         store.admit_definition([1; 16], &changed, || Ok(())),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Missing,
             field: "definition image",
             ..
@@ -314,22 +310,59 @@ fn definition_recovery_checks_identity() -> TestResult {
     let mut definition = resolved("counts", "SELECT 1 AS count")?;
     store.admit_definition([1; 16], &definition, || Ok(()))?;
     definition.definition.name = "modified-counts".into();
-    {
-        let mut writer = store.writer()?;
-        writer.get_mut()?.execute(
-            "UPDATE discovery_definitions SET definition = ?",
-            params![definition.encode()?],
-        )?;
-    }
+    let view = store.view()?;
+    let rows = view
+        .snapshot()
+        .prefix(b"\0data/D")
+        .map(|row| row.map(|(key, value)| (key.to_vec(), value.to_vec())))
+        .collect::<fjall::Result<Vec<_>>>()?;
+    let rows = rows
+        .into_iter()
+        .filter(|(key, _)| key.len() == 23)
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1);
+    let (key, bytes) = &rows[0];
+    let (tenant, _, revision): ([u8; 16], Vec<u8>, u64) =
+        rmp_serde::from_slice(bytes.strip_prefix(&[0]).ok_or("definition envelope")?)?;
+    assert_eq!(tenant, [1; 16]);
+    assert_eq!(revision, 1);
+    let heads = view
+        .snapshot()
+        .prefix(b"\0data/F")
+        .collect::<fjall::Result<Vec<_>>>()?;
+    drop(view);
+    let mut bytes = vec![0];
+    bytes.extend(rmp_serde::to_vec(&(
+        tenant,
+        definition.encode()?,
+        revision,
+    ))?);
+    let mut transaction = store.write()?;
+    transaction.native().insert(key, bytes);
+    transaction.commit([])?;
+    assert_eq!(
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/F")
+            .collect::<fjall::Result<Vec<_>>>()?,
+        heads
+    );
     assert!(matches!(
         inspect(&store, [1; 16], "counts", None),
-        Err(crate::Error::Package {
+        Err(araphor_data::Error::Package {
             code: Code::Invalid,
             field: "retained definition identity",
             ..
         })
     ));
     drop(store);
-    assert!(AnalysisStore::open(&root).is_err());
+    assert!(matches!(
+        AnalysisStore::open(&root),
+        Err(araphor_data::Error::NativeState {
+            field: "definition record identity",
+            ..
+        })
+    ));
     Ok(())
 }

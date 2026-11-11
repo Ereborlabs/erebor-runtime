@@ -86,6 +86,11 @@ fn captured_roots_survive_retention() -> TestResult {
         encoded_report: vec![7],
     })?;
     let covered = store.raw_index_fixture()?;
+    let covered_view = store.view()?;
+    let segment = std::fs::read_dir(root.join("segments"))?
+        .next()
+        .ok_or("segment absent")??
+        .path();
     assert_eq!(
         covered
             .receipt(&source)
@@ -104,7 +109,9 @@ fn captured_roots_survive_retention() -> TestResult {
     let removed = EvidenceRetentionOwner::new(&store).retain(&source, 201)?;
     assert_eq!(removed.removed_records, 2);
     assert_eq!(removed.retained_floor, 2);
-    assert_eq!(store.raw_index_fixture()?.counts(), (2, 0, 0));
+    assert_eq!(removed.retained_bytes, 0);
+    assert!(!segment.exists());
+    assert_eq!(store.raw_index_fixture()?.counts(), (2, 2, 2));
     let current = store
         .source_receipt(&source)?
         .ok_or("retained receipt absent")?;
@@ -133,10 +140,22 @@ fn captured_roots_survive_retention() -> TestResult {
         store.read_page(&source, 1),
         Err(araphor_data::Error::RetainedRangeExpired { .. })
     ));
+    assert!(matches!(
+        store.read_page_at(&covered_view, &source, 1, &AnalysisReadControl::default()),
+        Err(araphor_data::Error::RetainedRangeExpired { .. })
+    ));
+    assert_eq!(
+        covered_view
+            .source_receipt(&source)?
+            .ok_or("captured view receipt")?
+            .retained_floor,
+        0
+    );
+    drop(covered_view);
     drop(store);
     let reopened = AnalysisStore::open_with_retention(&root, limits)?;
     assert_eq!(reopened.source_receipt(&source)?, Some(current));
-    assert_eq!(reopened.raw_index_fixture()?.counts(), (0, 0, 0));
+    assert_eq!(reopened.raw_index_fixture()?.counts(), (2, 2, 2));
     assert_eq!(covered.counts(), (2, 2, 2));
     assert_eq!(
         covered
@@ -156,7 +175,7 @@ fn metadata_position_resume() -> TestResult {
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(2))?;
     let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
-    let requests = AnalysisTableRequests::from([("source_receipts".into(), None)]);
+    let requests = AnalysisTableRequests::from([("coverage".into(), None)]);
     let read = || AnalysisTableRead {
         requests: &requests,
         event_ranges: None,
@@ -182,14 +201,13 @@ fn metadata_position_resume() -> TestResult {
     let mut other = source.clone();
     other.source_id = [4; 16];
     store.accept_validated_batch(other, batch(1))?;
-    let (_, selected) = store.dependency_revision(&selection, &AnalysisReadControl::default())?;
-    assert_eq!(selected, 2);
     let complete = store.read_tables(
         &selection,
         read(),
         AnalysisExtractLimits::default(),
         &AnalysisReadControl::default(),
     )?;
+    assert_eq!(complete.extraction.sources[0].commit_revision, 2);
     assert!(complete.extraction.sources[0].pending.is_empty());
     assert_eq!(complete.extraction.sources[0].receipt.contiguous_cursor, 2);
     let first = store.read_page(&source, 1)?;
@@ -208,7 +226,9 @@ fn metadata_position_resume() -> TestResult {
             ordinal: 0
         }
     );
+    let before = store.meta()?;
     store.checkpoint()?;
+    assert_eq!(store.meta()?, before);
     store.accept_validated_batch(source.clone(), batch(3))?;
     let next = store.read_page(&source, 3)?;
     assert_eq!(next.records.len(), 1);
@@ -218,9 +238,13 @@ fn metadata_position_resume() -> TestResult {
     let reopened = AnalysisStore::open(&root)?;
     assert_eq!(reopened.read_page(&source, 3)?.records, next.records);
     assert_eq!(reopened.read_page(&source, 1)?.records[..2], first.records);
-    let (_, selected) =
-        reopened.dependency_revision(&selection, &AnalysisReadControl::default())?;
-    assert_eq!(selected, 4);
+    let complete = reopened.read_tables(
+        &selection,
+        read(),
+        AnalysisExtractLimits::default(),
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(complete.extraction.sources[0].commit_revision, 4);
     Ok(())
 }
 
@@ -257,6 +281,11 @@ fn append_failure_keeps_root() -> TestResult {
     std::fs::rename(saved, segment)?;
     assert!(failed.is_err());
     assert_eq!(captured.counts(), (1, 1, 1));
+    assert_eq!(captured.receipt(&source), receipt);
+    assert!(store.view().is_err());
+    assert!(store.write().is_err());
+    assert!(store.raw_index_fixture().is_err());
+    store.recover()?;
     assert_eq!(store.raw_index_fixture()?.counts(), captured.counts());
     assert_eq!(store.raw_index_fixture()?.receipt(&source), receipt);
     assert_eq!(captured.receipt(&source), receipt);

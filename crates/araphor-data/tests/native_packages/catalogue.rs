@@ -1,6 +1,9 @@
 use super::*;
 use araphor_data::analysis::PackageRevisionRefV1;
 
+#[path = "catalogue/definitions.rs"]
+mod definitions;
+
 #[path = "catalogue/images.rs"]
 mod images;
 #[path = "catalogue/lifecycle.rs"]
@@ -119,11 +122,9 @@ fn assert_no_execution(store: &NativeStore) -> TestResult {
             "execution record {kind}"
         );
     }
-    assert!(view
-        .snapshot()
-        .prefix(b"\0data/@progress/result/")
-        .next()
-        .is_none());
+    for prefix in [b"\0data/@progress/result/".as_slice(), b"\0data/ref/"] {
+        assert!(view.snapshot().prefix(prefix).next().is_none());
+    }
     assert!(!store.discovery_enabled());
     Ok(())
 }

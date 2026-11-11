@@ -1,5 +1,3 @@
-
-
 use araphor_data::analysis::native::NativeStore;
 use araphor_data::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, Error};
 use fjall::SingleWriterTxDatabase;
@@ -12,6 +10,9 @@ fn cut(revision: u64) -> Vec<u8> {
 }
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+#[path = "native_store/core.rs"]
+mod core;
 
 fn context(revision: u64) -> AnalysisContextVersionV1 {
     AnalysisContextVersionV1 {
@@ -121,11 +122,11 @@ fn context_retry_history_and_rollback() -> TestResult {
 
 #[test]
 fn graph_context_progress_share_one_batch() -> TestResult {
+    use araphor_analysis_sdk::Schema;
     use araphor_graph::{
         native::{Declaration, Graph},
         EntityKind, Relation,
     };
-    use araphor_analysis_sdk::Schema;
     let dir = tempfile::tempdir()?;
     let store = NativeStore::open(&dir.path().join("data"))?;
     let graph = Graph::new(11)?;
