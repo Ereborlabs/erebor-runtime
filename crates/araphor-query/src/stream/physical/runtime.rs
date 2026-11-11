@@ -354,7 +354,7 @@ impl Runtime {
                     .await?
             }
         };
-        
+
         {
             session.input_changes = self.progress.subscription();
         }
@@ -362,6 +362,7 @@ impl Runtime {
         session.append_read = self.append_read.clone();
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;
         let mut observed = None;
+        let mut recovery = None;
         let execution = async {
             let output = if self.run.operation == Operation::Append {
                 let PhysicalStream {
@@ -458,7 +459,7 @@ impl Runtime {
                 if self.run.follow || self.run.managed.is_none() {
                     captured.reserve_complete()?;
                 }
-                let recovery = captured.recovery.take();
+                recovery = captured.recovery.take();
                 let captured = CapturedExecution::new(
                     captured,
                     session.clone(),
@@ -470,6 +471,8 @@ impl Runtime {
                     commit_revision: captured.snapshot().page.extraction.meta.commit_revision,
                     ordinal: u32::MAX,
                 };
+                self.progress
+                    .captured(position, captured.snapshot().next_change);
                 if let Some((_, publication)) = &self.run.managed {
                     let snapshot = captured.snapshot();
                     self.check_store(&snapshot.page.extraction.meta)?;
@@ -522,7 +525,7 @@ impl Runtime {
                                     }
                                 )
                             {
-                                if let Some(recovery) = recovery {
+                                if let Some(recovery) = recovery.take() {
                                     return Err(recovery.invalidated().failed(error));
                                 }
                             }
@@ -557,7 +560,10 @@ impl Runtime {
             };
             Ok::<_, crate::Error>(Some(output))
         };
-        let result = execution.await;
+        let result = execution.await.map_err(|error| match recovery {
+            Some(recovery) => recovery.failed(error),
+            None => error,
+        });
         if result.is_err() {
             let _cancelled = session.control().cancel();
         }

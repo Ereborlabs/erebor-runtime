@@ -17,17 +17,21 @@ impl ManagedPublication for Sink {
             gate.release.lock().unwrap().recv().unwrap();
         }
         control.check()?;
-        let instance = self
+        let (engine, expected) = self
             .managed
-            .clone()
+            .as_ref()
             .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("test managed instance"))?;
-        let completed = matches!(
-            instance.spec.destination,
-            araphor_data::ManagedDestination::Graph { .. }
-        )
-        .then_some(instance.progress);
+        let resume =
+            engine
+                .store()
+                .managed_resume(expected.spec.tenant, &expected.spec.id, control)?;
+        let mut instance = resume.instance;
+        instance.grant = expected.grant.clone();
         Ok((
-            Invocation::default(),
+            Invocation {
+                id: uuid::Uuid::new_v4().to_string(),
+                ..Default::default()
+            },
             ManagedRead {
                 source: None,
                 execution: None,
@@ -35,7 +39,7 @@ impl ManagedPublication for Sink {
                 expected: None,
                 instance,
                 rebuild: self.state.rebuild.load(Ordering::SeqCst),
-                completed,
+                completed: Some(resume.completed),
             },
         ))
     }
@@ -43,7 +47,7 @@ impl ManagedPublication for Sink {
     fn admit(
         &self,
         snapshot: &crate::sources::ArrowSnapshot,
-        _: &Invocation,
+        invocation: &Invocation,
         frontier: &ManagedFrontier,
         control: &AnalysisReadControl,
     ) -> crate::Result<Option<Arc<araphor_data::ManagedAttempt>>> {
@@ -83,9 +87,29 @@ impl ManagedPublication for Sink {
         if let Some(error) = self.state.admission_error.lock().unwrap().take() {
             return Err(error);
         }
+        let (engine, _) = self
+            .managed
+            .as_ref()
+            .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("test managed instance"))?;
+        let capture = snapshot
+            .managed()
+            .ok_or_else(|| PackageErrorCodeV1::Incomplete.error("test managed capture"))?;
+        let attempt = Arc::new(engine.store().register_managed_attempt(
+            capture,
+            &araphor_data::ManagedRequest {
+                id: invocation.id.clone(),
+                time_utc_ns: capture.time_utc_ns(),
+                seed: invocation.seed,
+                rebuild: self.state.rebuild.load(Ordering::SeqCst),
+                witness_expiry: u64::MAX,
+                frontier: Some(frontier.clone()),
+            },
+            || control.check(),
+        )?);
+        *self.state.attempt.lock().unwrap() = Some(Arc::clone(&attempt));
         self.state.admissions.fetch_add(1, Ordering::SeqCst);
         self.state.admitted.store(true, Ordering::SeqCst);
-        Ok(None)
+        Ok(Some(attempt))
     }
 }
 
@@ -120,7 +144,7 @@ async fn prepared(
         schema: Arc::clone(definition.plan.schema().inner()),
         calls: Vec::new(),
         state: Arc::clone(state),
-        managed: Some(instance),
+        managed: Some((Arc::clone(&fixture.engine), instance)),
     });
     Ok((definition, target))
 }
@@ -225,8 +249,17 @@ async fn replace_drains_pending_publications() -> TestResult {
             .ok_or("pending managed update")??;
         assert_eq!(update.operation, Operation::Replace);
         assert_eq!(update.exhausted, step == 3);
-        assert_eq!(update.snapshot.page.extraction.meta, before);
-        assert_eq!(update.cursor.read_revision(), before.commit_revision);
+        let mut expected = before.clone();
+        expected.commit_revision += 1 + 2 * (step as u64 - 1);
+        assert_eq!(update.snapshot.page.extraction.meta, expected);
+        assert_eq!(
+            update.cursor.position().commit_revision,
+            expected.commit_revision
+        );
+        assert_eq!(
+            update.cursor.read_revision(),
+            expected.commit_revision + if step == 3 { 2 } else { 0 }
+        );
         assert_eq!(
             update.snapshot.page.extraction.sources[0]
                 .receipt
@@ -277,7 +310,9 @@ async fn replace_drains_pending_publications() -> TestResult {
     assert_eq!(state.admissions.load(Ordering::SeqCst), 3);
     assert_eq!(state.entries.load(Ordering::SeqCst), 3);
     assert_eq!(state.commits.load(Ordering::SeqCst), 3);
-    assert_eq!(fixture.engine.store().meta()?, before);
+    let mut expected = before;
+    expected.commit_revision += 7;
+    assert_eq!(fixture.engine.store().meta()?, expected);
     subscription.cancel_and_join().await?;
     drop(state.receipt.lock().unwrap().take());
     drop((definition, target));
@@ -365,7 +400,7 @@ async fn scope_check_precedes_capture() -> TestResult {
     let state = Arc::new(SinkState::default());
     let (definition, target) = prepared(&fixture, &state).await?;
     let mut target = (*target).clone();
-    target.managed.as_mut().unwrap().grant.selection =
+    target.managed.as_mut().unwrap().1.grant.selection =
         AnalysisSelectionV1::new([1; 16], Vec::new());
     let control = AnalysisReadControl::default();
     let mut stream = stream(&fixture, definition, Arc::new(target), &control)?;
@@ -376,6 +411,7 @@ async fn scope_check_precedes_capture() -> TestResult {
         .err()
         .ok_or("scope accepted")?;
     assert_eq!(crate::Failure::from(&error), crate::Failure::Denied);
+    assert!(crate::follow::SourceRecovery::take(&error).is_none());
     assert_eq!(state.admissions.load(Ordering::SeqCst), 0);
     assert_eq!(state.entries.load(Ordering::SeqCst), 0);
     stream.cancel_and_join().await?;
@@ -395,7 +431,7 @@ async fn window_keeps_full_grant() -> TestResult {
         schema: Arc::clone(definition.plan.schema().inner()),
         calls: Vec::new(),
         state: Arc::clone(&state),
-        managed: Some(instance),
+        managed: Some((Arc::clone(&fixture.engine), instance)),
     });
     let control = AnalysisReadControl::default();
     let mut stream = Subscription::managed(
@@ -418,7 +454,16 @@ async fn window_keeps_full_grant() -> TestResult {
         .clone()
         .ok_or("window frontier")?;
     assert_eq!(frontier.next_change, Some(expiry));
-    assert_eq!(frontier.cursor, update.cursor.encode()?);
+    let captured = crate::follow::Cursor::decode(&frontier.cursor)?;
+    assert_eq!(captured.position(), update.cursor.position());
+    assert_eq!(
+        captured.read_revision(),
+        update.snapshot.page.extraction.meta.commit_revision
+    );
+    assert_eq!(
+        update.cursor.read_revision(),
+        state.publication.load(Ordering::SeqCst)
+    );
     assert_eq!(
         update
             .snapshot
@@ -430,6 +475,24 @@ async fn window_keeps_full_grant() -> TestResult {
         full
     );
     assert_ne!(update.snapshot.selection, full);
+    #[derive(serde::Deserialize)]
+    struct Watch {
+        interest: Interest,
+    }
+    #[derive(serde::Deserialize)]
+    struct Interest {
+        selection: AnalysisSelectionV1,
+    }
+    let (_, bytes) = fixture
+        .engine
+        .store()
+        .view()?
+        .snapshot()
+        .prefix(b"\0data/input/")
+        .next()
+        .ok_or("window watch")??;
+    let watch: Watch = rmp_serde::from_slice(&bytes[1..])?;
+    assert_eq!(watch.interest.selection, full);
     assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
     stream.cancel_and_join().await?;
     drop(update);
@@ -478,6 +541,9 @@ async fn capture_limits_precede_admission() -> TestResult {
             crate::Failure::from(&error),
             crate::Failure::InputTooLarge | crate::Failure::Busy
         ));
+        if crate::Failure::from(&error) == crate::Failure::Busy {
+            assert!(crate::follow::SourceRecovery::take(&error).is_none());
+        }
         assert_eq!(state.admissions.load(Ordering::SeqCst), 0);
         assert_eq!(state.entries.load(Ordering::SeqCst), 0);
         assert_eq!(state.input_evaluations.load(Ordering::SeqCst), 0);
@@ -492,7 +558,7 @@ async fn capture_limits_precede_admission() -> TestResult {
 }
 
 struct ResumeClock {
-    now: u64,
+    now: AtomicU64,
     reads: AtomicUsize,
     idle: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     changes: tokio::sync::watch::Sender<u64>,
@@ -501,11 +567,16 @@ struct ResumeClock {
 impl ResumeClock {
     fn new(now: u64, idle: Option<tokio::sync::oneshot::Sender<()>>) -> Arc<Self> {
         Arc::new(Self {
-            now,
+            now: AtomicU64::new(now),
             reads: AtomicUsize::new(0),
             idle: Mutex::new(idle),
             changes: tokio::sync::watch::channel(0).0,
         })
+    }
+
+    fn advance(&self, now: u64) {
+        self.now.store(now, Ordering::SeqCst);
+        self.changes.send_replace(now);
     }
 }
 
@@ -516,7 +587,7 @@ impl crate::follow::Clock for ResumeClock {
                 let _sent = idle.send(());
             }
         }
-        Ok(self.now)
+        Ok(self.now.load(Ordering::SeqCst))
     }
 
     fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
@@ -538,19 +609,20 @@ async fn resume_keeps_cut_idle() -> TestResult {
         .unwrap()
         .clone()
         .ok_or("prospective frontier")?;
-    assert_eq!(update.cursor.encode()?, frontier.cursor);
+    let captured = crate::follow::Cursor::decode(&frontier.cursor)?;
+    assert_eq!(captured.position(), update.cursor.position());
+    assert_eq!(
+        captured.read_revision(),
+        update.snapshot.page.extraction.meta.commit_revision
+    );
+    assert_eq!(
+        update.cursor.read_revision(),
+        state.publication.load(Ordering::SeqCst)
+    );
     let original_time = update.evaluated_utc_ns;
     drop(update);
     first.cancel_and_join().await?;
     drop(state.receipt.lock().unwrap().take());
-    let retained = fixture.engine.memory().input_reserved();
-    let capacity = fixture
-        .engine
-        .limits()
-        .input_capacity
-        .ok_or("input capacity")?;
-    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
-    assert!(fixture.engine.memory().reserve_input(1).is_err());
     let inputs = state.input_evaluations.load(Ordering::SeqCst);
     let (idle, observed) = tokio::sync::oneshot::channel();
     let clock = ResumeClock::new(original_time + 1, Some(idle));
@@ -570,6 +642,21 @@ async fn resume_keeps_cut_idle() -> TestResult {
         update = &mut next => return Err(format!("unchanged resume executed: {update:?}").into()),
         observed = observed => observed?,
     }
+    drop(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            fixture.engine.acquire_evaluation([1; 16]),
+        )
+        .await??,
+    );
+    let retained = fixture.engine.memory().input_reserved();
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("input capacity")?;
+    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
     assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
     assert_eq!(state.entries.load(Ordering::SeqCst), 1);
     assert_eq!(state.input_evaluations.load(Ordering::SeqCst), inputs);
@@ -614,13 +701,6 @@ async fn idle_restart_cancellation_joins() -> TestResult {
     drop(update);
     first.cancel_and_join().await?;
     drop(state.receipt.lock().unwrap().take());
-    let retained = fixture.engine.memory().input_reserved();
-    let capacity = fixture
-        .engine
-        .limits()
-        .input_capacity
-        .ok_or("input capacity")?;
-    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
     let (idle, observed) = tokio::sync::oneshot::channel();
     let control = AnalysisReadControl::default();
     let mut resumed = Subscription::managed(
@@ -638,6 +718,21 @@ async fn idle_restart_cancellation_joins() -> TestResult {
         update = &mut next => return Err(format!("idle restart executed: {update:?}").into()),
         observed = observed => observed?,
     }
+    drop(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            fixture.engine.acquire_evaluation([1; 16]),
+        )
+        .await??,
+    );
+    let retained = fixture.engine.memory().input_reserved();
+    let capacity = fixture
+        .engine
+        .limits()
+        .input_capacity
+        .ok_or("input capacity")?;
+    let pressure = fixture.engine.memory().reserve_input(capacity - retained)?;
+    assert!(fixture.engine.memory().reserve_input(1).is_err());
     assert_eq!(fixture.engine.memory().input_reserved(), capacity);
     drop(next);
     tokio::time::timeout(Duration::from_secs(30), resumed.cancel_and_join()).await??;
@@ -754,7 +849,11 @@ async fn rebuild_bypasses_idle_resume() -> TestResult {
     let update = tokio::time::timeout(Duration::from_secs(30), rebuilt.next())
         .await?
         .ok_or("rebuilt update")??;
-    assert_eq!(update.cursor.read_revision(), revision);
+    assert_eq!(update.cursor.read_revision(), revision + 2);
+    assert_eq!(
+        update.cursor.read_revision(),
+        state.publication.load(Ordering::SeqCst)
+    );
     assert_eq!(update.evaluated_utc_ns, now);
     assert_eq!(
         update.snapshot.managed().map(|managed| managed.rebuild()),
@@ -852,88 +951,198 @@ async fn resumed_frontier_checks_binding() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_offer_keeps_cut_idle() -> TestResult {
-    let fixture = fixture().await?;
-    let state = Arc::new(SinkState::default());
-    let (mut definition, target) = prepared(&fixture, &state).await?;
-    let failure = AtomicBool::new(true);
-    let gate = create_udf(
-        "failed_offer_input",
-        vec![sdk::DataType::UInt64],
-        sdk::DataType::UInt64,
-        Volatility::Volatile,
-        Arc::new(move |arguments| {
-            if failure.swap(false, Ordering::SeqCst) {
-                return Err(DataFusionError::Execution("known failed offer".into()));
-            }
-            arguments
-                .first()
-                .cloned()
-                .ok_or_else(|| DataFusionError::Execution("failed offer input absent".into()))
-        }),
-    );
-    definition.plan = LogicalPlanBuilder::from(definition.plan)
-        .project(vec![gate.call(vec![col("value")]).alias("value")])?
-        .build()?;
-    let control = AnalysisReadControl::default();
-    let mut first = stream(&fixture, definition.clone(), Arc::clone(&target), &control)?;
-    let error = tokio::time::timeout(Duration::from_secs(30), first.next())
-        .await?
-        .ok_or("failed offer result")?
-        .err()
-        .ok_or("failed offer published")?;
-    assert!(format!("{error:?}").contains("known failed offer"));
-    let frontier = state
-        .frontier
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("failed native frontier")?;
-    first.cancel_and_join().await?;
-    assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
-    assert_eq!(state.entries.load(Ordering::SeqCst), 1);
-    assert_eq!(state.commits.load(Ordering::SeqCst), 0);
-    let inputs = state.input_evaluations.load(Ordering::SeqCst);
-    let now = crate::follow::Cursor::decode(&frontier.cursor)?.evaluated() + 1;
-    let (idle, observed) = tokio::sync::oneshot::channel();
-    let clock = ResumeClock::new(now, Some(idle));
-    let control = AnalysisReadControl::default();
-    let mut resumed = Subscription::managed(
-        fixture
+    for expiry in [false, true] {
+        let fixture = fixture().await?;
+        let state = Arc::new(SinkState::default());
+        let failure = AtomicBool::new(true);
+        let gate = create_udf(
+            "failed_offer_input",
+            vec![sdk::DataType::UInt64],
+            sdk::DataType::UInt64,
+            Volatility::Volatile,
+            Arc::new(move |arguments| {
+                if failure.swap(false, Ordering::SeqCst) {
+                    return Err(DataFusionError::Execution("known failed offer".into()));
+                }
+                arguments
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| DataFusionError::Execution("failed offer input absent".into()))
+            }),
+        );
+        let (mut definition, target) = if expiry {
+            let mut definition = fixture.prepare(&Fixture::sql("SELECT source_cursor AS value FROM events WHERE received_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'" )).await?;
+            definition.plan = LogicalPlanBuilder::from(definition.plan)
+                .project(vec![gate.call(vec![col("value")]).alias("value")])?
+                .build()?;
+            let instance =
+                fixture.managed(&mut definition, AnalysisSelectionV1::tenant([1; 16]))?;
+            let target = Arc::new(Sink {
+                schema: Arc::clone(definition.plan.schema().inner()),
+                calls: Vec::new(),
+                state: Arc::clone(&state),
+                managed: Some((Arc::clone(&fixture.engine), instance)),
+            });
+            (definition, target)
+        } else {
+            prepared(&fixture, &state).await?
+        };
+        if !expiry {
+            definition.plan = LogicalPlanBuilder::from(definition.plan)
+                .project(vec![gate.call(vec![col("value")]).alias("value")])?
+                .build()?;
+        }
+        let control = AnalysisReadControl::default();
+        let clock = ResumeClock::new(NOW, None);
+        let mut first = Subscription::managed(
+            fixture
+                .engine
+                .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+            definition.clone(),
+            Arc::clone(&target) as Arc<dyn ManagedPublication>,
+            b"managed-test",
+            None,
+            clock.clone(),
+        )?;
+        let error = tokio::time::timeout(Duration::from_secs(30), first.next())
+            .await?
+            .ok_or("failed offer result")?
+            .err()
+            .ok_or("failed offer published")?;
+        assert!(format!("{error:?}").contains("known failed offer"));
+        let frontier = state
+            .frontier
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("failed native frontier")?;
+        first.cancel_and_join().await?;
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+        assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+        assert_eq!(state.commits.load(Ordering::SeqCst), 0);
+        let inputs = state.input_evaluations.load(Ordering::SeqCst);
+        let consumed = fixture
             .engine
-            .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
-        definition,
-        target,
-        b"managed-test",
-        Some(frontier.clone()),
-        clock,
-    )?;
-    let mut next = Box::pin(resumed.next());
-    tokio::select! {
-        update = &mut next => return Err(format!("unchanged failed cut executed: {update:?}").into()),
-        observed = observed => observed?,
+            .store()
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/input/")
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(consumed.len(), 1);
+        let attempt = state
+            .attempt
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or("failed attempt")?;
+        fixture.engine.store().finish_managed(
+            &attempt,
+            araphor_data::ManagedExit::Failed(PackageErrorCodeV1::Invalid),
+            || Ok(()),
+        )?;
+        let current = fixture
+            .engine
+            .store()
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/input/")
+            .collect::<Result<Vec<_>, _>>()?;
+        #[derive(serde::Deserialize)]
+        struct Consumption {
+            completed_through: araphor_data::StorePositionV1,
+        }
+        assert_eq!(current.len(), consumed.len());
+        for ((key, before), (actual, after)) in consumed.iter().zip(&current) {
+            assert_eq!(key, actual);
+            let before: Consumption = rmp_serde::from_slice(&before[1..])?;
+            let after: Consumption = rmp_serde::from_slice(&after[1..])?;
+            assert_eq!(
+                before.completed_through,
+                araphor_data::StorePositionV1 {
+                    commit_revision: 0,
+                    ordinal: 0
+                }
+            );
+            assert_eq!(after.completed_through, before.completed_through);
+        }
+        let recovery =
+            crate::follow::SourceRecovery::take(&error).ok_or("failed output recovery")?;
+        assert!(crate::follow::SourceRecovery::take(&error).is_none());
+        let control = AnalysisReadControl::default();
+        let mut changed = Box::pin(recovery.changed(&control));
+        assert!(futures_util::poll!(&mut changed).is_pending());
+        fixture.context(2)?;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut changed)
+                .await
+                .is_err()
+        );
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+        assert_eq!(state.entries.load(Ordering::SeqCst), 1);
+        assert_eq!(state.commits.load(Ordering::SeqCst), 0);
+        assert_eq!(state.input_evaluations.load(Ordering::SeqCst), inputs);
+        assert_eq!(state.frontier.lock().unwrap().as_ref(), Some(&frontier));
+        if expiry {
+            let before = fixture.engine.store().meta()?;
+            let deadline = frontier.next_change.ok_or("failed window deadline")?;
+            assert_eq!(
+                deadline,
+                (NOW - 1_000_000 + 1) / 1000 * 1000 + 60_000_000_000
+            );
+            clock.advance(deadline);
+            assert_eq!(fixture.engine.store().meta()?, before);
+        } else {
+            assert!(frontier.next_change.is_none());
+            fixture.event(2)?;
+        }
+        let recovery = tokio::time::timeout(Duration::from_secs(30), changed).await??;
+        let session = recovery.resume(
+            fixture
+                .engine
+                .session(AnalysisSelectionV1::tenant([1; 16]), &control, 0)?,
+            &definition,
+        );
+        let mut resumed = Subscription::managed(
+            session,
+            definition,
+            target,
+            b"managed-test",
+            Some(frontier),
+            clock,
+        )?;
+        let update = tokio::time::timeout(Duration::from_secs(30), resumed.next())
+            .await?
+            .ok_or("changed failed cut update")??;
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 2);
+        assert_eq!(state.entries.load(Ordering::SeqCst), 2);
+        assert_eq!(state.commits.load(Ordering::SeqCst), 1);
+        if expiry {
+            assert!(update.snapshot.received_min.is_none());
+            assert!(update.snapshot.next_change.is_none());
+            let batch = update
+                .batches
+                .as_ref()
+                .and_then(|batches| batches.first())
+                .ok_or("expired count")?;
+            let count = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<sdk::arrow_array::UInt64Array>()
+                .ok_or("count type")?;
+            assert_eq!(count.value(0), 0);
+        } else {
+            assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
+            assert_eq!(
+                update.snapshot.page.extraction.sources[0]
+                    .receipt
+                    .contiguous_cursor,
+                2
+            );
+        }
+        resumed.cancel_and_join().await?;
+        drop(update);
+        drop(fixture.engine.reserve_evaluation([1; 16])?);
     }
-    assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
-    assert_eq!(state.entries.load(Ordering::SeqCst), 1);
-    assert_eq!(state.commits.load(Ordering::SeqCst), 0);
-    assert_eq!(state.input_evaluations.load(Ordering::SeqCst), inputs);
-    assert_eq!(state.frontier.lock().unwrap().as_ref(), Some(&frontier));
-    fixture.event(2)?;
-    let update = tokio::time::timeout(Duration::from_secs(30), next)
-        .await?
-        .ok_or("changed failed cut update")??;
-    assert_eq!(state.admissions.load(Ordering::SeqCst), 2);
-    assert_eq!(state.entries.load(Ordering::SeqCst), 2);
-    assert_eq!(state.commits.load(Ordering::SeqCst), 1);
-    assert!(state.input_evaluations.load(Ordering::SeqCst) > inputs);
-    assert_eq!(
-        update.snapshot.page.extraction.sources[0]
-            .receipt
-            .contiguous_cursor,
-        2
-    );
-    resumed.cancel_and_join().await?;
-    drop(update);
-    drop(fixture.engine.reserve_evaluation([1; 16])?);
     Ok(())
 }
 

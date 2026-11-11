@@ -76,7 +76,7 @@ impl Run {
                 let publication = Arc::clone(publication);
                 let control = Arc::clone(self.session.control());
                 let worker = Arc::clone(&control);
-                let lease = (self.session.token()?, Arc::clone(permit));
+                let lease = (Arc::clone(permit), self.session.token()?);
                 let (invocation, managed) =
                     crate::execution::Engine::blocking(control, lease, move || {
                         publication.begin(&worker)

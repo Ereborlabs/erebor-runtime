@@ -1,5 +1,3 @@
-
-
 use std::{
     collections::BTreeMap,
     sync::{
@@ -26,6 +24,9 @@ use tokio::sync::watch;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TENANT: [u8; 16] = [1; 16];
+
+#[path = "native_instance/recovery.rs"]
+mod recovery;
 
 struct Authority {
     changes: watch::Sender<u64>,

@@ -78,7 +78,7 @@ async fn publication_keeps_pending_input() -> TestResult {
             schema: Arc::clone(definition.plan.schema().inner()),
             calls,
             state: Arc::clone(&state),
-            managed: Some(instance),
+            managed: Some((Arc::clone(&fixture.engine), instance)),
         });
         fixture.context(1)?;
         let input_revision = fixture.engine.store().meta()?.commit_revision;
@@ -101,7 +101,7 @@ async fn publication_keeps_pending_input() -> TestResult {
         let frontier = state.frontier.lock().unwrap().clone().ok_or("input cut")?;
         let input_cursor = crate::follow::Cursor::decode(&frontier.cursor)?;
         let captured = input_cursor.read_revision();
-        assert_eq!(captured, input_revision);
+        assert_eq!(captured, input_revision + 1);
         assert_eq!(input_cursor.position().commit_revision, captured);
         assert_eq!(input_cursor.position().ordinal, u32::MAX);
         fixture.event(2)?;
@@ -109,15 +109,16 @@ async fn publication_keeps_pending_input() -> TestResult {
         fixture.context(2)?;
         let published = fixture.engine.store().meta()?.commit_revision;
         assert!(captured < arrival && arrival < published);
-        state.publication.store(published, Ordering::SeqCst);
         release.send(())?;
         let first = next.await.ok_or("captured receipt")??;
+        let committed = state.publication.load(Ordering::SeqCst);
+        assert!(committed > published);
         assert_eq!(first.snapshot.managed().unwrap().follows_graph(), graph);
         assert_eq!(
             first.snapshot.page.extraction.meta.commit_revision,
             captured
         );
-        assert_eq!(first.cursor.read_revision(), published);
+        assert_eq!(first.cursor.read_revision(), committed);
         assert_eq!(first.cursor.position(), input_cursor.position());
         assert_eq!(first.snapshot.page.scanned_through, first.cursor.position());
         assert_eq!(

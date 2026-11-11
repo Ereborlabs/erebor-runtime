@@ -71,7 +71,56 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | The latest stable native control measures durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
 
+Remaining functional work:
+
+- Port the remaining Data unit fixtures and remove their SQL-only helpers.
+- Correct startup settlement of simultaneous promoted attempts for one owner.
+  The current single transaction can overwrite its terminal outcome index.
+  Keep one attempt per owner in each transaction and preserve batching across
+  different owners. Add the native candidate-promotion proof before removal
+  of the old terminal family. This correction is not implemented.
+- Resolve the remaining Query contracts. The current complete run has 25
+  failures; the managed capture family passes.
+- Complete retained-history collection and recovery qualification. Native
+  MVCC currently retains all history. Data startup validation still scans
+  retained source memberships. Original journal collection is already active.
+
+Complete these items before more incident latency experiments.
+
 Current evidence:
+
+- Managed Query fixtures now use real native admission, commits, and durable
+  receipts. They no longer fabricate an execution acknowledgement. Each offer
+  reloads native progress while it keeps the caller's grant. Pending offers
+  commit with `completed=false`; completed offers acknowledge their real
+  receipt. The fixtures keep the original input position separate from the
+  later publication revision and preserve the full-pool idle assertions.
+  Native execution also retains its existing source recovery handle through
+  admitted output execution. It saves the actual failed cut and deadline in
+  Progress. Host joins, records failure, checks current authority, and waits
+  for matching input or that deadline. Failure does not consume input. Busy,
+  denied, and cancelled errors keep their existing paths.
+  Durable managed CDC registration now uses the original Run session scope.
+  The old path saved a moving read window as its permanent interest and then
+  rejected reattachment when that window moved. Read pruning remains separate.
+  Captured admission and managed begin also release their permit before worker
+  tokens. The previous tuple order could report joined cancellation before
+  permit release. The idle proof uses the existing semaphore readiness signal;
+  its clock signal precedes release and cannot establish that condition alone.
+  The 24 capture cases pass. The new native Host case runs actual Wasm trap
+  and limit failures, preserves prior output and progress, stays idle across
+  foreign tenant input, and commits exactly one repair after matching input.
+  The final complete Query run passes 419 cases, fails 25, and ignores five
+  in 27.27 seconds. All 24 capture cases pass within that run. Fifteen native
+  Query integration cases pass in 7.76 seconds. Five native Analysis Instance
+  cases pass in 1.64 seconds, and 13 notification cases pass in 0.32 seconds.
+  Read `native-recovery-join-unit.log`, `native-recovery-join-query.log`, and
+  `native-recovery-join-analysis.log` under
+  `output/araphor-fjall-migration-20261110`. Earlier focused and diagnostic
+  logs remain in that directory. Result: **Done for managed capture ownership,
+  admitted failure recovery, captured deadlines, fixed CDC scope, and the two
+  blocking lease release orders**. Complete migration qualification and
+  incident performance remain **Not done**. No new incident timing is measured.
 
 - The unused SQL-era `GraphCommit` packet is removed from Data, Analysis,
   exports, and fixtures. Native publication already used the prepared sealed

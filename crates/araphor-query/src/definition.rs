@@ -236,9 +236,10 @@ impl CapturedExecution {
     ) -> Result<T> {
         let snapshot = Arc::clone(&self.captured.snapshot);
         let control = Arc::clone(&self.parent);
+        // Drop the permit before the worker tokens.
         let lease = (
-            self.calls.token().context(SqlSnafu)?,
             Arc::clone(&self.captured.permit),
+            self.calls.token().context(SqlSnafu)?,
         );
         Engine::blocking(Arc::clone(&control), lease, move || {
             operation(&snapshot, &control)

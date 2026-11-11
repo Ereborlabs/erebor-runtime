@@ -54,16 +54,23 @@ struct SinkState {
     commits: AtomicUsize,
     pending: usize,
     receipt: Mutex<Option<ExecutionReceipt>>,
+    attempt: Mutex<Option<Arc<araphor_data::ManagedAttempt>>>,
     frontier: Mutex<Option<araphor_data::ManagedFrontier>>,
     gate: Option<WriterGate>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Sink {
     schema: sdk::arrow_schema::SchemaRef,
     calls: Vec<PackageCall>,
     state: Arc<SinkState>,
-    managed: Option<araphor_data::ManagedInstance>,
+    managed: Option<(Arc<Engine>, araphor_data::ManagedInstance)>,
+}
+
+impl fmt::Debug for Sink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CapturedTestSink")
+    }
 }
 
 impl DisplayAs for Sink {
@@ -138,8 +145,12 @@ impl DataSink for Sink {
             assert!(std::ptr::eq(run.sources(), definition.sources()));
         }
         let mut rows = 0;
+        let mut batches = Vec::new();
         while let Some(batch) = data.try_next().await? {
             rows += batch.num_rows() as u64;
+            if self.managed.is_some() {
+                batches.push(batch);
+            }
         }
         let receipt = ExecutionReceipt::from_context(context)?;
         assert_eq!(receipt.calls().len(), self.calls.len());
@@ -160,8 +171,13 @@ impl DataSink for Sink {
         *self.state.receipt.lock().unwrap() = Some(receipt.clone());
         let state = Arc::clone(&self.state);
         let acknowledgement = receipt.clone();
-        let revision = receipt.snapshot().page.extraction.meta.commit_revision;
-        let completed =
+        let returned = receipt.clone();
+        let engine = self.managed.as_ref().map(|(engine, _)| Arc::clone(engine));
+        let schema = Arc::clone(&self.schema);
+        if engine.is_some() {
+            receipt.prepare_ack(context)?;
+        }
+        let (completed, published) =
             receipt
                 .blocking(context, (), move |control| {
                     if let Some(gate) = &state.gate {
@@ -175,19 +191,77 @@ impl DataSink for Sink {
                         })?;
                     }
                     control.check()?;
-                    let commits = state.commits.fetch_add(1, Ordering::SeqCst);
-                    Ok(commits >= state.pending)
+                    let completed = state.commits.load(Ordering::SeqCst) >= state.pending;
+                    let published = if let Some(engine) = engine {
+                        let attempt = state.attempt.lock().unwrap().clone().ok_or_else(|| {
+                            PackageErrorCodeV1::Incomplete.error("test managed attempt")
+                        })?;
+                        let returns = returned
+                            .calls()
+                            .iter()
+                            .map(|(id, call)| araphor_data::analysis::native::ManagedReturn {
+                                call: *id,
+                                evaluation: call.evaluation(),
+                                output: call.output(),
+                                changes: call.changes(),
+                                graph: call.graph(),
+                                retained: call.retained(),
+                            })
+                            .collect::<Vec<_>>();
+                        let budget = engine
+                            .memory()
+                            .managed_budget(control, engine.limits().input_bytes);
+                        let selected = sdk::Dataset {
+                            name: "selected".into(),
+                            batches,
+                        };
+                        let input = araphor_data::analysis::native::ManagedCommit {
+                            control,
+                            budget: budget.as_ref(),
+                            attempt: &attempt,
+                            completed,
+                            now_utc_ns: attempt.request().time_utc_ns,
+                            returns: &returns,
+                            selected: &selected,
+                            selected_schema: &schema,
+                        };
+                        let prepared = engine.store().prepare_managed(&input)?;
+                        let published = if matches!(
+                            attempt.instance().spec.destination,
+                            araphor_data::ManagedDestination::Graph { .. }
+                        ) {
+                            let (receipt, progress) = engine
+                                .store()
+                                .commit_managed_graph(prepared, || control.check())?;
+                            assert!(progress.is_none());
+                            assert!(receipt.graph.is_none());
+                            receipt
+                        } else {
+                            engine
+                                .store()
+                                .commit_managed(prepared, || control.check())?
+                        };
+                        state
+                            .publication
+                            .store(published.commit_revision, Ordering::SeqCst);
+                        state.attempt.lock().unwrap().take();
+                        Some(published)
+                    } else {
+                        None
+                    };
+                    state.commits.fetch_add(1, Ordering::SeqCst);
+                    Ok((completed, published))
                 })
                 .await?;
         if let Some(frontier) = self.state.frontier.lock().unwrap().as_mut() {
             frontier.pending = !completed;
         }
-        if self.managed.is_some() && completed {
+        if let Some(published) = published {
             acknowledgement.acknowledge(
                 context,
-                revision.max(self.state.publication.load(Ordering::SeqCst)),
-                true,
-                None,
+                published.commit_revision,
+                completed,
+                Some(&published),
             )?;
         }
         Ok(rows)

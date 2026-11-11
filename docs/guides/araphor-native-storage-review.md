@@ -29,6 +29,41 @@ Native result and attempt counts replace the old SQL count query. The focused
 run passes 130 managed cases and 18 raw cases. Other Data unit fixtures remain
 open. This fixture retirement establishes no latency gain.
 
+Read [runtime failure handling](../../crates/araphor-query/src/stream/physical/runtime.rs)
+with [recovery](../../crates/araphor-query/src/stream/recovery.rs) and the
+[Analysis host](../../crates/araphor-analysis/src/instance/host.rs).
+Runtime retains the existing captured recovery handle through admission and
+output execution. It sets the local wait position and deadline from the actual
+snapshot before execution. This does not consume input. Busy, denied, and
+cancelled errors keep their existing paths. Host joins the failed execution,
+records its terminal state, checks current authority, and then waits through
+the recovery handle. Unrelated input cannot restart that failed cut. Matching
+input or its captured deadline permits a retry with the retained native session.
+
+[Progress](../../crates/araphor-query/src/stream/progress.rs) registers durable
+managed input with the original Run session selection. A moving window applies
+to each read; it does not change the saved CDC interest. Fixed caller bounds,
+requests, owners, and Data scope checks remain. Ordinary subscriptions keep
+their existing selection path. The
+[managed fixture](../../crates/araphor-query/src/definition/tests/captured/managed.rs)
+now uses real admission, native commits, and durable receipts. It compares the
+original input position separately from the later publication revision.
+Idle-pressure cases attach the live replay handle before they fill the pool.
+The failure case checks unconsumed input, unrelated context changes, matching
+input, and the actual 60-second window deadline. The focused run passes
+24 capture cases. The [native Host case](../../crates/araphor-analysis/tests/native_instance/recovery.rs)
+runs the real Runtime Wasm package. It preserves prior output after trap and
+limit failures, rejects a restart from unrelated tenant input, and commits one
+repair after matching input. Five native Instance and 13 notification cases pass.
+
+[Captured admission](../../crates/araphor-query/src/definition.rs) and
+[managed begin](../../crates/araphor-query/src/stream/mod.rs) release their
+blocking worker's permit before its completion tokens. This order prevents a
+joined cancellation from reporting completion before the permit is free.
+The idle fixture waits on the existing semaphore before it applies pool
+pressure. Its clock signal occurs before that release and is not a release
+barrier.
+
 Read [Query capture](../../crates/araphor-query/src/execution.rs) with
 [native extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs).
 Query removes registered local declarations before Data checks durable owners.
@@ -53,7 +88,7 @@ for clone, release, and offline wake proof.
 clock for a deadline; an idle wait with no deadline waits for an event.
 The 19 affected Query contracts and 15 native integration cases pass.
 Complete unit qualification remains open:
-414 Query cases pass, 30 fail, and five are ignored. The Data unit target still
+419 Query cases pass, 25 fail, and five are ignored. The Data unit target still
 has old fixture compile failures. Read the current worklist for exact evidence.
 
 [Notification extraction](../../crates/araphor-data/src/analysis/native/extraction/notification.rs)

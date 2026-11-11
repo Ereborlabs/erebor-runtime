@@ -906,30 +906,28 @@ impl InstanceHost {
             }
             let checked = Arc::clone(&owner);
             Engine::blocking(Arc::clone(control), (), move || Ok(checked.check())).await??;
-            if terminal.is_none() {
-                if let Some(recovery) = araphor_query::follow::SourceRecovery::take(&failure) {
-                    let waiting = control
-                        .operation()?
-                        .within(owner.admitted.grant.remaining()?)?;
-                    let changed = recovery.changed(&waiting);
-                    tokio::pin!(changed);
-                    tokio::select! {
-                        result = &mut changed => source_recovery = Some(result?),
-                        _ = control.cancelled() => {
-                            let _cancelled = waiting.cancel();
-                            let _joined = changed.await;
-                            return Ok(());
-                        }
-                        notice = changes.changed() => {
-                            let _cancelled = waiting.cancel();
-                            let _joined = changed.await;
-                            if notice.is_err() {
-                                return Err(Code::Denied.error("managed recovery authority notice").into());
-                            }
+            if let Some(recovery) = araphor_query::follow::SourceRecovery::take(&failure) {
+                let waiting = control
+                    .operation()?
+                    .within(owner.admitted.grant.remaining()?)?;
+                let changed = recovery.changed(&waiting);
+                tokio::pin!(changed);
+                tokio::select! {
+                    result = &mut changed => source_recovery = Some(result?),
+                    _ = control.cancelled() => {
+                        let _cancelled = waiting.cancel();
+                        let _joined = changed.await;
+                        return Ok(());
+                    }
+                    notice = changes.changed() => {
+                        let _cancelled = waiting.cancel();
+                        let _joined = changed.await;
+                        if notice.is_err() {
+                            return Err(Code::Denied.error("managed recovery authority notice").into());
                         }
                     }
-                    continue;
                 }
+                continue;
             }
             let busy = matches!(
                 &failure,

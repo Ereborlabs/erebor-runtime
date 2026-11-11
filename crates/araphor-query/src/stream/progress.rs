@@ -81,6 +81,7 @@ impl Progress {
             .as_ref()
             .filter(|_| self.run.follow)
             .cloned();
+        let selection = self.run.session.selection().clone();
         let subscribe = || {
             let session = Arc::new(binding.clone());
 
@@ -89,6 +90,7 @@ impl Progress {
             let requests = requests.clone();
             let owners = bounds.input_owners.clone();
             let resume = resume.clone();
+            let selection = selection.clone();
             async move {
                 crate::execution::Engine::blocking(control, session.token()?, move || {
                     let budget = session
@@ -107,7 +109,7 @@ impl Progress {
                             .store()
                             .subscribe_managed_inputs(
                                 instance,
-                                session.selection(),
+                                &selection,
                                 &requests,
                                 owners.as_ref(),
                                 &worker,
