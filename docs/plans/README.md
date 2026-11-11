@@ -22,10 +22,11 @@ master plan invented for them.
 ## Proposed Master Plans
 
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
-  owns the active production replacement. Complete one connected native owner,
-  remove the SQL owners and dependencies, then qualify the unchanged incident
-  and measure the matched builds. Production parity and both latency targets
-  remain **Not done**. Earlier optional-owner sequences below are historical.
+  owns the active production replacement. Commit `abdc4694e` replaces the SQL
+  owners and dependencies with one connected native owner. The unchanged
+  incident and matched builds pass. Measured creation is below 100 ms; the
+  100-fold target, full storage parity, and obsolete fixture ports remain
+  **Not done**. Earlier optional-owner sequences below are historical.
 - [Fjall durable history, branches, and CDC](fjall-versioned-storage.md) records
   the implemented generic storage APIs and source changes. Durable history,
   sparse branches, exact commit receipts, streaming CDC, and retired collection

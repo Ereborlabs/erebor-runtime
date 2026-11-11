@@ -836,28 +836,4 @@ pub(crate) mod tests {
         assert_eq!(store.meta()?.commit_revision, 1);
         Ok(())
     }
-
-    #[test]
-    fn analysis_duckdb_cancel_query() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let worker = Connection::open_in_memory_with_flags(
-            Config::default()
-                .enable_autoload_extension(false)?
-                .enable_external_access(false)?,
-        )?;
-        let interrupt = worker.interrupt_handle();
-        let (started, running) = std::sync::mpsc::channel();
-        let query = std::thread::spawn(move || {
-            let _ = started.send(());
-            worker.query_row(
-                "SELECT COUNT(*) FROM range(1000000000000) t(i) WHERE hash(i) % 2 = 0",
-                [],
-                |row| row.get::<_, u64>(0),
-            )
-        });
-        running.recv()?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        interrupt.interrupt();
-        assert!(query.join().map_err(|_| "query thread panicked")?.is_err());
-        Ok(())
-    }
 }

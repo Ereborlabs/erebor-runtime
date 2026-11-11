@@ -9,9 +9,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Plans](plans/README.md) contains recovered master plans, phase trees, and
   explicitly named recovery indexes.
 - [DuckDB retirement](research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
-  owns the current native storage worklist. Production routing and SQL removal
-  are draft changes. Complete storage parity and incident timing proof remain
-  **Not done**.
+  owns the current native storage worklist. Commit `abdc4694e` replaces the
+  production SQL owner. The unchanged incident passes. Complete storage parity,
+  obsolete fixture ports, and the 100-fold timing proof remain **Not done**.
 - [Research](research/README.md) contains market, interview, compliance, and
   generated-research documents.
 - [Recovery notes](plans/recovery/README.md) explain the evidence, duplicate policy,

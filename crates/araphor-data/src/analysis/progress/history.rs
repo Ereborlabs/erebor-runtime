@@ -172,25 +172,3 @@ fn processor_versions_commit_once() -> TestResult {
     AnalysisStore::validate_state(writer.get()?, &root)?;
     Ok(())
 }
-
-#[test]
-fn processor_schema_requires_history() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let valid = duckdb::Connection::open_in_memory()?;
-    valid.execute_batch(AnalysisStore::PROCESSOR_SCHEMA)?;
-    AnalysisStore::validate_processors(&valid, directory.path())?;
-    for schema in [
-        AnalysisStore::PROCESSOR_SCHEMA.replace("commit_revision DESC", "commit_revision ASC"),
-        AnalysisStore::PROCESSOR_SCHEMA.replace(
-            ",\n    PRIMARY KEY (processor_id, method_version, tenant_id, stream_key, commit_revision)",
-            "",
-        ),
-        AnalysisStore::PROCESSOR_SCHEMA.replace("class VARCHAR NOT NULL", "class VARCHAR"),
-    ] {
-        assert_ne!(schema, AnalysisStore::PROCESSOR_SCHEMA);
-        let invalid = duckdb::Connection::open_in_memory()?;
-        invalid.execute_batch(&schema)?;
-        assert!(AnalysisStore::validate_processors(&invalid, directory.path()).is_err());
-    }
-    Ok(())
-}

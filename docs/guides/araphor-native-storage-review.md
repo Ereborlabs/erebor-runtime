@@ -148,6 +148,11 @@ The old SQL backup and restore crash tests are removed.
 
 ## Verification and limits
 
+- [Native coverage checks](../../crates/araphor-data/tests/native_raw.rs)
+  preserve six-report bounded reads, exact report references and bytes,
+  retry stability, conflicting-content rejection, and multi-report batches.
+  The old SQL commit-revision uniqueness rule is removed. One native batch
+  can contain several reports; each report retains its own source and revision.
 - The focused native lifecycle suite passes six cases. It covers raw recovery,
   backup and restore, Required byte and age bounds, rollback, restart, retirement
   before expiry, witness expiry, and maintenance while ordinary admission fails.

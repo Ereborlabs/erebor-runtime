@@ -1,5 +1,3 @@
-
-
 use araphor_data::{
     analysis::native::NativeStore, AnalysisReadControl, AnalysisSelectionV1,
     EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, StorePositionV1, ValidatedCoverageV1,
@@ -411,6 +409,62 @@ fn metadata_protects_raw_tail() -> TestResult {
     file.set_len(file.metadata()?.len() - 1)?;
     file.sync_all()?;
     assert!(NativeStore::open(&root).is_err());
+    Ok(())
+}
+
+#[test]
+fn coverage_changes_keep_identity() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = NativeStore::open(&dir.path().join("data"))?;
+    let source = identity();
+    for revision in 1..=16 {
+        store.accept_validated_coverage(coverage(&source, revision))?;
+    }
+    let after = StorePositionV1 {
+        commit_revision: store.view()?.revision(),
+        ordinal: u32::MAX,
+    };
+    for revision in 17..=22 {
+        store.accept_validated_coverage(coverage(&source, revision))?;
+    }
+    let view = store.view()?;
+    let scope = selection(&source);
+    let control = AnalysisReadControl::default();
+    let changes = view.coverage_changes(&scope, after, &control)?;
+    assert_eq!(changes.len(), 6);
+    for (record, revision) in changes.iter().zip(17..=22) {
+        assert_eq!(record.reference.source, source);
+        assert_eq!(record.reference.revision, revision);
+        assert_eq!(
+            record.reference.position,
+            StorePositionV1 {
+                commit_revision: revision,
+                ordinal: 0,
+            }
+        );
+        assert_eq!(record.encoded_report, vec![revision as u8]);
+        assert_eq!(
+            view.coverage_report(&scope, &record.reference, &control)?,
+            *record
+        );
+    }
+    let before = store.meta()?;
+    let head = store.database().inner().journal_head()?;
+    store.accept_validated_coverage(coverage(&source, 22))?;
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.database().inner().journal_head()?, head);
+    let mut conflict = coverage(&source, 22);
+    conflict.encoded_report = vec![255];
+    assert!(store.accept_validated_coverage(conflict).is_err());
+    let mut rebound = changes[0].reference.clone();
+    rebound.position = changes[1].reference.position;
+    assert!(view.coverage_report(&scope, &rebound, &control).is_err());
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.database().inner().journal_head()?, head);
+    assert_eq!(
+        store.view()?.coverage_changes(&scope, after, &control)?,
+        changes
+    );
     Ok(())
 }
 

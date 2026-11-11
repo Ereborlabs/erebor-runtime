@@ -3,15 +3,17 @@
 The [2026-11-09 integration research](../research/araphor-fjall-integration.md)
 maps this design to the completed engine forks and current production source.
 Its native history and original-journal CDC supersede the stock-Fjall limits
-below. Production replacement and incident timing proof remain not done.
+below. Read the current replacement status in the next section.
 
 ## Current replacement work, 2026-11-10
 
 The [integration worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
-owns the current production cutover. The public native owner and SQL removal
-are in an uncommitted draft. Storage lifecycle parity, default E2E qualification,
-and both incident latency targets remain **Not done**. The following records
-retain the proof for their stated source versions.
+owns the current production cutover. Commit `abdc4694e` replaces the public SQL
+owner and its dependencies. The default release build and unchanged incident
+pass. Matched runs measure creation below 100 ms and a 6.45 to 7.36-fold gain.
+Full storage lifecycle parity, obsolete fixture ports, and the 100-fold target
+remain **Not done**. The following records retain the proof for their stated
+source versions.
 
 ## Production integration status, 2026-11-09
 

@@ -42,6 +42,15 @@ fixture ports, finite-history collection, and complete qualification remain open
 
 Current evidence:
 
+- Four native coverage checks pass in 0.81 seconds. The bounded change case
+  checks six exact reports, point reads, no-op retries, conflicting content,
+  and rejected references with a changed Data revision. Native batches can
+  contain multiple coverage reports at one Data revision. The old SQL
+  `UNIQUE(commit_revision)` assertion does not apply to that existing contract.
+  Its mixed SQL test is removed after the native behavior check passes.
+  DuckDB interrupt, `EXPLAIN`, and SQL schema-only tests are also removed.
+  Other behavior tests remain until their native ports pass. Read
+  `output/araphor-fjall-migration-20261110/native-coverage-port.log`.
 - Native backup and restore now have process-exit checks at eight actual
   durability boundaries. Three focused tests pass in 1.47 seconds. They check
   exact raw pages and native context state, final backup publication, incomplete

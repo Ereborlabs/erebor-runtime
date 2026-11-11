@@ -1,7 +1,5 @@
 use super::*;
 
-mod context;
-
 #[cfg(test)]
 mod tests;
 

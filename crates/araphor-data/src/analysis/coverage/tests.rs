@@ -194,25 +194,6 @@ fn source_history_rejects_corruption() -> TestResult {
 }
 
 #[test]
-fn source_schema_requires_history() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let valid = Connection::open_in_memory()?;
-    valid.execute_batch(AnalysisStore::SOURCE_SCHEMA)?;
-    AnalysisStore::validate_source_schema(&valid, directory.path())?;
-    for schema in [
-        AnalysisStore::SOURCE_SCHEMA.replace("commit_revision DESC", "commit_revision ASC"),
-        AnalysisStore::SOURCE_SCHEMA.replace(",\n    PRIMARY KEY (stream_key, commit_revision)", ""),
-        AnalysisStore::SOURCE_SCHEMA.replace("cpu_id UINTEGER NOT NULL", "cpu_id UINTEGER"),
-    ] {
-        assert_ne!(schema, AnalysisStore::SOURCE_SCHEMA);
-        let invalid = Connection::open_in_memory()?;
-        invalid.execute_batch(&schema)?;
-        assert!(AnalysisStore::validate_source_schema(&invalid, directory.path()).is_err());
-    }
-    Ok(())
-}
-
-#[test]
 fn coverage_changes_keep_cut() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
@@ -510,58 +491,5 @@ fn coverage_changes_keep_progress() -> TestResult {
             .len(),
         3
     );
-    Ok(())
-}
-
-#[test]
-fn coverage_changes_use_index() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
-    let source = crate::analysis::tests::identity();
-    for revision in 1..=16 {
-        store.accept_validated_coverage(report(&source, revision))?;
-    }
-    let after = store.meta()?.commit_revision;
-    for revision in 17..=22 {
-        store.accept_validated_coverage(report(&source, revision))?;
-    }
-    let changes = store.coverage_changes(
-        &AnalysisSelectionV1::tenant(source.tenant_id),
-        position(after),
-        &AnalysisReadControl::default(),
-    )?;
-    assert_eq!(changes.reports.len(), 6);
-    store.read_snapshot(|reader| {
-        assert_index(reader, AnalysisStore::COVERAGE_CHANGES_SQL, params![after])?;
-        for report in &changes.reports {
-            assert_index(
-                reader,
-                AnalysisStore::COVERAGE_REPORT_SQL,
-                params![report.reference.position.commit_revision],
-            )?;
-        }
-        Ok(())
-    })?;
-    let error = store
-        .writer()?
-        .get_mut()?
-        .execute(
-            "INSERT INTO coverage SELECT stream_key,tenant_id,revision+1000,report,commit_revision,ordinal FROM coverage WHERE commit_revision=?",
-            params![changes.reports[0].reference.position.commit_revision],
-        )
-        .err()
-        .ok_or("the coverage commit was duplicated")?;
-    assert!(error.to_string().contains("commit_revision"));
-    Ok(())
-}
-
-fn assert_index(reader: &Connection, sql: &str, parameters: &[&dyn duckdb::ToSql]) -> Result<()> {
-    let plan = reader
-        .prepare(&format!("EXPLAIN ANALYZE {sql}"))
-        .and_then(|mut statement| statement.query_row(parameters, |row| row.get::<_, String>(1)))
-        .context(AnalysisDatabaseSnafu {
-            operation: "inspect coverage change access path",
-        })?;
-    assert!(plan.contains("Index Scan"), "{plan}");
     Ok(())
 }
