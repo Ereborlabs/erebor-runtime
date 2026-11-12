@@ -11,7 +11,7 @@ pub(super) fn identity() -> araphor_data::EvidenceIntakeIdentityV1 {
     }
 }
 
-pub(super) fn append(store: &NativeStore, cursor: u64) -> araphor_data::Result<()> {
+pub(crate) fn append(store: &NativeStore, cursor: u64) -> araphor_data::Result<()> {
     let framed = Vec::<u8>::try_from(&araphor_data::EvidenceRecord {
         task_cookie: cursor,
         observed_boottime_ns: cursor,
@@ -110,7 +110,7 @@ pub(super) fn capture(
     )
 }
 
-pub(super) fn select(
+pub(crate) fn select(
     store: &NativeStore,
     page: &araphor_data::ManagedPage,
     cursors: &[u64],

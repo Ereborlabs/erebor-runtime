@@ -4,6 +4,25 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native Follow contracts](../../crates/araphor-data/tests/native_managed/storage/source/follow.rs)
+with the [two-call fixture](../../crates/araphor-data/tests/native_managed/storage.rs)
+and [Source fixture](../../crates/araphor-data/tests/native_managed/storage/source.rs).
+Calls 10 and 11 keep their parameters and checkpoint values 2 and 3. Call 13
+uses the native Graph transaction; declared call 12 remains unused. The cases
+check exact native publication and writer identities, the publication revision,
+and the stored member before and after reopen. Native Source metadata uses
+the selected result reference, without the removed separate GraphRows ID.
+
+The complete same-source and foreign-source matrices preserve Follow progress
+and reject stale finite work. Failure keeps every native record, Data metadata,
+and the WAL head. The count-only case first rejects Graph capability, then
+publishes valid Source metadata from the same attempt. No production owner or
+API changes. All 218 native managed integration cases pass. Three old Follow
+cases and their SQL helper remain. Data unit compilation still reports 176
+diagnostics. Read `native-follow-prefix-*` under
+`output/araphor-fjall-migration-20261110`. Complete qualification and incident
+performance remain open.
+
 Read the [native Source binding matrix](../../crates/araphor-data/tests/native_managed/source/follow.rs)
 with [live result reads](../../crates/araphor-data/src/analysis/native/managed/read.rs),
 [Source record checks](../../crates/araphor-data/src/analysis/native/managed/source/records.rs),

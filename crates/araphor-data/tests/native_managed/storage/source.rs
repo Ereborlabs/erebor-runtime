@@ -11,6 +11,9 @@ use araphor_data::{
 use serde_value::Value;
 use std::collections::BTreeSet;
 
+#[path = "source/follow.rs"]
+mod follow;
+
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub(super) fn identity() -> araphor_data::EvidenceIntakeIdentityV1 {

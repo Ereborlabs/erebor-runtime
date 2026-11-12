@@ -115,7 +115,8 @@ fn source_window_winner() -> TestResult {
     );
     Ok(())
 }
-use fixtures::{append, capture, follow, identity, instance, publish, records, scope, select};
+pub(crate) use fixtures::{append, select};
+use fixtures::{capture, follow, identity, instance, publish, records, scope};
 
 #[test]
 fn source_publication_history() -> TestResult {

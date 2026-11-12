@@ -1,19 +1,8 @@
 use super::*;
-use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph, GraphRows};
+use crate::analysis::graph_rows::{tests::fixture::CommitFixture, GraphRows};
 use crate::PackageErrorCodeV1 as Code;
 
 fn fixture() -> TestResult<(CommitFixture, Fixture)> {
-    fixture_with_unused_call(false)
-}
-
-fn fixture_with_unused_call(unused_call: bool) -> TestResult<(CommitFixture, Fixture)> {
-    fixture_with_calls(unused_call, true)
-}
-
-fn fixture_with_calls(
-    unused_call: bool,
-    graph_producer: bool,
-) -> TestResult<(CommitFixture, Fixture)> {
     let graph = CommitFixture::new()?;
     let source = graph.snapshot.scope.identity.clone();
     let mut fixture = Fixture::admit_scope(
@@ -25,11 +14,7 @@ fn fixture_with_calls(
     spec.id = "graph-prefix".into();
     spec.destination = ManagedDestination::Graph {
         source,
-        calls: if graph_producer {
-            BTreeSet::from([10, 11, 13])
-        } else {
-            BTreeSet::from([10, 11])
-        },
+        calls: BTreeSet::from([10, 11, 13]),
         operation: ManagedGraphOperation::Evaluate,
         events_sql: "SELECT * FROM events".into(),
         control_sql: "SELECT * FROM graph_state".into(),
@@ -64,12 +49,7 @@ fn fixture_with_calls(
     call.target = "sql".into();
     call.artifact = None;
     call.dependencies.clear();
-    if graph_producer {
-        spec.manifest.calls.insert(13, call.clone());
-    }
-    if unused_call {
-        spec.manifest.calls.insert(12, call);
-    }
+    spec.manifest.calls.insert(13, call);
     let mut images = spec.definition.images.clone();
     images.push(pin);
     spec.definition = ResolvedDefinition::new(
@@ -92,39 +72,6 @@ fn fixture_with_calls(
         || Ok(()),
     )?;
     Ok((graph, fixture))
-}
-
-#[test]
-fn graph_reopen_uses_selected_call_subset() -> TestResult {
-    let (graph, fixture) = fixture_with_unused_call(true)?;
-    let captured = read(&graph, &mode(&fixture, true))?;
-    let attempt = graph
-        .store
-        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-    let receipt = publish(&graph, &fixture, &captured, &attempt)?;
-    assert_eq!(receipt.results.len(), 3);
-    assert!(receipt.results.contains_key(&13));
-    assert!(!receipt.results.contains_key(&12));
-    let root = graph._directory.path().join("analysis");
-    let CommitFixture {
-        store,
-        _graph,
-        _directory,
-        ..
-    } = graph;
-    drop(_graph);
-    drop(store);
-    let reopened = AnalysisStore::open(&root)?;
-    let saved = reopened
-        .managed_attempt(
-            fixture.instance.spec.tenant,
-            &fixture.instance.spec.id,
-            &attempt.request().id,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("reopened managed Graph attempt")?;
-    assert_eq!(saved.receipt(), Some(&receipt));
-    Ok(())
 }
 
 #[test]
@@ -206,43 +153,6 @@ fn graph_reopen_rejects_corruption() -> TestResult {
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
     }
-    Ok(())
-}
-
-#[test]
-fn graph_publication_requires_a_graph_producer() -> TestResult {
-    let (graph, fixture) = fixture_with_calls(false, false)?;
-    let captured = read(&graph, &mode(&fixture, true))?;
-    let attempt = graph
-        .store
-        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-    let before = fixture.commit_state(&graph.store)?;
-    let error = publish(&graph, &fixture, &captured, &attempt)
-        .err()
-        .ok_or("Graph publication without a producer succeeded")?;
-    assert!(matches!(
-        error.downcast_ref::<crate::Error>(),
-        Some(crate::Error::GraphInvalid {
-            field: "graph producer is absent",
-            ..
-        })
-    ));
-    assert_eq!(fixture.commit_state(&graph.store)?, before);
-    assert!(graph
-        .store
-        .processor_result(&graph.snapshot.scope)?
-        .is_none());
-    assert!(graph
-        .store
-        .managed_attempt(
-            fixture.instance.spec.tenant,
-            &fixture.instance.spec.id,
-            &attempt.request().id,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("registered managed attempt absent")?
-        .receipt()
-        .is_none());
     Ok(())
 }
 
@@ -439,138 +349,6 @@ fn publish(
         receipt.commit_revision
     );
     Ok(receipt)
-}
-
-#[test]
-fn graph_follow_retains_prefix() -> TestResult {
-    for same_source in [false, true] {
-        for before_admission in [false, true] {
-            let (graph, fixture) = fixture()?;
-            let captured = read(&graph, &mode(&fixture, true))?;
-            assert!(captured.follows_graph());
-            if before_admission {
-                append(&graph, same_source)?;
-            }
-            let attempt =
-                graph
-                    .store
-                    .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-            if !before_admission {
-                append(&graph, same_source)?;
-            }
-            let receipt = publish(&graph, &fixture, &captured, &attempt)?;
-            assert!(receipt.commit_revision > captured.revision());
-            assert_eq!(
-                fixture.current(&graph.store)?.progress,
-                receipt.commit_revision
-            );
-            assert_eq!(receipt.results.len(), 3);
-            assert_eq!(
-                receipt.graph,
-                Some(crate::analysis::PackageResultRefV1 {
-                    result_id: graph.request.result_id.clone(),
-                    commit_revision: receipt.commit_revision,
-                })
-            );
-            assert!(matches!(
-                graph
-                    .store
-                    .managed_result(
-                        &fixture.current(&graph.store)?,
-                        &receipt.selected.result_id,
-                        10,
-                        &AnalysisReadControl::default(),
-                    )?
-                    .kind,
-                crate::InstanceResultKindV1::Selected
-            ));
-            let result = graph.store.managed_result(
-                &fixture.current(&graph.store)?,
-                &receipt.results[&10].result_id,
-                10,
-                &AnalysisReadControl::default(),
-            )?;
-            assert!(!result.current);
-            assert_eq!(result.result, receipt.results[&10]);
-            assert_eq!(result.receipt, receipt);
-            assert_eq!(
-                fixture
-                    .checkpoint(&graph.store, &receipt.results[&10])?
-                    .datasets[0]
-                    .batches,
-                fixture
-                    .output(2)?
-                    .checkpoint
-                    .ok_or("fixture checkpoint")?
-                    .datasets[0]
-                    .batches
-            );
-            assert_eq!(
-                receipt.frontier.as_ref(),
-                attempt.request().frontier.as_ref()
-            );
-            let health = graph
-                .store
-                .processor_health(&graph.snapshot.scope)?
-                .ok_or("Graph health absent")?;
-            assert_eq!(health.consumed_cursor, 1);
-            assert_eq!(health.accepted_cursor, if same_source { 2 } else { 1 });
-            let saved = graph
-                .store
-                .managed_attempt(
-                    [1; 16],
-                    &fixture.instance.spec.id,
-                    &attempt.request().id,
-                    &AnalysisReadControl::default(),
-                )?
-                .ok_or("saved attempt absent")?;
-            assert!(saved.follows_graph());
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn finite_graph_rejects_changes() -> TestResult {
-    for same_source in [false, true] {
-        for before_admission in [false, true] {
-            let (graph, fixture) = fixture()?;
-            assert!(fixture.instance.running);
-            let captured = read(&graph, &mode(&fixture, false))?;
-            assert!(!captured.follows_graph());
-            if before_admission {
-                append(&graph, same_source)?;
-                let before = fixture.commit_state(&graph.store)?;
-                assert!(matches!(
-                    graph
-                        .store
-                        .register_managed_attempt(&captured, &input(&graph), || Ok(())),
-                    Err(crate::Error::AnalysisSourceChanged { .. })
-                ));
-                assert_eq!(fixture.commit_state(&graph.store)?, before);
-            } else {
-                let attempt =
-                    graph
-                        .store
-                        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-                append(&graph, same_source)?;
-                let before = fixture.commit_state(&graph.store)?;
-                let error = publish(&graph, &fixture, &captured, &attempt)
-                    .err()
-                    .ok_or("finite stale publication succeeded")?;
-                assert!(matches!(
-                    error.downcast_ref::<crate::Error>(),
-                    Some(crate::Error::AnalysisSourceChanged { .. })
-                ));
-                assert_eq!(fixture.commit_state(&graph.store)?, before);
-            }
-            assert!(graph
-                .store
-                .processor_result(&graph.snapshot.scope)?
-                .is_none());
-        }
-    }
-    Ok(())
 }
 
 #[test]

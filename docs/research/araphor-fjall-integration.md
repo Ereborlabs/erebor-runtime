@@ -89,6 +89,35 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Four Follow contracts now use native storage. The fixture retains count
+  calls 10 and 11, their parameters, and checkpoint values 2 and 3. Call 13
+  stages and freezes a native Graph journal. Declared call 12 is not returned.
+  Reopen preserves exactly those three returned calls and the stored member.
+  Native Source metadata uses `receipt.graph == receipt.selected`; the removed
+  GraphRows result had a separate ID. The test checks the actual native
+  publication reference, Graph identity, writer identity, and commit revision.
+
+  Both same-source and foreign-source input changes run before and after
+  admission. Follow keeps the captured cut, saved original-log position,
+  frontier, checkpoints, and historical receipt. Processor progress consumes
+  cursor 1; accepted progress is 1 or 2. Finite reads reject the same changes
+  and preserve every visible native record, Data metadata, and the WAL head.
+  A count-only Source attempt rejects a Graph transaction with the exact
+  capability error. The same attempt then publishes valid Source metadata.
+  This replaces the obsolete GraphRows producer-type requirement.
+
+  The four focused cases pass in 0.23 seconds. With the final native identity
+  and revision assertions, all 218 native managed integration cases pass in
+  12.11 seconds. The four replaced SQL bodies and their unused fixture
+  switches are removed. Three Follow cases and the shared SQL snapshot helper
+  remain. Data unit compilation still reports 176 diagnostics. Changed Rust
+  formatting and whitespace checks pass. Read `native-follow-prefix-focused.log`,
+  `native-follow-prefix-qualified.log`, and `native-follow-prefix-unit.log`
+  under `output/araphor-fjall-migration-20261110`.
+  Result: **Done for the four native Follow contracts; Not done for the
+  remaining Follow ports and complete migration**. No production code changes,
+  incident timing comparison, or full CI are included.
+
 - Native selected Source reads now share the existing capture and member
   qualification predicates with Source reads and recovery. The baseline uses
   two real publications over one raw record. The first result remains readable
