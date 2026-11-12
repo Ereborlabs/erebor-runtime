@@ -12,6 +12,8 @@ use crate::{
 
 mod raw;
 mod recovery;
+#[cfg(test)]
+mod tests;
 
 pub(super) struct Traces;
 

@@ -12,6 +12,9 @@ use araphor_data::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_lifecycle/usage.rs"]
+mod usage;
+
 fn identity() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

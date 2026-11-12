@@ -4,6 +4,28 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [public usage cases](../../crates/araphor-data/tests/native_lifecycle/usage.rs)
+with [witness accounting](../../crates/araphor-data/src/analysis/native/witnesses.rs),
+the [trace reserve case](../../crates/araphor-data/src/analysis/native/trace/tests.rs),
+and [transaction count case](../../crates/araphor-data/src/analysis/native/capacity/tests.rs).
+The old SQL usage family is removed. Public cases retain the exact small and
+16 MiB workloads, sparse and overlapping witnesses, context costs, tenant and
+time checks, expiry, and retained results. Native reopen validates state.
+The trace case retains private reserve and slot counts across terminal and
+reopen. The transaction case stages a real context and compares actual staged
+records with native counters. Its deletion is rollback-only. No context
+collection path is added. Complete branch bytes, metadata, native revision,
+log cursor, visible sequence, and public reads stay unchanged after rollback.
+The private witness case checks all three lock releases after usage.
+
+The focused run passes eight lifecycle, eight backup, and 22 context cases.
+The three private usage cases remain unqualified: Data unit compilation still
+reports 212 diagnostics, with none at these ports. The production library
+check without default features, changed Rust formatting, and whitespace checks
+pass. Read `native-usage-*` under `output/araphor-fjall-migration-20261110`.
+No storage quota or compatibility API is restored. Complete qualification and
+incident performance remain open.
+
 Read [input receipts](../../crates/araphor-query/src/inputs/receipt.rs) with
 [SQL input binding](../../crates/araphor-query/src/definition/physical/sql.rs)
 and [captured metadata](../../crates/araphor-query/src/sources/rows/package.rs).

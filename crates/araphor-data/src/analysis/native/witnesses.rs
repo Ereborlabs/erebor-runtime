@@ -236,3 +236,33 @@ impl NativeStore {
         .exact(&raw)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+
+    #[test]
+    fn usage_releases_locks() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = NativeStore::open(directory.path().join("analysis"))?;
+        store.commit_context(&AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: [1; 16],
+                owner_id: "p".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: Some(1),
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: vec![1],
+        })?;
+        assert_eq!(store.witness_usage([1; 16], 201)?.charged_bytes, 0);
+        assert!(store.writer.try_lock().is_ok());
+        assert!(store.raw.try_lock().is_ok());
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
+}

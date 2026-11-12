@@ -75,6 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
+  The last unit compilation reports 212 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -87,6 +88,39 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- The old usage fixture family no longer uses SQL. Two runnable native
+  lifecycle cases preserve witness accounting and segment cost. They retain
+  the five-byte record, context references, duplicate results, tenant and time
+  checks, expiry boundaries, the 16 MiB payload, 4,096 records, four sparse
+  witnesses, and overlapping references. Actual native reopen replaces SQL
+  state validation. Checkpoint and final reopen also preserve exact usage,
+  Data metadata, and both retained result bodies after raw expiry.
+
+  Native trace now owns the complete two-frame terminal reserve case. It keeps
+  exact reserve and slot counts before and after the terminal, frame bytes,
+  receipt, terminal, and reopen checks. Native capacity now owns the transaction
+  usage case. It stages a real second-tenant context, compares all three count
+  kinds with actual staged context inventory, and removes the first context
+  only inside the rollback transaction. The partial deletion never commits.
+  Rollback preserves the complete branch inventory, Data metadata, native
+  revision, original-log cursor, visible sequence, and public context reads.
+  Reopen validates the original counts. A private witness case checks writer,
+  raw, and maintenance lock release immediately after witness usage.
+  These are usage and integrity checks. No storage quota, context collection
+  owner, compatibility method, or public API is added.
+
+  The final focused run passes eight lifecycle, eight backup, and 22 context
+  cases. Data unit compilation reports 212 diagnostics, down from 233, with
+  none in the native usage ports. The three private cases do not execute and
+  remain **unqualified** until the complete unit target compiles. The release
+  library check without default features passes in 8.55 seconds. Changed Rust
+  formatting and whitespace checks pass. Read `native-usage-lifecycle.log`,
+  `native-usage-qualified.log`, `native-usage-unit.log`, and
+  `native-usage-default.log` under `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native public usage qualification and SQL family removal;
+  Not done for private unit execution and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Nested SQL package inputs now keep captured parent metadata when native
   optimization removes the parent's physical scan. The receipt owner still

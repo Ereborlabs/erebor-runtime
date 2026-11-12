@@ -103,3 +103,6 @@ impl NativeStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
