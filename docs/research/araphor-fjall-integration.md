@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 176 diagnostics.
+  The last unit compilation reports 162 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,33 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Follow admission uses native fixtures. The public matrix rejects a missing
+  completed position, an expected instance, rebuild mode, and a stopped
+  instance with the exact `Invalid / managed Graph follow mode` error.
+  Each failure preserves all native records, Data metadata, and the WAL head.
+  All five focused Follow cases pass in 0.24 seconds. All 219 native managed
+  integration cases pass in 11.12 seconds.
+
+  Two private Capture cases now use the existing native count fixture and a
+  Graph destination. They preserve removal of the serialized `follow` field,
+  its false default, a foreign input append, and `AnalysisSourceChanged`.
+  A future source revision preserves `AnalysisConflict`, complete rollback,
+  and successful registration after exact source-guard repair. These two
+  units remain **unexecuted and unqualified**: Data unit compilation still
+  fails with 162 diagnostics, down from 176. The new native unit file has no
+  compilation diagnostic. The old mode and future bodies, unused foreign
+  append helper, and unreferenced SQL `CommitState` helper are removed.
+  The old GraphRows corruption case remains pending.
+
+  Changed Rust formatting and whitespace checks pass. Read
+  `native-follow-mode-focused.log`, `native-follow-mode-qualified.log`, and
+  `native-follow-mode-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for public native Follow mode qualification and SQL snapshot
+  helper retirement; Not done for private Capture qualification, remaining
+  corruption coverage, and complete migration**. No production code changes,
+  incident timing comparison, or full CI are included.
 
 - Four Follow contracts now use native storage. The fixture retains count
   calls 10 and 11, their parameters, and checkpoint values 2 and 3. Call 13

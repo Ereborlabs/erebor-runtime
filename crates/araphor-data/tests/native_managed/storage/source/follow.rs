@@ -84,13 +84,8 @@ impl FollowFixture {
 
     fn read(&self, store: &NativeStore, follow: bool) -> TestResult<ManagedPage> {
         let instance = self.source.fixture.current(store)?;
-        let selection = instance
-            .spec
-            .destination
-            .selection(&instance.grant.selection)?
-            .project(&self.source.requests)?;
-        let page = store.read_managed_tables_filtered(
-            &selection,
+        self.read_mode(
+            store,
             &ManagedRead {
                 instance,
                 expected: None,
@@ -100,6 +95,19 @@ impl FollowFixture {
                 source: Some(ManagedSourceRead::Initial),
                 execution: Some(Arc::clone(&self.source.execution)),
             },
+        )
+    }
+
+    fn read_mode(&self, store: &NativeStore, mode: &ManagedRead) -> TestResult<ManagedPage> {
+        let selection = mode
+            .instance
+            .spec
+            .destination
+            .selection(&mode.instance.grant.selection)?
+            .project(&self.source.requests)?;
+        let page = store.read_managed_tables_filtered(
+            &selection,
+            mode,
             AnalysisTableRead {
                 requests: &self.source.requests,
                 event_ranges: None,
@@ -546,5 +554,76 @@ fn source_metadata_denies_graph() -> TestResult {
             .receipt(),
         Some(&receipt)
     );
+    Ok(())
+}
+
+#[test]
+fn graph_follow_requires_mode() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open(directory.path().join("data"))?;
+    let fixture = FollowFixture::new(&store, false)?;
+    let valid = ManagedRead {
+        instance: fixture.source.fixture.current(&store)?,
+        expected: None,
+        rebuild: false,
+        follow: true,
+        completed: Some(0),
+        source: Some(ManagedSourceRead::Initial),
+        execution: Some(Arc::clone(&fixture.source.execution)),
+    };
+    let mut invalid = [valid.clone(), valid.clone(), valid.clone()];
+    invalid[0].completed = None;
+    invalid[1].expected = Some(valid.instance.clone());
+    invalid[2].rebuild = true;
+    for mode in invalid {
+        let before = FollowFixture::cut(&store)?;
+        let error = fixture
+            .read_mode(&store, &mode)
+            .err()
+            .ok_or("invalid Follow capture succeeded")?;
+        assert!(
+            matches!(
+                error.downcast_ref::<Error>(),
+                Some(Error::Package {
+                    code: Code::Invalid,
+                    field: "managed Graph follow mode",
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+        assert_eq!(FollowFixture::cut(&store)?, before);
+    }
+    let stopped = store.set_managed_running(
+        [1; 16],
+        &valid.instance.spec.id,
+        valid.instance.lifecycle,
+        false,
+        || Ok(()),
+    )?;
+    let before = FollowFixture::cut(&store)?;
+    let error = fixture
+        .read_mode(
+            &store,
+            &ManagedRead {
+                instance: stopped,
+                execution: None,
+                ..valid
+            },
+        )
+        .err()
+        .ok_or("inactive Follow capture succeeded")?;
+    assert!(
+        matches!(
+            error.downcast_ref::<Error>(),
+            Some(Error::Package {
+                code: Code::Invalid,
+                field: "managed Graph follow mode",
+                ..
+            })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(FollowFixture::cut(&store)?, before);
     Ok(())
 }

@@ -4,6 +4,24 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [public Follow mode matrix](../../crates/araphor-data/tests/native_managed/storage/source/follow.rs)
+and [private Capture cases](../../crates/araphor-data/src/analysis/managed/tests/input/follow.rs)
+with [native capture](../../crates/araphor-data/src/analysis/native/managed/capture.rs)
+and [native admission authority](../../crates/araphor-data/src/analysis/native/managed/authority.rs).
+The public matrix keeps all four exact mode errors and complete native record,
+metadata, and WAL rollback checks. All five focused Follow cases and all 219
+native managed integration cases pass.
+
+The private cases keep the serialized missing-field default and future source
+revision mutations. They use the existing native count fixture, projected
+source cursor, and a Graph destination. No producer or public Capture API is
+added. The two units remain unexecuted and unqualified while Data unit
+compilation fails with 162 diagnostics. Their source has no compilation
+diagnostic. The two old bodies and unused SQL snapshot helper are removed.
+The old GraphRows corruption case remains pending. Read `native-follow-mode-*`
+under `output/araphor-fjall-migration-20261110`. Complete qualification and
+incident performance remain open.
+
 Read the [native Follow contracts](../../crates/araphor-data/tests/native_managed/storage/source/follow.rs)
 with the [two-call fixture](../../crates/araphor-data/tests/native_managed/storage.rs)
 and [Source fixture](../../crates/araphor-data/tests/native_managed/storage/source.rs).
