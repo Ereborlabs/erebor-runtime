@@ -1,6 +1,5 @@
 use super::*;
 
-mod current;
 mod follow;
 mod origins;
 mod scope;

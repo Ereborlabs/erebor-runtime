@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 162 diagnostics.
+  The last unit compilation reports 153 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,41 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- The complete old SQL Follow fixture family is removed. Native Source
+  binding qualification now includes a sixth fault: decrement only the
+  original header's captured commit revision. Live reads and reopen require
+  the exact `Invalid / source selected authority` error. Exact stamped byte
+  repair restores the original result and receipt.
+
+  Native Graph recovery changes only the actual call-13 origin's call ID to
+  the existing count call 10. Writer, layer, result reference, grant, and
+  property bytes remain intact. Reopen requires the existing exact
+  `Invalid / managed Graph layer owner` error. Exact origin repair restores
+  its bytes, the complete Source prefix, Source identity, selected receipt,
+  both count checkpoints, Graph member, and publication identity and revision.
+
+  The removed SQL state fault compared two stored package-state copies.
+  Native `GraphStateMember` is the authoritative value at its published cut;
+  `GraphProof` stores provenance. No independent state-value copy remains.
+  The native state case checks real `Declared("0")` and `Declared("1")` rows,
+  exact snapshots, compaction, and reopen. Native Graph history and capability
+  cases preserve historical values and write authority. These replace the
+  old copied-state comparison. They do not provide a duplicate-value detector.
+  The removed separate producer capture fields are replaced by Source capture
+  and GraphOrigin-to-call, packet, and layer authority. No archive, digest,
+  package-semantic rule, or live global verifier is added.
+
+  All 220 native managed integration cases pass in 18.74 seconds. Data unit
+  compilation reports 153 diagnostics, down from 162. The two private native
+  Capture units remain unexecuted and unqualified. Changed Rust formatting
+  and whitespace checks pass. Read `native-follow-recovery-qualified.log`
+  and `native-follow-recovery-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for SQL Follow fixture retirement and native authority
+  qualification; Not done for private Capture qualification and complete
+  migration**. No production code changes, incident timing comparison, or
+  full CI are included.
 
 - Follow admission uses native fixtures. The public matrix rejects a missing
   completed position, an expected instance, rebuild mode, and a stopped

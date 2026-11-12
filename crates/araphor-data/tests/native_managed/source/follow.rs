@@ -178,6 +178,7 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
     for fault in [
         "missing_header",
         "rebound_header",
+        "captured_cut",
         "wrong_receipt",
         "invalid_header",
         "foreign_record",
@@ -351,6 +352,15 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
             let changed = match fault {
                 "missing_header" => None,
                 "rebound_header" => Some(later_header.to_vec()),
+                "captured_cut" => {
+                    assert!(first.captured_revision() > 1);
+                    let mut header: Value = rmp_serde::from_slice(&first_header[1..])?;
+                    *super::super::attempts::field(
+                        &mut header,
+                        &["captured", "commit_revision"],
+                    )? = serde_value::to_value(first.captured_revision() - 1)?;
+                    Some([vec![0], rmp_serde::to_vec(&header)?].concat())
+                }
                 "invalid_header" => Some(vec![0, 0]),
                 _ => unreachable!(),
             };
@@ -377,7 +387,7 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
                     ..
                 }
             ),
-            "rebound_header" => matches!(
+            "rebound_header" | "captured_cut" => matches!(
                 error,
                 Error::Package {
                     code: Code::Invalid,
@@ -408,7 +418,19 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
         assert_eq!(store.meta()?, meta);
         drop((page, first, later_page, second, saved, view));
         drop(store);
-        assert!(NativeStore::open(&root).is_err(), "{fault}");
+        let reopened = NativeStore::open(&root);
+        if fault == "captured_cut" {
+            assert!(matches!(
+                reopened,
+                Err(Error::Package {
+                    code: Code::Invalid,
+                    field: "source selected authority",
+                    ..
+                })
+            ));
+        } else {
+            assert!(reopened.is_err(), "{fault}");
+        }
         let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
             .versioned()
             .open()?;

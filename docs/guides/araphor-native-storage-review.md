@@ -4,6 +4,31 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native Source binding faults](../../crates/araphor-data/tests/native_managed/source/follow.rs)
+and [Graph origin recovery case](../../crates/araphor-data/tests/native_managed/storage/source/follow/recovery.rs)
+with [Source recovery](../../crates/araphor-data/src/analysis/native/managed/source/recovery.rs),
+[Graph origins](../../crates/araphor-data/src/analysis/native/managed/graph/origin.rs),
+and [Graph recovery](../../crates/araphor-data/src/analysis/native/managed/graph/recovery.rs).
+The added Source fault changes only the captured commit revision. The origin
+fault changes only call 13 to call 10. Exact native authority errors and exact
+stamped repair preserve Source bytes, identity, receipts, checkpoints, members,
+and publication cuts. All 220 native managed integration cases pass.
+
+Read [native package state](../../crates/araphor-data/tests/native_managed/domain/state.rs)
+and [native Graph history](../../crates/araphor-data/tests/native_managed/domain/read/history.rs)
+for the state guarantee. Native Graph has one authoritative state value at its
+published cut. These cases check exact values, historical results, compaction,
+and reopen. Capability cases qualify write authority. The removed SQL test
+compared duplicated state values; that duplicate detector is not retained.
+No second state archive or package-semantic rule replaces it.
+
+The complete old SQL Follow fixture family and its empty current module are
+removed. Data unit compilation reports 153 diagnostics. The two private native
+Capture units remain unexecuted and unqualified. Read
+`native-follow-recovery-*` under `output/araphor-fjall-migration-20261110`.
+Complete qualification and incident performance remain open. Entries below
+record the earlier verification cuts.
+
 Read the [public Follow mode matrix](../../crates/araphor-data/tests/native_managed/storage/source/follow.rs)
 and [private Capture cases](../../crates/araphor-data/src/analysis/managed/tests/input/follow.rs)
 with [native capture](../../crates/araphor-data/src/analysis/native/managed/capture.rs)

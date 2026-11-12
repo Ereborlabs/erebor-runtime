@@ -2,6 +2,9 @@ use super::*;
 use araphor_data::analysis::native::ManagedGraphTransaction;
 use araphor_data::{ManagedFrontier, ManagedGraphOperation, ProcessorClassV1, ProcessorScopeV1};
 
+#[path = "follow/recovery.rs"]
+mod recovery;
+
 struct FollowFixture {
     source: SourceFixture,
     graph: Option<sdk::Model>,
