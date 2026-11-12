@@ -1678,3 +1678,59 @@ Read the [qualification record](../research/results/araphor-native-source-recove
 for exact checks. Configured capacity, raw retention and deletion recovery,
 trace storage, backup, production cutover, DuckDB removal, and both incident
 targets remain **Not done**. This extension changes no kernel or ABI boundary.
+
+## Data history maintenance, 2026-11-12
+
+Data now uses the versioned Fjall owner in production. Earlier sections record
+their stated source versions. Read the current
+[replacement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
+for the remaining fixture and Query work. Complete migration qualification and
+the 100-fold incident improvement remain **Not done**.
+
+Read these owners in order:
+
+1. [Initialization](../../crates/araphor-data/src/analysis/native/mod.rs) saves Data's history policy ID in its initial stamped transaction.
+2. [History ownership](../../crates/araphor-data/src/analysis/native/history.rs) validates that exact policy and resolves retained Data revisions through the stamped-cut index.
+3. [Processor recovery](../../crates/araphor-data/src/analysis/native/progress/recovery.rs) follows prior states to the cut before the first processor state.
+4. [Checkpoint](../../crates/araphor-data/src/analysis/native/backup/mod.rs) retains the Data writer, anchors raw progress, and seals raw segments.
+5. [Journal collection](../../crates/araphor-data/src/analysis/native/inputs/collection.rs) retains the scan lock while it folds consumer roots, advances admission and history, flushes storage, and collects journals.
+6. [Restore](../../crates/araphor-data/src/analysis/native/backup/restore.rs) binds a missing policy in its recovery-epoch transaction without changing the manifest Data revision.
+7. [Lifecycle cases](../../crates/araphor-data/tests/native_lifecycle/history.rs) check release, policy ownership, legacy open, restore, foreign policies, and branches.
+8. [Input cases](../../crates/araphor-data/tests/native_inputs/history.rs), [managed capture](../../crates/araphor-data/tests/native_managed/history.rs), [raw references](../../crates/araphor-data/tests/native_raw/history.rs), and [package references](../../crates/araphor-data/tests/native_packages/history.rs) check retained public cuts after checkpoint, compaction, and reopen.
+
+Retained live raw entries, managed generations, definition versions, context
+headers, package installation headers, processor birth cuts, trace birth cuts,
+coverage changes, and recovery gaps constrain native history. Durable input
+generations, the shared reader, and ordinary subscription anchors also constrain
+it. Existing engine snapshots and branch forks protect held views and ancestry.
+These roots use existing keys and small headers. They add no payload archive,
+index, revision window, storage quota, or subscription polling.
+
+```mermaid
+sequenceDiagram
+    participant Data
+    participant Inputs
+    participant Fjall
+    Data->>Data: Hold writer, anchor raw progress, seal segments
+    Data->>Inputs: Compute retained native bound
+    Inputs->>Inputs: Hold scan lock, read logs, fold consumer roots
+    Inputs->>Fjall: Advance original journal admission
+    Inputs->>Fjall: Sync owned history policy at the same ID
+    Inputs->>Fjall: Flush native checkpoint
+    Inputs->>Fjall: Collect eligible original journals
+```
+
+An unchanged policy bound makes no catalogue write. Unknown policies remain
+untouched. A missing owned policy, a wrong branch, a bounded policy, or a corrupt
+required cut stops startup. An old store with no owned ID creates its own policy
+after validation; it does not infer ownership from policy order or equal ranges.
+Old snapshots can lack the newer ID. Restore preserves unknown policies and
+adds a missing ID to its existing epoch transaction. A valid retained root can
+keep the floor at zero. Released unreferenced native cuts can expire; reads do
+not substitute current state.
+
+Ordinary subscriptions protect native history without changing the existing
+journal floor. A resume from an unavailable native cut or a collected original
+journal returns the existing input-expired result. Other storage and decoding
+errors keep their existing types. No package commit authority, DataFusion
+operator, Graph behavior, kernel interface, or ABI changes here.

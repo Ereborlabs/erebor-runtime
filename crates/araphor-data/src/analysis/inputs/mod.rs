@@ -60,7 +60,7 @@ pub(in crate::analysis) struct InputWatch {
     pub(in crate::analysis) interest: InputInterest,
     pub(in crate::analysis) changes: watch::Sender<StorePositionV1>,
     pub(in crate::analysis) after: u64,
-    
+
     pub(in crate::analysis) delivery: Option<Arc<super::native::inputs::Delivery>>,
     pub(in crate::analysis) _memory: Box<dyn std::any::Any + Send + Sync>,
 }
@@ -91,13 +91,12 @@ pub struct InputSubscription {
     pub(in crate::analysis) _registration: Arc<InputRegistration>,
     pub(in crate::analysis) changes: watch::Receiver<StorePositionV1>,
     pub(in crate::analysis) meta: AnalysisStoreMetaV1,
-    
+
     pub(in crate::analysis) native: Option<super::native::inputs::Wake>,
 }
 
 impl InputSubscription {
     pub fn can_resume(&self, position: StorePositionV1) -> bool {
-        
         if let Some(native) = &self.native {
             return native.can_resume(position);
         }
@@ -106,7 +105,6 @@ impl InputSubscription {
     }
 
     pub fn needs_initial(&self) -> bool {
-        
         if let Some(native) = &self.native {
             return native.needs_initial();
         }
@@ -136,7 +134,6 @@ impl InputSubscription {
     }
 
     pub async fn changed(&mut self) -> Result<StorePositionV1> {
-        
         if let Some(native) = &mut self.native {
             native.changed(&mut self.changes).await?;
             return Ok(self.observe());
@@ -150,7 +147,17 @@ impl InputSubscription {
 }
 
 impl InputChanges {
-    
+    pub(in crate::analysis) fn history_after(&self) -> Option<u64> {
+        self.readers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .flat_map(|readers| readers.values())
+            .filter(|reader| reader.delivery.is_none())
+            .map(|reader| reader.after)
+            .min()
+    }
+
     pub(in crate::analysis) fn is_empty(&self) -> bool {
         self.readers
             .lock()
@@ -158,7 +165,6 @@ impl InputChanges {
             .is_empty()
     }
 
-    
     pub(in crate::analysis) fn interested(&self, change: InputChange<'_>) -> bool {
         self.readers
             .lock()
@@ -171,7 +177,6 @@ impl InputChanges {
             })
     }
 
-    
     pub(in crate::analysis) fn raw(&self, entry: &super::raw::RawEntry) {
         let readers = self
             .readers
@@ -239,7 +244,6 @@ impl InputChanges {
 impl InputWatch {
     fn advance(&self, position: StorePositionV1) {
         if position.commit_revision > self.after {
-            
             if self
                 .delivery
                 .as_ref()
@@ -259,8 +263,6 @@ impl InputWatch {
     }
 }
 
-
-
 impl InputChange<'_> {
     fn tenant(&self) -> [u8; 16] {
         match self {
@@ -269,8 +271,7 @@ impl InputChange<'_> {
             Self::Processor(scope) | Self::Profile { scope, .. } | Self::Notice { scope, .. } => {
                 scope.identity.tenant_id
             }
-            Self::Graph { tenant, .. }
-            | Self::Trace { tenant, .. } => *tenant,
+            Self::Graph { tenant, .. } | Self::Trace { tenant, .. } => *tenant,
         }
     }
 }

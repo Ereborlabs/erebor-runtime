@@ -1,7 +1,51 @@
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
-use super::{PackageRecord, PackageRevisionV1, Records};
-use crate::{NativeStateSnafu, PackageRefV1, Result};
+use super::{DataView, PackageRecord, PackageRevisionV1, Records};
+use crate::{NativeStateSnafu, NativeStorageSnafu, PackageRefV1, Result};
+
+impl DataView {
+    pub(in crate::analysis::native) fn package_bound(&self, mut bound: u64) -> Result<u64> {
+        if bound == 0 {
+            return Ok(0);
+        }
+        for row in self.snapshot.prefix(PackageHeader::PREFIX) {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "read retained package history",
+            })?;
+            if key.len() == PackageHeader::PREFIX.len() + 16 {
+                continue;
+            }
+            if key.len() != PackageHeader::PREFIX.len() + 8 {
+                return NativeStateSnafu {
+                    field: "package history key",
+                }
+                .fail();
+            }
+            let bytes = Records::payload(&key, |key| Records::read(key, &self.snapshot))?
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "package history header",
+                    }
+                    .build()
+                })?;
+            let (_, _, revision, _): (
+                serde::de::IgnoredAny,
+                serde::de::IgnoredAny,
+                u64,
+                serde::de::IgnoredAny,
+            ) = Records::decode(&bytes)?;
+            if revision == 0 || revision > self.metadata_revision {
+                return NativeStateSnafu {
+                    field: "package history revision",
+                }
+                .fail();
+            }
+            bound = bound.min(revision);
+        }
+        Ok(bound)
+    }
+}
 
 #[derive(Deserialize, Serialize, Eq, PartialEq)]
 pub(super) struct PackageHeader {

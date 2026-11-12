@@ -132,10 +132,14 @@ impl NativeStore {
             }
             .build()
         })?;
+        let history = store.prepare_history()?;
         let mut tx = store.branch.write_tx().context(NativeStorageSnafu {
             operation: "begin restored epoch",
         })?;
         tx.insert(super::super::RECOVERY, epoch.to_be_bytes());
+        if let Some(history) = history {
+            tx.insert(super::super::HISTORY, history.to_bytes());
+        }
         let receipt = tx
             .commit_stamped([Self::cut(view.metadata_revision)])
             .context(NativeStorageSnafu {

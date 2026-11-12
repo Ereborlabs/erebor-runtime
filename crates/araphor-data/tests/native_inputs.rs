@@ -9,6 +9,9 @@ use araphor_data::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_inputs/history.rs"]
+mod history;
+
 struct Budget;
 impl ManagedBudget for Budget {
     fn limit(&self) -> usize {

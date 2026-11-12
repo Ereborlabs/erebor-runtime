@@ -104,6 +104,48 @@ impl Traces {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn trace_bound(&self, mut bound: u64) -> Result<u64> {
+        if bound == 0 {
+            return Ok(0);
+        }
+        for row in self.snapshot.prefix(Traces::INTENTS) {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "read trace history bound",
+            })?;
+            if key.len() == Traces::INTENTS.len() + 40 {
+                continue;
+            }
+            if key.len() != Traces::INTENTS.len() + 32 {
+                return NativeStateSnafu {
+                    field: "trace history key",
+                }
+                .fail();
+            }
+            let bytes = Records::payload(&key, |key| Records::read(key, &self.snapshot))?
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "trace history intent",
+                    }
+                    .build()
+                })?;
+            let (_, revision): (serde::de::IgnoredAny, u64) = Records::decode(&bytes)?;
+            let before = revision
+                .checked_sub(1)
+                .filter(|_| revision <= self.metadata_revision)
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "trace history revision",
+                    }
+                    .build()
+                })?;
+            bound = bound.min(before);
+            if bound == 0 {
+                break;
+            }
+        }
+        Ok(bound)
+    }
+
     pub(in crate::analysis::native) fn trace_intent_charged(
         &self,
         tenant: [u8; 16],

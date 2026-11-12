@@ -60,8 +60,11 @@ in [branch tests](../../fjall/src/versioned/branch_tests.rs) check exact journal
 items, no-op and invalid bounds, other owners, held views, forks, compaction,
 reopen, and native checkpoint restore. All 32 versioned cases pass. Read
 `output/araphor-fjall-migration-20261110/native-history-engine.log`.
-Automatic Data policy ownership and advancement remain **Not done**. No
-production latency result or full CI is included.
+Automatic Data policy ownership and advancement were **Not done** at that
+engine qualification. The
+[2026-11-12 history route](araphor-native-data-review.md#data-history-maintenance-2026-11-12)
+describes the later qualified Data implementation. No production latency result
+or full CI is included.
 
 [Branch::retain_history and Branch::fork](../../fjall/src/versioned/branch.rs) Caller retains a revision range or forks a retained revision
   -> [Catalogue::pins and Catalogue::update_history](../../fjall/src/versioned/catalogue.rs) Fjall protects the required cuts against concurrent maintenance.

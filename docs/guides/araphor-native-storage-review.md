@@ -18,8 +18,10 @@ pass. Read `native-history-recovery-*` under
 
 The [generic engine advancement API](../../fjall/src/versioned/branch.rs)
 keeps policy IDs stable. Data policy ownership and automatic checkpoint floor
-advancement remain **Not done**; the reviewed direction is in the current
-worklist. No incident latency comparison is included.
+advancement were **Not done** at that qualification. The
+[2026-11-12 history route](araphor-native-data-review.md#data-history-maintenance-2026-11-12)
+describes the later qualified implementation. No incident latency comparison
+is included.
 
 Read the [private retained-execution cases](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
 and [private witness-lifetime case](../../crates/araphor-data/src/analysis/managed/tests.rs).

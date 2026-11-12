@@ -13,6 +13,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[path = "native_packages/catalogue.rs"]
 mod catalogue;
 
+#[path = "native_packages/history.rs"]
+mod history;
+
 fn artifact(name: &str, revision: &str, sql: &str) -> PackageArtifactV1 {
     PackageArtifactV1 {
         descriptor: sdk::Package::new(

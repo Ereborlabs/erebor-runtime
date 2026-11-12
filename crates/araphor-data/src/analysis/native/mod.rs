@@ -24,6 +24,7 @@ const IDENTITY: &[u8] = b"\0data/identity";
 const FORMAT: &[u8] = b"\0data/format";
 const SCHEMA: &[u8] = b"\0data/schema";
 const RECOVERY: &[u8] = b"\0data/recovery";
+const HISTORY: &[u8] = b"\0data/history-policy";
 
 mod admission;
 mod backup;
@@ -33,6 +34,7 @@ mod extraction;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixtures;
 mod health;
+mod history;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fixtures::{RawIndexFixture, StorageFault};
 pub(in crate::analysis) mod inputs;
@@ -227,24 +229,12 @@ impl NativeStore {
                 }
                 .fail();
             }
-            if !database
-                .history()
-                .context(NativeStorageSnafu {
-                    operation: "read history policies",
-                })?
-                .iter()
-                .any(|policy| {
-                    policy.branch == branch.id()
-                        && policy.first <= snapshot.revision()
-                        && policy.last.to_bytes() == u64::MAX.to_be_bytes()
-                })
-            {
+            let history =
                 branch
                     .retain_history(snapshot.revision()..)
                     .context(NativeStorageSnafu {
                         operation: "retain initial history",
                     })?;
-            }
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
@@ -256,6 +246,7 @@ impl NativeStore {
             tx.insert(RECOVERY, 1u64.to_be_bytes());
             tx.insert(IDENTITY, Uuid::new_v4().as_bytes().as_slice());
             tx.insert(HEAD, 0u64.to_be_bytes());
+            tx.insert(HISTORY, history.to_bytes());
             tx.commit_stamped([Self::cut(0)])
                 .context(NativeStorageSnafu {
                     operation: "commit initial state",
@@ -270,30 +261,6 @@ impl NativeStore {
         if Self::required(&snapshot, IDENTITY)? != view.store_uuid.as_bytes() {
             return NativeStateSnafu {
                 field: "recovered store identity",
-            }
-            .fail();
-        }
-        let first = Self::required(&snapshot, &Self::cut(0))?;
-        let first = fjall::Revision::from_bytes(first.as_slice().try_into().map_err(|_| {
-            NativeStateSnafu {
-                field: "initial cut width",
-            }
-            .build()
-        })?);
-        if !database
-            .history()
-            .context(NativeStorageSnafu {
-                operation: "check recovered history",
-            })?
-            .iter()
-            .any(|policy| {
-                policy.branch == branch.id()
-                    && policy.first <= first
-                    && policy.last.to_bytes() == u64::MAX.to_be_bytes()
-            })
-        {
-            return NativeStateSnafu {
-                field: "required history protection",
             }
             .fail();
         }
@@ -344,7 +311,10 @@ impl NativeStore {
         store.validate_trace_recovery()?;
         store.validate_counts(counts)?;
         if !restoring {
+            store.bind_history()?;
             store.recover_managed_startup()?;
+        } else {
+            store.required_history()?;
         }
         Ok(store)
     }

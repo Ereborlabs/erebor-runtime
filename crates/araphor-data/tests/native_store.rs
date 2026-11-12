@@ -336,6 +336,25 @@ fn initialization_and_cut_recovery() -> TestResult {
             ..
         })
     ));
+    drop(store);
+    assert!(matches!(
+        NativeStore::open(&root),
+        Err(Error::NativeState {
+            field: "cut index revision",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn catalogue_policy_recovery() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("data");
+    let store = NativeStore::open(&root)?;
+    let mut tx = store.write()?;
+    tx.context(&context(1), Some(0))?;
+    tx.commit([])?;
     // Catalogue commits can advance the native publication after the last Data write.
     let replacement = store
         .branch()
@@ -344,7 +363,10 @@ fn initialization_and_cut_recovery() -> TestResult {
     drop(store);
     let store = NativeStore::open(&root)?;
     assert_eq!(store.view()?.revision(), revision);
-    assert!(store.read_at(1).is_err());
+    assert_eq!(
+        store.read_at(1)?.context(&context(1).key)?.unwrap().0,
+        context(1)
+    );
     for policy in store.database().history()? {
         if policy.id != replacement {
             store.database().release_history(policy.id)?;

@@ -15,6 +15,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[path = "native_lifecycle/usage.rs"]
 mod usage;
 
+#[path = "native_lifecycle/history.rs"]
+mod history;
+
 fn identity() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

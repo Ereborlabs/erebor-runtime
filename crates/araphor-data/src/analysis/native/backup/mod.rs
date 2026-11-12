@@ -32,18 +32,28 @@ impl NativeStore {
             .build()
         })?;
         self.seal_raw()?;
-        self.database
-            .inner()
-            .flush_memtables()
-            .inspect_err(|_| self.poison())
-            .context(NativeStorageSnafu {
-                operation: "flush native checkpoint",
-            })?;
-        self.inputs.collect_journals().inspect_err(|_| {
-            if self.database.inner().is_poisoned() {
-                self.poison();
+        let (history, policy) = self.required_history()?;
+        let policy = policy.ok_or_else(|| {
+            NativeStateSnafu {
+                field: "owned Data history",
             }
-        })
+            .build()
+        })?;
+        self.inputs
+            .collect_journals(policy, history, || {
+                self.database
+                    .inner()
+                    .flush_memtables()
+                    .inspect_err(|_| self.poison())
+                    .context(NativeStorageSnafu {
+                        operation: "flush native checkpoint",
+                    })
+            })
+            .inspect_err(|_| {
+                if self.database.inner().is_poisoned() {
+                    self.poison();
+                }
+            })
     }
 
     pub fn backup(&self, destination: &Path) -> Result<AnalysisBackupManifestV1> {

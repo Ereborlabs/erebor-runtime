@@ -56,6 +56,50 @@ pub(super) fn trace_intent() -> araphor_data::Result<araphor_data::TraceIntentV1
     })
 }
 
+#[test]
+fn trace_birth_keeps_history() -> TraceResult {
+    for prefix in [0, 4] {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        for value in 0..prefix {
+            let mut tx = store.write()?;
+            tx.native().insert(b"trace-history-preamble", [value]);
+            tx.commit([])?;
+        }
+        let before = store.meta()?.commit_revision;
+        let intent = trace_intent()?;
+        let mut state = store.accept_trace(&intent)?;
+        assert_eq!(state.revision, before + 1);
+        state.cancel_requested = true;
+        state.read_revoked = true;
+        let revoked = store.update_trace(&state)?;
+        store.checkpoint()?;
+        assert!(store
+            .read_at(before)?
+            .trace_intent(intent.tenant_id, intent.request_id)?
+            .is_none());
+        if before != 0 {
+            assert!(store.read_at(0).is_err());
+        }
+        store.database().inner().flush_memtables()?;
+        store.database().inner().major_compact()?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(
+            store.trace_intent(intent.tenant_id, intent.request_id)?,
+            Some((revoked, intent))
+        );
+        assert!(store
+            .read_at(before)?
+            .snapshot()
+            .prefix(b"\0data/@trace/intent/")
+            .next()
+            .is_none());
+    }
+    Ok(())
+}
+
 fn trace_terminal(sequence: u64, bytes: u64) -> araphor_data::TraceTerminalV1 {
     araphor_data::TraceTerminalV1 {
         execution_id: [4; 16],

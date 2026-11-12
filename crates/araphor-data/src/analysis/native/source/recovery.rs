@@ -5,7 +5,10 @@ use snafu::ResultExt as _;
 
 use super::super::{DataView, DataWrite, NativeStore};
 use super::Records;
-use crate :: { AnalysisExtractionV1 , AnalysisGapV1 , AnalysisReadControl , AnalysisRecoveryStatusV1 , EvidenceIntakeIdentityV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
+use crate::{
+    AnalysisExtractionV1, AnalysisGapV1, AnalysisReadControl, AnalysisRecoveryStatusV1,
+    EvidenceIntakeIdentityV1, NativeStateSnafu, NativeStorageSnafu, Result,
+};
 
 #[derive(Deserialize, Serialize)]
 struct RecoveryRange {
@@ -76,6 +79,25 @@ impl NativeStore {
         after_cursor: u64,
     ) -> Result<Vec<AnalysisGapV1>> {
         self.view()?.recovery_gaps(identity, after_cursor)
+    }
+}
+
+impl DataView {
+    pub(in crate::analysis::native) fn recovery_bound(&self, mut bound: u64) -> Result<u64> {
+        if bound == 0 {
+            return Ok(0);
+        }
+        for row in self.snapshot.prefix(RecoveryRange::PREFIX) {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read retained recovery history",
+            })?;
+            bound = bound.min(
+                RecoveryRange::decode(&key, &value, self.metadata_revision)?
+                    .gap
+                    .commit_revision,
+            );
+        }
+        Ok(bound)
     }
 }
 

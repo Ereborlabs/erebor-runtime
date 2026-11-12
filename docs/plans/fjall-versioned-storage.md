@@ -164,7 +164,10 @@ forks keep their own protection. Future lower bounds remain valid within the
 policy's upper bound. Thirty-two versioned engine cases pass, including the
 new bound, original-journal, compaction, restart, and checkpoint checks. Read
 `output/araphor-fjall-migration-20261110/native-history-engine.log`.
-Data policy ownership and automatic floor advancement remain **Not done**.
+Data policy ownership and automatic floor advancement were **Not done** at that
+engine qualification. The
+[2026-11-12 history route](../guides/araphor-native-data-review.md#data-history-maintenance-2026-11-12)
+describes the later qualified Data implementation.
 No incident latency comparison or full CI is included.
 
 A current `snapshot()` captures its revision, lineage, and exact CDC start

@@ -2,6 +2,53 @@ use super::{notices::Notice, profile::IntervalHead, *};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl NativeStore {
+    pub(in crate::analysis::native) fn processor_bound(
+        &self,
+        view: &DataView,
+        mut bound: u64,
+    ) -> Result<u64> {
+        for row in view.snapshot.prefix(Processor::PREFIX) {
+            let (key, _) = row.context(crate::NativeStorageSnafu {
+                operation: "read processor history bound",
+            })?;
+            if key.len() == Processor::PREFIX.len() + 16 {
+                continue;
+            }
+            if key.len() != Processor::PREFIX.len() + 8 {
+                return Err(Code::Invalid.error("processor history key"));
+            }
+            let id = Self::number(&key[Processor::PREFIX.len()..])?;
+            let bytes = Records::payload(&key, |key| Records::read(key, &view.snapshot))?
+                .ok_or_else(|| Code::Missing.error("processor history state"))?;
+            let mut state: Processor = Records::decode(&bytes)?;
+            loop {
+                let before = state
+                    .revision
+                    .checked_sub(1)
+                    .ok_or_else(|| Code::Invalid.error("processor history revision"))?;
+                bound = bound.min(before);
+                if bound == 0 {
+                    return Ok(0);
+                }
+                let prior = self.read_at(before)?;
+                let Some((owner, state_before)) = Processor::read(
+                    &state.scope,
+                    prior.metadata_revision,
+                    |key| Records::read(key, &prior.snapshot),
+                    &mut |_| Ok(()),
+                )?
+                else {
+                    break;
+                };
+                if owner != id || state_before.revision >= state.revision {
+                    return Err(Code::Invalid.error("processor history revision"));
+                }
+                state = state_before;
+            }
+        }
+        Ok(bound)
+    }
+
     pub(in crate::analysis::native) fn restore_backlog(
         raw: &mut crate::analysis::raw::RawJournal,
         snapshot: &fjall::BranchSnapshot,

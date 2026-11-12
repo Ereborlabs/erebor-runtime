@@ -58,9 +58,9 @@ Result: **Not done for the complete replacement and performance proof**.
 The current source uses the native Data owner through the public storage API.
 The connected replacement removes the SQL Data owner, SQL Graph backend,
 caller backend switches, DuckDB dependencies, and vendored DuckDB code.
-The default production release build and unchanged incident pass. SQL-only
-fixture ports, reference-safe history maintenance, and complete qualification
-remain open.
+The default production release build and unchanged incident pass. Reference-safe
+history maintenance is qualified below. SQL-only fixture ports and complete
+migration qualification remain open.
 
 | Owner | Current work and completion proof |
 | --- | --- |
@@ -68,7 +68,7 @@ remain open.
 | Fixture retirement | The context, catalogue, image, backup, profile, and managed binary-storage SQL families have native replacements. Native cases preserve typed publication, large records, rollback, backup, contexts, state, history, notices, raw expiry, and Arrow values. Other Data unit fixtures still need native ports. Quota-only cases are removed by user instruction. |
 | Storage lifecycle | Data storage quotas are removed. Keep usage reporting, retention, collection, and checkpoint/restore integrity. Recovery preserves acknowledged raw input and distinguishes a failed raw append from a poisoned native engine. Complete qualification remains open. |
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Fifteen native Query and six native input cases pass. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
-| Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Native MVCC history stays retained. |
+| Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Data advances its owned native history policy only past unreferenced cuts. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | The latest stable native control measures durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
 
@@ -78,12 +78,12 @@ Remaining functional work:
   The last unit compilation reports 84 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
-- Complete retained-history collection and recovery qualification. Native
-  MVCC currently retains all history. Data startup validation still scans
+- Complete qualification of automatic retained-history collection and recovery.
+  Data now derives its native history floor from retained references and
+  advances its owned policy at checkpoint. Data startup validation still scans
   retained source memberships. Original journal collection is already active.
-  Derive the native history floor from retained references. Valid references
-  can keep that floor at zero. No age, size, or revision-count window is
-  authorized by this work or by storage quota removal.
+  Valid references can keep the native floor at zero. No age, size, or
+  revision-count window is authorized by this work or by storage quota removal.
 
 Complete these items before more incident latency experiments.
 
@@ -113,9 +113,59 @@ the policies and durable consumer roots before maintenance. No new Data
 collection API or age, size, or count window is required. A processor or trace
 first saved at Data revision 1 can require revision 0 through its retained
 recovery chain. This outcome is valid. Data policy ownership and automatic
-floor advancement remain **Not done**.
+floor advancement are implemented. Their current qualification is below.
+
+The retained-reference audit also includes live raw entries, immutable context
+headers, package installation headers, definition versions, coverage changes,
+and source recovery gaps. These records expose Data revisions after later
+writes and reopen. Checkpoint uses their existing indexes and small headers.
+It adds no archive or index. Raw-only revisions resolve through the preceding
+stamped native cut. Processor recovery follows the actual prior-state chain
+to its birth cut. A processor start cursor is not its birth revision.
+
+Checkpoint advances journal admission, then its owned history policy, then
+flushes native storage, then collects eligible journal files. The input scan
+lock remains held through this sequence. A failed flush retains the existing
+poison behavior. Ordinary subscription anchors protect native history without
+pinning the original journal floor. A late subscription to an expired journal
+cut returns the existing input-expired error.
+
+Restore creates a missing owned policy after bundle validation. It saves the
+policy ID in the existing recovery-epoch transaction. This operation preserves
+the manifest Data revision, raw records, and unknown policies. It does not make
+an extra Data revision during restore.
 
 Current evidence:
+
+- Data history maintenance passes 386 Data cases across 12 targets. The broad
+  run passes 381 of 382 cases. Its one failure is a fixture that carries an
+  intentionally corrupt required context cut into an unrelated policy test.
+  The fixture now requires the exact `cut index revision` error both live and
+  at startup. A separate healthy store keeps the catalogue-policy reopen,
+  exact context content, unchanged revision, and missing-owned-policy refusal.
+  The bounded rerun passes all nine native store and three crash cases.
+  Original incident workloads, assertions, and timeouts are unchanged.
+
+  Six lifecycle cases check owned policy identity, legacy open and restore,
+  held and released cuts, foreign policies, branch ancestry, compaction, and
+  reopen. Additional cases check ordinary subscription anchors, delayed
+  managed capture, live raw records, trace birth, context versions, package
+  installations, definitions, coverage references, and recovery gaps. Missing
+  roots first fail with unavailable history; the connected implementation
+  then preserves their exact historical values after later commits and reopen.
+
+  All 15 native Query cases pass in 8.26 seconds. The default-feature Data and
+  Query production libraries pass the release check in 46.66 seconds. Changed
+  Rust formatting and scoped whitespace checks pass. Read
+  `native-history-qualified.log`, `native-history-recovery-final.log`,
+  `native-history-query.log`, and `native-history-production.log` under
+  `output/araphor-fjall-migration-20261110`. The failure-first root cases are in
+  `native-history-roots-baseline.log`, `native-history-context-baseline.log`,
+  and `native-history-references-baseline.log`.
+  Result: **Done for Data-owned reference-safe history maintenance and its
+  connected qualification; Not done for complete migration or the performance
+  proof**. The remaining Data unit fixtures and Query contracts above still
+  need work. No incident timing experiment or full CI is included.
 
 - Fjall `f745c54` adds stable-ID history advancement. One native catalogue
   batch changes the policy lower bound and native clock after `SyncAll`.
@@ -125,7 +175,8 @@ Current evidence:
   including compaction, restart, and copied-checkpoint history. Read
   `native-history-engine.log` under
   `output/araphor-fjall-migration-20261110`. This generic API has no Data,
-  package, or Graph semantics. Its Data maintenance caller remains **Not done**.
+  package, or Graph semantics. Its Data maintenance caller is qualified in the
+  later record above.
 
   The recovery baseline finds a production error. A catalogue policy commit
   advances the global native cut without changing Data's committed cut.

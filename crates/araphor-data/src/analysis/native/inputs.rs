@@ -284,12 +284,16 @@ impl NativeStore {
         } else {
             position.commit_revision.saturating_sub(1)
         };
-        let after = Self::cut_at(&self.branch, &current, anchor)?;
-        self.subscribe_inputs_at(&after, selection, requests, owners, control, budget)
+        Self::cut_at(&self.branch, &current, anchor)
+            .and_then(|after| {
+                self.subscribe_inputs_at(&after, selection, requests, owners, control, budget)
+            })
             .map_err(|error| match error {
-                crate::Error::AnalysisInputExpired { .. } => {
-                    crate::AnalysisInputExpiredSnafu { position }.build()
-                }
+                crate::Error::AnalysisInputExpired { .. }
+                | crate::Error::NativeStorage {
+                    source: fjall::Error::HistoryUnavailable(_, _),
+                    ..
+                } => crate::AnalysisInputExpiredSnafu { position }.build(),
                 error => error,
             })
     }

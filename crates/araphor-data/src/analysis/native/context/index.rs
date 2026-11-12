@@ -107,6 +107,36 @@ impl DataWrite<'_> {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn context_bound(&self, mut bound: u64) -> Result<u64> {
+        if bound == 0 {
+            return Ok(0);
+        }
+        let prefix = ContextIndex::TENANT;
+        for row in self.snapshot.prefix(prefix) {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "read retained context history",
+            })?;
+            if key.len() == prefix.len() + 40 {
+                continue;
+            }
+            if key.len() != prefix.len() + 32 {
+                return NativeStateSnafu {
+                    field: "context history key",
+                }
+                .fail();
+            }
+            let revision = NativeStore::number(&key[prefix.len() + 16..prefix.len() + 24])?;
+            if revision == 0 || revision > self.metadata_revision {
+                return NativeStateSnafu {
+                    field: "context history revision",
+                }
+                .fail();
+            }
+            bound = bound.min(revision);
+        }
+        Ok(bound)
+    }
+
     pub(in crate::analysis::native) fn context_reference(
         &self,
         tenant: [u8; 16],

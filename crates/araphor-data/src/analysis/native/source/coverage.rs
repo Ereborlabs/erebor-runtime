@@ -9,6 +9,34 @@ use crate::{
 use snafu::ResultExt as _;
 use std::ops::Bound::{Excluded, Included};
 impl DataView {
+    pub(in crate::analysis::native) fn coverage_bound(&self, mut bound: u64) -> Result<u64> {
+        if bound == 0 {
+            return Ok(0);
+        }
+        for row in self.snapshot.prefix(Sources::CHANGES) {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "read retained coverage history",
+            })?;
+            if key.len() < Sources::CHANGES.len() + 32 {
+                return NativeStateSnafu {
+                    field: "coverage history key",
+                }
+                .fail();
+            }
+            let revision = NativeStore::number(
+                &key[Sources::CHANGES.len() + 16..Sources::CHANGES.len() + 24],
+            )?;
+            if revision == 0 || revision > self.metadata_revision {
+                return NativeStateSnafu {
+                    field: "coverage history revision",
+                }
+                .fail();
+            }
+            bound = bound.min(revision);
+        }
+        Ok(bound)
+    }
+
     pub(in crate::analysis::native) fn input_coverage_key(key: &[u8]) -> bool {
         key.starts_with(Sources::CHANGES)
     }

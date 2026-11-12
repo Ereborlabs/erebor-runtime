@@ -28,6 +28,13 @@ package reads retain one captured view and cancellation. The 33 MiB artifact
 workload and the existing failure assertions remain. Read the same worklist
 for exact checks. Private verifier and witness ports remain open.
 
+Data-owned history maintenance is qualified on 2026-11-12. Checkpoint advances
+one stable policy only past retained references and consumer roots. Compaction,
+held views, branches, legacy open, restart, backup, and restore pass the connected
+cases. Read the current worklist for the 386 Data cases, 15 native Query cases,
+and default production release checks. Remaining fixture ports, complete Query
+qualification, and the incident performance proof remain **Not done**.
+
 ## Storage quota removal, 2026-11-10
 
 The user removes Data storage quotas. The current source removes their type,
