@@ -22,8 +22,8 @@ master plan invented for them.
 ## Proposed Master Plans
 
 - [Data storage and collector investigations](araphor-data-storage-and-collectors.md)
-  records the ordered user requests. Item 1 has a measured 16-process raw
-  segments/Fjall pilot and a reproducible benchmark. Production replacement,
+  records the ordered user requests. Item 1 has measured raw-only and production
+  transaction comparisons, with 16 process runs each. Production replacement,
   table abstraction, and collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL

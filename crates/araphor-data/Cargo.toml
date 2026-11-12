@@ -56,5 +56,9 @@ tempfile = "3.23.0"
 name = "raw_storage_bench"
 required-features = ["test-fixtures"]
 
+[[example]]
+name = "raw_owner_bench"
+required-features = ["test-fixtures"]
+
 [lints]
 workspace = true

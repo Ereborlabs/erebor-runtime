@@ -1,0 +1,479 @@
+{
+  "summary": [
+    {
+      "records": 16384,
+      "backend": "hybrid",
+      "runs": 4,
+      "input_bytes": 2301638,
+      "append": {
+        "count": 256,
+        "median_ms": 1.874564,
+        "p95_ms": 2.127253,
+        "p99_ms": 3.420381,
+        "max_ms": 4.514598
+      },
+      "commit": {
+        "count": 256,
+        "median_ms": 0.6591,
+        "p95_ms": 0.947479,
+        "p99_ms": 1.000001,
+        "max_ms": 3.292151
+      },
+      "write_records_s_median": 131742.52258364053,
+      "reopened_read_records_s_median": 5232462.4233021755,
+      "reopen_ms_median": 6.2767859999999995,
+      "allocated_mib_median": 2.41015625,
+      "replay_ms_median": 0.8720144999999999,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.006900407,
+          "flush_s": 9.9735e-05,
+          "major_compact_s": 0.005767497
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.006950344,
+          "flush_s": 9.9874e-05,
+          "major_compact_s": 0.005553291
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.006897544,
+          "flush_s": 9.4007e-05,
+          "major_compact_s": 0.005665318
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.00680661,
+          "flush_s": 9.3449e-05,
+          "major_compact_s": 0.00578384
+        }
+      ],
+      "accept": {
+        "count": 256,
+        "median_ms": 1.199469,
+        "p95_ms": 1.313591,
+        "p99_ms": 2.345021,
+        "max_ms": 3.524725
+      },
+      "capture": {
+        "count": 256,
+        "median_ms": 0.005238,
+        "p95_ms": 0.010616,
+        "p99_ms": 0.04393,
+        "max_ms": 0.059157
+      },
+      "progress": {
+        "count": 256,
+        "median_ms": 0.6591,
+        "p95_ms": 0.947479,
+        "p99_ms": 1.000001,
+        "max_ms": 3.292151
+      },
+      "resume_ms_median": 0.9064464999999999
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "runs": 4,
+      "input_bytes": 2301638,
+      "append": {
+        "count": 256,
+        "median_ms": 1.072147,
+        "p95_ms": 1.417726,
+        "p99_ms": 1.559716,
+        "max_ms": 2.660009
+      },
+      "commit": {
+        "count": 256,
+        "median_ms": 0.343903,
+        "p95_ms": 0.662173,
+        "p99_ms": 0.713298,
+        "max_ms": 0.77434
+      },
+      "write_records_s_median": 222101.93695771944,
+      "reopened_read_records_s_median": 4340945.4863767605,
+      "reopen_ms_median": 3.9060985,
+      "allocated_mib_median": 3.375,
+      "replay_ms_median": 1.1353895,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.956e-06,
+          "flush_s": 0.01125814,
+          "major_compact_s": 0.021079835
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 9.77e-07,
+          "flush_s": 0.009622925,
+          "major_compact_s": 0.010896846
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.467e-06,
+          "flush_s": 0.011563979,
+          "major_compact_s": 0.017263031
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.467e-06,
+          "flush_s": 0.009592404,
+          "major_compact_s": 0.010446085
+        }
+      ],
+      "accept": {
+        "count": 256,
+        "median_ms": 0.688853,
+        "p95_ms": 0.76128,
+        "p99_ms": 0.857523,
+        "max_ms": 1.929529
+      },
+      "capture": {
+        "count": 256,
+        "median_ms": 0.005238,
+        "p95_ms": 0.008102,
+        "p99_ms": 0.055665,
+        "max_ms": 0.06621
+      },
+      "progress": {
+        "count": 256,
+        "median_ms": 0.343903,
+        "p95_ms": 0.662173,
+        "p99_ms": 0.713298,
+        "max_ms": 0.77434
+      },
+      "resume_ms_median": 1.1703104999999998
+    },
+    {
+      "records": 262144,
+      "backend": "hybrid",
+      "runs": 4,
+      "input_bytes": 37445318,
+      "append": {
+        "count": 4096,
+        "median_ms": 1.878196,
+        "p95_ms": 2.01774,
+        "p99_ms": 3.006287,
+        "max_ms": 7.395379
+      },
+      "commit": {
+        "count": 4096,
+        "median_ms": 0.658961,
+        "p95_ms": 0.742842,
+        "p99_ms": 0.811636,
+        "max_ms": 3.870235
+      },
+      "write_records_s_median": 134384.81707210728,
+      "reopened_read_records_s_median": 4176304.744114026,
+      "reopen_ms_median": 78.214826,
+      "allocated_mib_median": 37.9375,
+      "replay_ms_median": 18.281819499999997,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.014725944,
+          "flush_s": 9.9106e-05,
+          "major_compact_s": 0.009462777
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.01614395,
+          "flush_s": 0.00011084,
+          "major_compact_s": 0.010511877
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.014936519,
+          "flush_s": 9.7779e-05,
+          "major_compact_s": 0.009966828
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 0.015072362,
+          "flush_s": 0.000103995,
+          "major_compact_s": 0.009716654
+        }
+      ],
+      "accept": {
+        "count": 4096,
+        "median_ms": 1.202264,
+        "p95_ms": 1.285026,
+        "p99_ms": 1.506426,
+        "max_ms": 6.631375
+      },
+      "capture": {
+        "count": 4096,
+        "median_ms": 0.005239,
+        "p95_ms": 0.008102,
+        "p99_ms": 0.0132,
+        "max_ms": 0.115449
+      },
+      "progress": {
+        "count": 4096,
+        "median_ms": 0.658961,
+        "p95_ms": 0.742842,
+        "p99_ms": 0.811636,
+        "max_ms": 3.870235
+      },
+      "resume_ms_median": 17.342057500000003
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "runs": 4,
+      "input_bytes": 37445318,
+      "append": {
+        "count": 4096,
+        "median_ms": 1.060693,
+        "p95_ms": 1.391396,
+        "p99_ms": 1.502236,
+        "max_ms": 6.757161
+      },
+      "commit": {
+        "count": 4096,
+        "median_ms": 0.335801,
+        "p95_ms": 0.65044,
+        "p99_ms": 0.691997,
+        "max_ms": 3.705267
+      },
+      "write_records_s_median": 222737.83571085142,
+      "reopened_read_records_s_median": 3932056.4018097334,
+      "reopen_ms_median": 28.611024,
+      "allocated_mib_median": 53.69140625,
+      "replay_ms_median": 20.2565025,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.467e-06,
+          "flush_s": 0.069829328,
+          "major_compact_s": 0.058774777
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.466e-06,
+          "flush_s": 0.070129929,
+          "major_compact_s": 0.062430108
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.886e-06,
+          "flush_s": 0.07353788,
+          "major_compact_s": 0.062878217
+        },
+        {
+          "background_compactions": 0,
+          "checkpoint_s": 1.885e-06,
+          "flush_s": 0.070438495,
+          "major_compact_s": 0.07556959
+        }
+      ],
+      "accept": {
+        "count": 4096,
+        "median_ms": 0.688365,
+        "p95_ms": 0.753946,
+        "p99_ms": 0.823579,
+        "max_ms": 6.122505
+      },
+      "capture": {
+        "count": 4096,
+        "median_ms": 0.004889,
+        "p95_ms": 0.007124,
+        "p99_ms": 0.010895,
+        "max_ms": 0.086395
+      },
+      "progress": {
+        "count": 4096,
+        "median_ms": 0.335801,
+        "p95_ms": 0.65044,
+        "p99_ms": 0.691997,
+        "max_ms": 3.705267
+      },
+      "resume_ms_median": 20.749832499999997
+    }
+  ],
+  "paired_ratios": [
+    {
+      "records": 16384,
+      "pair": 1,
+      "fjall_write_rate_over_hybrid": 1.6769059737788283,
+      "hybrid_append_p95_over_fjall": 1.5468959285564579,
+      "hybrid_reopen_over_fjall": 1.6595469247511185
+    },
+    {
+      "records": 16384,
+      "pair": 2,
+      "fjall_write_rate_over_hybrid": 1.6741060092396236,
+      "hybrid_append_p95_over_fjall": 1.4537528850330306,
+      "hybrid_reopen_over_fjall": 1.3656507435484793
+    },
+    {
+      "records": 16384,
+      "pair": 3,
+      "fjall_write_rate_over_hybrid": 1.6037562511533903,
+      "hybrid_append_p95_over_fjall": 1.5944887199213957,
+      "hybrid_reopen_over_fjall": 1.7212189844726442
+    },
+    {
+      "records": 16384,
+      "pair": 4,
+      "fjall_write_rate_over_hybrid": 1.7301356230686307,
+      "hybrid_append_p95_over_fjall": 1.512627253688016,
+      "hybrid_reopen_over_fjall": 1.655118613525739
+    },
+    {
+      "records": 262144,
+      "pair": 1,
+      "fjall_write_rate_over_hybrid": 1.6701541676938387,
+      "hybrid_append_p95_over_fjall": 1.4853818826801914,
+      "hybrid_reopen_over_fjall": 2.8071458813340446
+    },
+    {
+      "records": 262144,
+      "pair": 2,
+      "fjall_write_rate_over_hybrid": 1.5976810890108635,
+      "hybrid_append_p95_over_fjall": 1.4176125983098902,
+      "hybrid_reopen_over_fjall": 2.8158147619757123
+    },
+    {
+      "records": 262144,
+      "pair": 3,
+      "fjall_write_rate_over_hybrid": 1.653391738628218,
+      "hybrid_append_p95_over_fjall": 1.4659406344763237,
+      "hybrid_reopen_over_fjall": 2.624730638495221
+    },
+    {
+      "records": 262144,
+      "pair": 4,
+      "fjall_write_rate_over_hybrid": 1.6607873065675431,
+      "hybrid_append_p95_over_fjall": 1.4473074340666083,
+      "hybrid_reopen_over_fjall": 2.7434420248162605
+    }
+  ],
+  "provenance": {
+    "commit": "de39c46c83bac5ae31b8078eae7244aa90082af5",
+    "binary": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/examples/raw_owner_bench",
+    "binary_sha256": "ddec7141291cbebd5beb8c556ed61e6f2e068670b12b580c0aad10c09f723678",
+    "source_sha256": {
+      "crates/araphor-data/src/analysis/raw_benchmark.rs": "44ff20451b249ab12f741b818639028082022e57bbf4411da80e10c6fa1547ec",
+      "crates/araphor-data/examples/raw_storage_bench.rs": "474c9ca069c91218e0093312f3503c74f834eabc96f675869789158ce76e881d",
+      "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+      "crates/araphor-data/examples/raw_owner_bench.rs": "2ea88b0621d8e7411e170464830dec9d59cbf1895e65c0875b4e3530d442881d",
+      "crates/araphor-data/src/analysis/native/benchmark.rs": "3310e2ced00e6906b9fe1eec3316dcb9a4ae021e755599455fb30455c86f174e",
+      "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "ce2bdbfe0baa1904dc34e99d9cc5fdbb9019ea2259724ee3b2b6416519bc9a6c",
+      "crates/araphor-data/src/analysis/native/mod.rs": "8f2e2b7cd1d2eb97ba9d1e82f87bd705e780b2586980df92df07aaa10fba5c9a",
+      "crates/araphor-data/src/analysis/native/source/raw.rs": "fd0a3b22f41fb112ac27a633e225982a0a7142226383e315ffb78a5e3c056de7",
+      "crates/araphor-data/src/analysis/raw.rs": "2b0e227968890cc44e3f99adb557a9b87b50b8dbb67639bbfb398f85c72905c0",
+      "crates/araphor-data/src/analysis/raw_segments.rs": "67aacdc8129dbad7182ba8a4bae4da09ac40a3e8d2aa88db2a664301e5378086",
+      "crates/araphor-data/Cargo.toml": "e344ed3c38fba51731ea444125c71b12891d8473c6722a9953c2e6f1f8086e6e",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_storage.py": "a0028fc797e0ce9f8453bdc5e094f38ed4c908a40606e99cc5d7c9902969cb0f"
+    },
+    "engine_commits": {
+      "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+      "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+    },
+    "cache": "OS page cache retained; fresh store and process per run; setup filesystem sync outside append timing",
+    "maintenance": "explicit flush and major compaction; not a steady natural compaction test",
+    "dataset_records": [
+      16384,
+      262144
+    ],
+    "batch_records": 256,
+    "orders_per_dataset": [
+      [
+        "hybrid",
+        "fjall"
+      ],
+      [
+        "fjall",
+        "hybrid"
+      ],
+      [
+        "hybrid",
+        "fjall"
+      ],
+      [
+        "fjall",
+        "hybrid"
+      ]
+    ],
+    "comparison": "production hybrid versus all-Fjall"
+  },
+  "resources": [
+    {
+      "records": 16384,
+      "backend": "hybrid",
+      "rss_mib_median": 17.6875,
+      "user_cpu_s_median": 0.03,
+      "system_cpu_s_median": 0.025,
+      "write_s_median": 0.12436904800000001,
+      "apparent_mib_median": 66.28580284118652,
+      "warm_read_records_s_median": 5488753.862254143,
+      "after_maintenance_read_records_s_median": 5159518.124400975,
+      "continue_ms_median": 0.044804,
+      "checkpoint_ms_median": 6.8989755,
+      "flush_ms_median": 0.096871,
+      "major_compact_ms_median": 5.7164075
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "rss_mib_median": 18.416015625,
+      "user_cpu_s_median": 0.03,
+      "system_cpu_s_median": 0.02,
+      "write_s_median": 0.0737885395,
+      "apparent_mib_median": 66.77983951568604,
+      "warm_read_records_s_median": 6648027.359816619,
+      "after_maintenance_read_records_s_median": 3153618.328312263,
+      "continue_ms_median": 0.0851375,
+      "checkpoint_ms_median": 0.0014670000000000002,
+      "flush_ms_median": 10.4405325,
+      "major_compact_ms_median": 14.0799385
+    },
+    {
+      "records": 262144,
+      "backend": "hybrid",
+      "rss_mib_median": 112.5,
+      "user_cpu_s_median": 0.485,
+      "system_cpu_s_median": 0.375,
+      "write_s_median": 1.950696662,
+      "apparent_mib_median": 100.97972774505615,
+      "warm_read_records_s_median": 4874336.631691888,
+      "after_maintenance_read_records_s_median": 4735333.906220293,
+      "continue_ms_median": 0.063696,
+      "checkpoint_ms_median": 15.004440500000001,
+      "flush_ms_median": 0.10155049999999999,
+      "major_compact_ms_median": 9.841741
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "rss_mib_median": 160.13671875,
+      "user_cpu_s_median": 0.56,
+      "system_cpu_s_median": 0.295,
+      "write_s_median": 1.1769230715,
+      "apparent_mib_median": 109.04042625427246,
+      "warm_read_records_s_median": 6911476.423155495,
+      "after_maintenance_read_records_s_median": 3227189.47215694,
+      "continue_ms_median": 0.0736835,
+      "checkpoint_ms_median": 0.001676,
+      "flush_ms_median": 70.284212,
+      "major_compact_ms_median": 62.6541625
+    }
+  ],
+  "archive": {
+    "path": "docs/research/results/araphor-raw-owner-2026-11-12.samples.json.gz",
+    "sha256": "a1e228a1e2d2a4567a1b80b979ef6f570a3ca64a6a1b7702c33f17bbffac5fb7",
+    "bytes": 226642
+  },
+  "environment": "$ uname -a\nLinux navid-laptop 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n\n$ rustc --version --verbose\nrustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n\n$ findmnt -T output/araphor-raw-owner-20261112 -o SOURCE,FSTYPE,OPTIONS\nSOURCE         FSTYPE OPTIONS\n/dev/nvme0n1p7 ext4   rw,relatime,errors=remount-ro\n\n$ df -h output/araphor-raw-owner-20261112\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  462G  432G  6.6G  99% /\n\n$ lsblk -d -o NAME,MODEL,ROTA,SIZE\nNAME    MODEL           ROTA   SIZE\nloop0                      0     4K\nloop1                      0 105.2M\nloop2                      0  55.5M\nloop3                      0  63.8M\nloop4                      0    74M\nloop5                      0    74M\nloop6                      0  66.8M\nloop7                      0  66.8M\nloop8                      0 283.9M\nloop9                      0   285M\nloop10                     0  12.7M\nloop11                     0  12.7M\nloop12                     0 226.4M\nloop13                     0   227M\nloop14                     0 164.8M\nloop15                     0 218.4M\nloop16                     0 349.7M\nloop17                     0 531.5M\nloop18                     0 615.3M\nloop19                     0  91.7M\nloop20                     0  37.1M\nloop21                     0   402M\nloop22                     0 182.3M\nloop23                     0 222.2M\nloop24                     0  44.7M\nloop25                     0 222.1M\nloop26                     0  11.6M\nloop27                     0    12M\nloop28                     0  32.5M\nloop29                     0   828K\nloop31                     0 108.2M\nloop32                     0 222.9M\nloop33                     0  55.5M\nloop34                     0 222.9M\nnvme0n1 HFM001TD3JX013N    0 953.9G\n\n$ git -C fjall status --porcelain\n\n$ git -C lsm-tree status --porcelain\n\n$ lscpu\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 9 5900HX with Radeon Graphics\nCPU family:                              25\nModel:                                   80\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nCPU(s) scaling MHz:                      61%\nCPU max MHz:                             4680.0000\nCPU min MHz:                             400.0000\nBogoMIPS:                                6588.09\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm debug_swap ibpb_exit_to_user\nVirtualization:                          AMD-V\nL1d cache:                               256 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                4 MiB (8 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; Safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Mitigation; Clear CPU buffers\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n",
+  "verification": {
+    "release_build": true,
+    "owner_smokes": 2,
+    "original_pilot_smokes": 2,
+    "measured_processes": 16,
+    "all_correctness_checks": true,
+    "full_ci": false
+  }
+}

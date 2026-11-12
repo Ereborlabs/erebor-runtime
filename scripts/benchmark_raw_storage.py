@@ -11,9 +11,12 @@ import time
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
-    parser.add_argument("--binary", type=Path, default=Path("target/release/examples/raw_storage_bench"))
+    parser.add_argument("--binary", type=Path)
+    parser.add_argument("--owner", action="store_true")
     args = parser.parse_args()
-    binary = args.binary.resolve()
+    example = "raw_owner_bench" if args.owner else "raw_storage_bench"
+    binary = (args.binary or Path("target/release/examples") / example).resolve()
+    baseline = "hybrid" if args.owner else "segments"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     provenance = {
@@ -23,7 +26,17 @@ def main():
         "source_sha256": {
             str(path): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in [Path("crates/araphor-data/src/analysis/raw_benchmark.rs"),
-                         Path("crates/araphor-data/examples/raw_storage_bench.rs"), Path(__file__)]
+                         Path("crates/araphor-data/examples/raw_storage_bench.rs"),
+                         Path("crates/araphor-data/examples/raw_storage/common.rs"),
+                         *([Path("crates/araphor-data/examples/raw_owner_bench.rs"),
+                            Path("crates/araphor-data/src/analysis/native/benchmark.rs"),
+                            Path("crates/araphor-data/src/analysis/native/benchmark/candidate.rs"),
+                            Path("crates/araphor-data/src/analysis/native/mod.rs"),
+                            Path("crates/araphor-data/src/analysis/native/source/raw.rs"),
+                            Path("crates/araphor-data/src/analysis/raw.rs"),
+                            Path("crates/araphor-data/src/analysis/raw_segments.rs"),
+                            Path("crates/araphor-data/Cargo.toml")]
+                           if args.owner else []), Path(__file__)]
         },
         "engine_commits": {
             name: subprocess.check_output(["git", "-C", name, "rev-parse", "HEAD"], text=True).strip()
@@ -32,8 +45,9 @@ def main():
         "cache": "OS page cache retained; fresh store and process per run; setup filesystem sync outside append timing",
         "maintenance": "explicit flush and major compaction; not a steady natural compaction test",
         "dataset_records": [16384, 262144], "batch_records": 256,
-        "orders_per_dataset": [["segments", "fjall"], ["fjall", "segments"],
-                               ["segments", "fjall"], ["fjall", "segments"]],
+        "orders_per_dataset": [[baseline, "fjall"], ["fjall", baseline],
+                               [baseline, "fjall"], ["fjall", baseline]],
+        "comparison": "production hybrid versus all-Fjall" if args.owner else "raw segment versus Fjall pilot",
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
@@ -64,49 +78,73 @@ def main():
     for count in provenance["dataset_records"]:
         peers = [run for run in runs if run["records"] == count]
         assert len({run["input_bytes"] for run in peers}) == 1
-        for backend in ["segments", "fjall"]:
+        for backend in [baseline, "fjall"]:
             selected = [run for run in peers if run["backend"] == backend]
             totals = [sample["total_ns"] for run in selected for sample in run["append_samples"]]
-            commits = [sample["commit_ns"] for run in selected for sample in run["append_samples"]]
-            points = [sample for run in selected for sample in run["reopened_points"]["samples_ns"]]
+            commit_key = "progress_ns" if args.owner else "commit_ns"
+            commits = [sample[commit_key] for run in selected for sample in run["append_samples"]]
             row = {"records": count, "backend": backend, "runs": len(selected),
                    "input_bytes": selected[0]["input_bytes"],
                    "append": distribution(totals), "commit": distribution(commits),
                    "write_records_s_median": statistics.median(run["write_records_s"] for run in selected),
                    "reopened_read_records_s_median": statistics.median(
                        count / run["reopened_scan"]["elapsed_s"] for run in selected),
-                   "point_read": distribution(points),
                    "reopen_ms_median": statistics.median(run["reopen_s"] * 1000 for run in selected),
                    "allocated_mib_median": statistics.median(run["maintained_bytes"][1] / 1048576 for run in selected),
                    "replay_ms_median": statistics.median(run["replay_s"] * 1000 for run in selected),
                    "maintenance": [run["maintenance"] for run in selected]}
+            if args.owner:
+                for stage in ["accept", "capture", "progress"]:
+                    row[stage] = distribution([sample[f"{stage}_ns"] for run in selected
+                                               for sample in run["append_samples"]])
+                row["resume_ms_median"] = statistics.median(run["resume_s"] * 1000 for run in selected)
+            else:
+                row["point_read"] = distribution([sample for run in selected
+                                                  for sample in run["reopened_points"]["samples_ns"]])
             summary.append(row)
     ratios = []
     for count in provenance["dataset_records"]:
         for pair in range(1, 5):
             selected = {run["backend"]: run for run in runs if run["records"] == count and run["pair"] == pair}
-            segment, fjall = selected["segments"], selected["fjall"]
+            segment, fjall = selected[baseline], selected["fjall"]
             ratios.append({"records": count, "pair": pair,
-                           "fjall_write_rate_over_segments": fjall["write_records_s"] / segment["write_records_s"],
-                           "segments_append_p95_over_fjall": segment["append"]["p95_ms"] / fjall["append"]["p95_ms"],
-                           "segments_reopen_over_fjall": segment["reopen_s"] / fjall["reopen_s"]})
+                           f"fjall_write_rate_over_{baseline}": fjall["write_records_s"] / segment["write_records_s"],
+                           f"{baseline}_append_p95_over_fjall": segment["append"]["p95_ms"] / fjall["append"]["p95_ms"],
+                           f"{baseline}_reopen_over_fjall": segment["reopen_s"] / fjall["reopen_s"]})
     (output / "summary.json").write_text(json.dumps({"summary": summary, "paired_ratios": ratios}, indent=2) + "\n")
     lines = ["# Raw storage benchmark", "", "All 16 process runs passed byte, position, retained-cut, reopen, and log-resume checks.", "",
-             "| Records | Backend | Write records/s | Append median ms | Append p95 ms | Append p99 ms | Append max ms | Reopened read records/s | Point read p95 ms | Reopen ms | Allocated MiB |",
-             "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+             "| Records | Backend | Write records/s | Cycle median ms | Cycle p95 ms | Cycle p99 ms | Cycle max ms | Reopened read records/s | Reopen ms | Allocated MiB |",
+             "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for row in summary:
         latency = row["append"]
         lines.append(f"| {row['records']:,} | {row['backend']} | {row['write_records_s_median']:,.0f} | "
                      f"{latency['median_ms']:.3f} | {latency['p95_ms']:.3f} | {latency['p99_ms']:.3f} | {latency['max_ms']:.3f} | "
-                     f"{row['reopened_read_records_s_median']:,.0f} | {row['point_read']['p95_ms']:.3f} | "
+                     f"{row['reopened_read_records_s_median']:,.0f} | "
                      f"{row['reopen_ms_median']:.3f} | {row['allocated_mib_median']:.2f} |")
-    lines.extend(["", "Append latency is per durable 256-record batch. Percentiles pool samples by dataset/backend; throughput is the median of four process rates.",
+    lines.extend(["", "Cycle latency is per durable 256-record batch. Percentiles pool samples by dataset/backend; throughput is the median of four process rates.",
                   "Read throughput includes exact-byte verification.",
                   "OS page cache was not dropped. Reopen uses a new engine cache in the same process.",
-                  "Segments validate all retained payloads at open; the Fjall candidate restores index metadata and validates payloads on reads.",
-                  "The Fjall candidate prepares an unused segment identity header; prepare and commit samples are recorded separately.",
-                  "Native history and original journals remain retained for the probes. Maintenance is forced flush/major compaction.",
+                  "Maintenance is forced flush/major compaction.",
                   "This is not a complete Data owner, notification benchmark, crash test, or retention-parity qualification.", ""])
+    if args.owner:
+        lines.extend(["Both backends acknowledge event acceptance before the later durable result/reference/progress transaction.",
+                      "Hybrid calls production NativeStore and DataWrite; the second transaction includes stage_raw anchors.",
+                      "The all-Fjall candidate has no segment files, segment references, RawEntry records, or RAM range index.",
+                      "Saved consumer positions and source/cursor references are read from committed result records after reopen.",
+                      "Hybrid uses production history and journal collection at checkpoint. Its original event log remains in raw segments.",
+                      "The candidate retains all native history and original event WAL for the probes.",
+                      "Point-read latency and Arrow conversion are not measured.",
+                      "The result/progress record belongs to this benchmark. Production managed-result and witness-pin semantics are not qualified.", "",
+                      "| Records | Backend | Accept median ms | Accept p95 ms | Result/reference/progress median ms | Result/reference/progress p95 ms |",
+                      "| ---: | --- | ---: | ---: | ---: | ---: |"])
+        for row in summary:
+            lines.append(f"| {row['records']:,} | {row['backend']} | {row['accept']['median_ms']:.3f} | "
+                         f"{row['accept']['p95_ms']:.3f} | {row['progress']['median_ms']:.3f} | {row['progress']['p95_ms']:.3f} |")
+        lines.append("")
+    else:
+        lines.extend(["Native history and original journals remain retained for the probes.",
+                      "Segments validate all retained payloads at open; the Fjall candidate restores index metadata and validates payloads on reads.",
+                      "The Fjall candidate prepares an unused segment identity header; prepare and commit samples are recorded separately.", ""])
     (output / "README.md").write_text("\n".join(lines))
     print(output / "README.md", flush=True)
 

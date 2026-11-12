@@ -28,6 +28,9 @@ const HISTORY: &[u8] = b"\0data/history-policy";
 
 mod admission;
 mod backup;
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod benchmark;
 mod capacity;
 mod context;
 mod extraction;

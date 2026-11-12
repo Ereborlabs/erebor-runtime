@@ -14,7 +14,7 @@ and the versioned Fjall fork. A storage choice requires matched results.
 
 | Item | Request | Current state |
 | --- | --- | --- |
-| 1 | Compare raw log segments with Fjall | Matched raw-storage pilot complete: 16 final process runs. Production replacement and sustained compaction remain unqualified. |
+| 1 | Compare raw log segments with Fjall | Raw-only pilot and production transaction comparison complete: 16 measured process runs each. Production replacement and sustained compaction remain unqualified. |
 | 2 | Define the abstraction for tables on Fjall | Deferred. No API or implementation proposed. |
 | 3 | Define how to add collectors | Deferred. Inventory collectors before confirming whether only BPF intake exists. |
 
@@ -46,6 +46,57 @@ covers disjoint contiguous inputs. It does not implement overlapping retry,
 expiry/witness parity, killed-process recovery, or sustained natural compaction.
 Reopen integrity work differs and is stated in the record. The later proposal
 below retains the wider qualification work as unimplemented scope.
+
+### Production path comparison, 2026-11-12
+
+The user requests a second comparison. Include the current segment append and
+the later Fjall metadata commit. Compare that path with events held in Fjall
+and source/cursor references. Keep the earlier pilot and its measurements.
+The benchmark implementation and execution are approved. Production migration
+and items 2 and 3 remain outside this request.
+
+```text
+The benchmark submits one prepared 256-record batch
+  -> The hybrid condition calls NativeStore.accept_validated_batch.
+  -> The Fjall condition commits payload, receipt, and input metadata together.
+  -> Each condition returns its durable event acceptance.
+  -> The benchmark captures the accepted input cut.
+  -> Each condition resolves the same source/cursor input reference.
+  -> Each condition commits the same result body, reference, and consumed cut.
+  -> The hybrid DataWrite also commits the pending raw metadata anchors.
+
+The benchmark reopens each store after native flush and compaction
+  -> Each condition reads its result and consumed cut from committed storage.
+  -> Each condition resolves the saved source/cursor reference.
+  -> Each condition walks original committed input after the saved cut.
+  -> Each condition accepts another batch and resumes without repeated input.
+```
+
+Measure event acceptance, cut capture, result/reference/progress commit, and
+the combined cycle separately. Both conditions have two durable stages.
+Use the same 16,384 and 262,144 records, four alternating pairs, original
+framed bytes, and 256-record read pages as the earlier comparison. Timings
+remain report-only. Exact bytes, source cursors, positions, saved references,
+retained cuts, and resumed input are correctness gates.
+
+The Fjall condition uses native predecessor and range reads. It has no raw
+segment files, segment offsets, RawEntry records, or in-memory range index.
+The result record belongs to the benchmark. This condition does not implement
+or qualify managed-result, processor, Graph, notification, or witness-retention
+semantics. Close/reopen is not a power-loss test. Forced maintenance is not a
+sustained compaction workload.
+
+The [measured result and source review](../research/results/araphor-raw-owner-2026-11-12.md)
+record all 16 passing process runs. At 262,144 events, hybrid and all-Fjall
+cycle medians are 1.878 and 1.061 ms; p95 values are 2.018 and 1.391 ms.
+Median cycle rates are 134,385 and 222,738 events/s. The all-Fjall rate is
+1.657 times the hybrid rate across this condition. Reopened reads and resumed
+log reads are slower in the candidate. Allocated space is 37.94 versus
+53.69 MiB. Both conditions preserve the measured input, history, references,
+and resumed output.
+
+Result: **Done** for the requested transaction comparison. Production
+replacement and complete lifecycle qualification remain **Not done**.
 
 ### Current event flow
 
