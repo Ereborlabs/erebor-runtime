@@ -199,4 +199,39 @@ impl Candidate {
         }
         Ok(records)
     }
+
+    pub fn scan(
+        &self,
+        cut: Option<&Cut>,
+        mut visit: impl FnMut(Vec<AnalysisRecordV1>) -> Result<()>,
+    ) -> Result<()> {
+        let snapshot = match cut {
+            Some(cut) => self
+                .branch
+                .read_at(fjall::Revision::from_bytes(cut.native))?,
+            None => self.branch.snapshot()?,
+        };
+        let mut records = Vec::new();
+        for row in snapshot.prefix(self.key(None)) {
+            let (key, bytes) = row?;
+            let commit = self.decode(&key, &bytes)?;
+            for (ordinal, (cursor, bytes)) in commit.records().enumerate() {
+                records.push(AnalysisRecordV1 {
+                    cursor,
+                    framed_record: bytes.to_vec(),
+                    position: StorePositionV1 {
+                        commit_revision: commit.revision,
+                        ordinal: ordinal as u32,
+                    },
+                });
+                if records.len() == crate::analysis::MAX_ANALYSIS_PAGE_RECORDS {
+                    visit(std::mem::take(&mut records))?;
+                }
+            }
+        }
+        if !records.is_empty() {
+            visit(records)?;
+        }
+        Ok(())
+    }
 }

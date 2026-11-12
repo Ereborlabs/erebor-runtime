@@ -98,6 +98,28 @@ and resumed output.
 Result: **Done** for the requested transaction comparison. Production
 replacement and complete lifecycle qualification remain **Not done**.
 
+### Read access investigation, 2026-11-12
+
+The user requests investigation of Fjall read performance. The
+[measured access-path record](../research/results/araphor-raw-read-2026-11-12.md)
+contains two finite experiments, source review, and complete samples.
+Each experiment uses four alternating pairs at both existing counts.
+
+The point-lookup experiment gives mixed results and is removed. The independent
+page implementation stays unchanged. A separate native continuous-scan mode
+holds one snapshot and source-prefix iterator per query. At 262,144 events,
+reopened median rates are 4,427,753 events/s for independent pages and
+4,813,199 events/s for the native stream. The four paired stream rates improve
+by 5.9% to 12.5%. Both modes use the same release binary and output checks.
+This is a modest bulk-query gain. It does not establish lower latency for
+independent requests or notifications.
+
+The stream is a benchmark access path. The focused partial-page/history test,
+both-backend smoke checks, and all 32 measured process runs pass. Production
+storage, DataFusion integration, and the general table abstraction do not
+change. Result: **Done** for the requested read investigation. Production
+integration remains **Not done**.
+
 ### Current event flow
 
 ```text

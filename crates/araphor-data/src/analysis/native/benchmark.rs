@@ -153,6 +153,35 @@ impl Store {
         }
     }
 
+    pub fn scan(
+        &self,
+        cut: Option<&Cut>,
+        mut visit: impl FnMut(Vec<AnalysisRecordV1>) -> Result<()>,
+    ) -> Result<()> {
+        match &self.backend {
+            Backend::Hybrid(store) => {
+                let view = match cut {
+                    Some(cut) => store.read_at(cut.revision)?,
+                    None => store.view()?.as_ref().clone(),
+                };
+                let control = AnalysisReadControl::default();
+                let mut first = 1;
+                loop {
+                    let page = store.read_page_at(&view, &self.source, first, &control)?;
+                    if !page.records.is_empty() {
+                        visit(page.records)?;
+                    }
+                    let Some(next) = page.next_cursor else {
+                        break;
+                    };
+                    first = next;
+                }
+                Ok(())
+            }
+            Backend::Fjall(store) => store.scan(cut, visit),
+        }
+    }
+
     pub fn consume(&self, first: u64, cut: &Cut) -> Result<()> {
         let page = self.read(first, None)?;
         if page.first().map(|row| row.cursor) != Some(first)

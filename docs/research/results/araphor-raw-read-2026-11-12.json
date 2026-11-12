@@ -1,0 +1,586 @@
+{
+  "point": {
+    "provenance": {
+      "commit": "957475fbe294931b8ec5ac02262f4ff8a83e9949",
+      "binaries": {
+        "before": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_before",
+          "sha256": "ddec7141291cbebd5beb8c556ed61e6f2e068670b12b580c0aad10c09f723678"
+        },
+        "after": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_after",
+          "sha256": "2553efec6955e021dfd4fe6509ac443811a7ee6f12973058c569c0b7d0ac35b9"
+        }
+      },
+      "source_sha256": {
+        "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "36e91d76fa314f49388b7d431454dab3cec6e816a9af7c8bb103b737445b4757",
+        "crates/araphor-data/src/analysis/native/benchmark.rs": "3310e2ced00e6906b9fe1eec3316dcb9a4ae021e755599455fb30455c86f174e",
+        "crates/araphor-data/examples/raw_owner_bench.rs": "82be88a0bc4106c534b230fe83c3137735c99946113cf13f53344186fc5effc2",
+        "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+        "scripts/benchmark_raw_storage.py": "a0028fc797e0ce9f8453bdc5e094f38ed4c908a40606e99cc5d7c9902969cb0f",
+        "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "a8389c96d6af481e353daf56b5b241a4b2c9f3a3b789b8536e223b1032529a21"
+      },
+      "engine_commits": {
+        "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+        "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+      },
+      "records": [
+        16384,
+        262144
+      ],
+      "batch_records": 256,
+      "orders": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen"
+    },
+    "summary": [
+      {
+        "records": 16384,
+        "variant": "before",
+        "write_events_s": 222957.1499956305,
+        "cycle": {
+          "count": 256,
+          "median_ms": 1.056006,
+          "p95_ms": 1.422954,
+          "p99_ms": 2.157759,
+          "max_ms": 3.283956
+        },
+        "warm_scan": {
+          "events_s": 7722604.547247866,
+          "page": {
+            "count": 256,
+            "median_ms": 0.022978,
+            "p95_ms": 0.037086,
+            "p99_ms": 0.047981,
+            "max_ms": 0.055175
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3727853.185128734,
+          "page": {
+            "count": 256,
+            "median_ms": 0.058527,
+            "p95_ms": 0.077943,
+            "p99_ms": 0.114191,
+            "max_ms": 0.146598
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4475006.276073074,
+          "page": {
+            "count": 256,
+            "median_ms": 0.043511,
+            "p95_ms": 0.067607,
+            "p99_ms": 0.105042,
+            "max_ms": 0.115588
+          }
+        }
+      },
+      {
+        "records": 16384,
+        "variant": "after",
+        "write_events_s": 225669.9159760219,
+        "cycle": {
+          "count": 256,
+          "median_ms": 1.05014,
+          "p95_ms": 1.379932,
+          "p99_ms": 1.647844,
+          "max_ms": 2.033441
+        },
+        "warm_scan": {
+          "events_s": 7524434.283223617,
+          "page": {
+            "count": 256,
+            "median_ms": 0.022,
+            "p95_ms": 0.037714,
+            "p99_ms": 0.045048,
+            "max_ms": 0.049029
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3425548.658749235,
+          "page": {
+            "count": 256,
+            "median_ms": 0.06195,
+            "p95_ms": 0.098546,
+            "p99_ms": 0.10602,
+            "max_ms": 0.138565
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4615060.25190635,
+          "page": {
+            "count": 256,
+            "median_ms": 0.041905,
+            "p95_ms": 0.07061,
+            "p99_ms": 0.082833,
+            "max_ms": 0.10155
+          }
+        }
+      },
+      {
+        "records": 262144,
+        "variant": "before",
+        "write_events_s": 219838.0188338733,
+        "cycle": {
+          "count": 4096,
+          "median_ms": 1.068578,
+          "p95_ms": 1.465488,
+          "p99_ms": 1.745344,
+          "max_ms": 6.694815
+        },
+        "warm_scan": {
+          "events_s": 6882499.642768204,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.02626,
+            "p95_ms": 0.039042,
+            "p99_ms": 0.046864,
+            "max_ms": 0.106578
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3261689.3210928207,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.065372,
+            "p95_ms": 0.097499,
+            "p99_ms": 0.115239,
+            "max_ms": 0.359685
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4012860.0157484356,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.050984,
+            "p95_ms": 0.078292,
+            "p99_ms": 0.089607,
+            "max_ms": 0.149252
+          }
+        }
+      },
+      {
+        "records": 262144,
+        "variant": "after",
+        "write_events_s": 222557.7742024521,
+        "cycle": {
+          "count": 4096,
+          "median_ms": 1.052654,
+          "p95_ms": 1.388942,
+          "p99_ms": 1.474288,
+          "max_ms": 6.668066
+        },
+        "warm_scan": {
+          "events_s": 7138496.2360288,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.025003,
+            "p95_ms": 0.03527,
+            "p99_ms": 0.043023,
+            "max_ms": 0.117265
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3668490.877608402,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.06188,
+            "p95_ms": 0.082622,
+            "p99_ms": 0.100153,
+            "max_ms": 0.285024
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4249878.143709481,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.047981,
+            "p95_ms": 0.072845,
+            "p99_ms": 0.083111,
+            "max_ms": 0.126903
+          }
+        }
+      }
+    ],
+    "paired_speedups": [
+      {
+        "records": 16384,
+        "pair": 1,
+        "warm_scan": 1.3574821747351298,
+        "after_maintenance_scan": 1.00453728896635,
+        "reopened_scan": 1.0806179637289481
+      },
+      {
+        "records": 16384,
+        "pair": 2,
+        "warm_scan": 0.7073755622630549,
+        "after_maintenance_scan": 0.7640798926236374,
+        "reopened_scan": 0.7079496933719833
+      },
+      {
+        "records": 16384,
+        "pair": 3,
+        "warm_scan": 1.0386243551571803,
+        "after_maintenance_scan": 0.7586776562396922,
+        "reopened_scan": 0.9753833482524306
+      },
+      {
+        "records": 16384,
+        "pair": 4,
+        "warm_scan": 1.1029458617924512,
+        "after_maintenance_scan": 1.111860595700822,
+        "reopened_scan": 1.236342370139561
+      },
+      {
+        "records": 262144,
+        "pair": 1,
+        "warm_scan": 0.9756836954555672,
+        "after_maintenance_scan": 0.9920171076592174,
+        "reopened_scan": 1.1377238855345735
+      },
+      {
+        "records": 262144,
+        "pair": 2,
+        "warm_scan": 0.9724972416105304,
+        "after_maintenance_scan": 1.08249014327158,
+        "reopened_scan": 0.9225280297584547
+      },
+      {
+        "records": 262144,
+        "pair": 3,
+        "warm_scan": 1.046991712413964,
+        "after_maintenance_scan": 1.1709223417471037,
+        "reopened_scan": 1.1062200249122107
+      },
+      {
+        "records": 262144,
+        "pair": 4,
+        "warm_scan": 1.1635701254817306,
+        "after_maintenance_scan": 1.0456327401401178,
+        "reopened_scan": 1.0843677409154118
+      }
+    ]
+  },
+  "stream": {
+    "provenance": {
+      "commit": "957475fbe294931b8ec5ac02262f4ff8a83e9949",
+      "binaries": {
+        "before": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_stream",
+          "sha256": "7fe9dc69dc2cc1c8ddfe6cdaccf57a1d68dd720b7c58f3e264aa40b16c42d109"
+        },
+        "after": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_stream",
+          "sha256": "7fe9dc69dc2cc1c8ddfe6cdaccf57a1d68dd720b7c58f3e264aa40b16c42d109"
+        }
+      },
+      "source_sha256": {
+        "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640",
+        "crates/araphor-data/src/analysis/native/benchmark.rs": "25a569728b2309542d4cec6d16ec7ef0d51ad091e601f53529d67c810c076659",
+        "crates/araphor-data/examples/raw_owner_bench.rs": "b222841da80267264f4e000e6fb145a2f400d3a8a348641611c9a546eff8f143",
+        "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+        "scripts/benchmark_raw_storage.py": "a0028fc797e0ce9f8453bdc5e094f38ed4c908a40606e99cc5d7c9902969cb0f",
+        "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "94430ac5a5f7ca995dcf08f694d8156d49dc40cd69f4ad6bebab0aea1c69c3b8"
+      },
+      "engine_commits": {
+        "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+        "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+      },
+      "records": [
+        16384,
+        262144
+      ],
+      "batch_records": 256,
+      "orders": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen",
+      "scan_modes": {
+        "before": "pages",
+        "after": "stream"
+      }
+    },
+    "summary": [
+      {
+        "records": 16384,
+        "variant": "before",
+        "write_events_s": 233530.54038504203,
+        "cycle": {
+          "count": 256,
+          "median_ms": 0.999858,
+          "p95_ms": 1.33936,
+          "p99_ms": 1.477578,
+          "max_ms": 2.375956
+        },
+        "warm_scan": {
+          "events_s": 8283471.239254123,
+          "page": {
+            "count": 256,
+            "median_ms": 0.021302,
+            "p95_ms": 0.033664,
+            "p99_ms": 0.03981,
+            "max_ms": 0.042743
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 4296505.59843669,
+          "page": {
+            "count": 256,
+            "median_ms": 0.05273,
+            "p95_ms": 0.065582,
+            "p99_ms": 0.08388,
+            "max_ms": 0.097639
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4994260.2370788455,
+          "page": {
+            "count": 256,
+            "median_ms": 0.040508,
+            "p95_ms": 0.064394,
+            "p99_ms": 0.094007,
+            "max_ms": 0.106719
+          }
+        }
+      },
+      {
+        "records": 16384,
+        "variant": "after",
+        "write_events_s": 236754.74899606756,
+        "cycle": {
+          "count": 256,
+          "median_ms": 0.998811,
+          "p95_ms": 1.33091,
+          "p99_ms": 1.480441,
+          "max_ms": 1.602526
+        },
+        "warm_scan": {
+          "events_s": 8852366.364884317,
+          "page": {
+            "count": 256,
+            "median_ms": 0.022698,
+            "p95_ms": 0.031988,
+            "p99_ms": 0.041765,
+            "max_ms": 0.053499
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 4387654.614658307,
+          "page": {
+            "count": 256,
+            "median_ms": 0.054896,
+            "p95_ms": 0.09736,
+            "p99_ms": 0.115379,
+            "max_ms": 0.121595
+          }
+        },
+        "reopened_scan": {
+          "events_s": 5650734.508720383,
+          "page": {
+            "count": 256,
+            "median_ms": 0.038832,
+            "p95_ms": 0.047214,
+            "p99_ms": 0.102598,
+            "max_ms": 0.113005
+          }
+        }
+      },
+      {
+        "records": 262144,
+        "variant": "before",
+        "write_events_s": 228171.9377834626,
+        "cycle": {
+          "count": 4096,
+          "median_ms": 1.030309,
+          "p95_ms": 1.376656,
+          "p99_ms": 1.484283,
+          "max_ms": 6.414153
+        },
+        "warm_scan": {
+          "events_s": 7527376.844898496,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.024305,
+            "p95_ms": 0.032477,
+            "p99_ms": 0.040509,
+            "max_ms": 0.078642
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3611731.093554425,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.06181,
+            "p95_ms": 0.076267,
+            "p99_ms": 0.098198,
+            "max_ms": 0.281952
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4427752.972968208,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.045746,
+            "p95_ms": 0.058109,
+            "p99_ms": 0.071518,
+            "max_ms": 1.765467
+          }
+        }
+      },
+      {
+        "records": 262144,
+        "variant": "after",
+        "write_events_s": 230448.86966130807,
+        "cycle": {
+          "count": 4096,
+          "median_ms": 1.017878,
+          "p95_ms": 1.352002,
+          "p99_ms": 1.442727,
+          "max_ms": 6.690239
+        },
+        "warm_scan": {
+          "events_s": 7876720.994055051,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.025842,
+            "p95_ms": 0.03967,
+            "p99_ms": 0.045048,
+            "max_ms": 0.091493
+          }
+        },
+        "after_maintenance_scan": {
+          "events_s": 3914550.282796544,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.060623,
+            "p95_ms": 0.073823,
+            "p99_ms": 0.106229,
+            "max_ms": 0.303184
+          }
+        },
+        "reopened_scan": {
+          "events_s": 4813198.839015049,
+          "page": {
+            "count": 4096,
+            "median_ms": 0.045676,
+            "p95_ms": 0.060413,
+            "p99_ms": 0.074242,
+            "max_ms": 0.134656
+          }
+        }
+      }
+    ],
+    "paired_speedups": [
+      {
+        "records": 16384,
+        "pair": 1,
+        "warm_scan": 0.9396604199448051,
+        "after_maintenance_scan": 0.7087353296004818,
+        "reopened_scan": 1.1163776645381434
+      },
+      {
+        "records": 16384,
+        "pair": 2,
+        "warm_scan": 1.120670912073282,
+        "after_maintenance_scan": 1.0839235172115589,
+        "reopened_scan": 1.1048683721984505
+      },
+      {
+        "records": 16384,
+        "pair": 3,
+        "warm_scan": 1.1118989550848557,
+        "after_maintenance_scan": 0.999961841860678,
+        "reopened_scan": 1.1398646634164136
+      },
+      {
+        "records": 16384,
+        "pair": 4,
+        "warm_scan": 1.2408482358096697,
+        "after_maintenance_scan": 1.082028765465028,
+        "reopened_scan": 1.5499061009251682
+      },
+      {
+        "records": 262144,
+        "pair": 1,
+        "warm_scan": 0.9955667150964305,
+        "after_maintenance_scan": 1.0966222180728509,
+        "reopened_scan": 1.0586705151050142
+      },
+      {
+        "records": 262144,
+        "pair": 2,
+        "warm_scan": 1.1058394240786473,
+        "after_maintenance_scan": 1.081670582236995,
+        "reopened_scan": 1.099463197809268
+      },
+      {
+        "records": 262144,
+        "pair": 3,
+        "warm_scan": 1.0185029475162564,
+        "after_maintenance_scan": 1.0956038572537914,
+        "reopened_scan": 1.0936436177341358
+      },
+      {
+        "records": 262144,
+        "pair": 4,
+        "warm_scan": 1.0664831377688806,
+        "after_maintenance_scan": 1.0726775703942197,
+        "reopened_scan": 1.1248745954978172
+      }
+    ]
+  },
+  "baseline": {
+    "commit": "957475fbe294931b8ec5ac02262f4ff8a83e9949",
+    "binary_sha256": "ddec7141291cbebd5beb8c556ed61e6f2e068670b12b580c0aad10c09f723678",
+    "source_sha256": {
+      "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "ce2bdbfe0baa1904dc34e99d9cc5fdbb9019ea2259724ee3b2b6416519bc9a6c",
+      "crates/araphor-data/examples/raw_owner_bench.rs": "2ea88b0621d8e7411e170464830dec9d59cbf1895e65c0875b4e3530d442881d"
+    }
+  },
+  "environment": "$ uname -a\nLinux navid-laptop 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n\n$ rustc --version --verbose\nrustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n\n$ findmnt -T output/araphor-raw-read-20261112 -o SOURCE,FSTYPE,OPTIONS\nSOURCE         FSTYPE OPTIONS\n/dev/nvme0n1p7 ext4   rw,relatime,errors=remount-ro\n\n$ df -h output/araphor-raw-read-20261112\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  462G  432G  6.5G  99% /\n\n$ git -C fjall status --porcelain\n\n$ git -C lsm-tree status --porcelain\n\n$ cat /proc/sys/kernel/perf_event_paranoid\n4\n\n",
+  "archive": {
+    "path": "docs/research/results/araphor-raw-read-2026-11-12.samples.json.gz",
+    "sha256": "a95f590f5f2444da12a4a94723f753123d1e8a0d23d7e3ab4a6476c609feb185",
+    "bytes": 457127
+  },
+  "verification": {
+    "focused_test": "stream_partial_history: passed on hybrid and Fjall across maintenance and reopen",
+    "point_runs": 16,
+    "stream_runs": 16,
+    "point_smokes": 2,
+    "stream_smokes": 4,
+    "full_ci": false
+  }
+}
