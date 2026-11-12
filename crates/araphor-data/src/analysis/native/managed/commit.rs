@@ -289,6 +289,8 @@ impl NativeStore {
         prepared.memory.check()?;
         check()?;
         let prepared_at = std::time::Instant::now();
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "managed.before");
         tx.commit_published(
             pending
                 .as_ref()
@@ -306,6 +308,8 @@ impl NativeStore {
                 }
             },
         )?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        Self::crash_path(&self.root, "managed.after");
         let committed = std::time::Instant::now();
         erebor_telemetry::debug!(
             stage = "managed_commit_timing",

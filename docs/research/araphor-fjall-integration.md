@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 212 diagnostics.
+  The last unit compilation reports 194 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,40 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Native managed recovery now replaces the two SQL corruption and crash cases.
+  The four fault classes remain: invalid call body, checkpoint version, both
+  selected dependency links, and call context target. Each case rejects the
+  same live read route and rejects reopen. Faults use actual X, U, and native
+  reference records. No SQL fault projection remains in these cases.
+
+  The crash case keeps all four before/after and ordinary/version-promotion
+  combinations. The existing crash helper now brackets the native managed
+  commit under test or `test-fixtures` configuration only. Each child must exit
+  with code 73. Before commit, call heads, results, checkpoints, references,
+  history, and instance state remain unchanged. After commit, both calls,
+  selected result, receipt, checkpoints, references, progress, and any version
+  promotion are present together. Previous result and checkpoint bytes remain
+  exact. The before-commit ordinary case still publishes after recovery.
+
+  The first native run passes the corruption case but fails the promotion
+  child's prior-checkpoint assertion. Native storage does not archive caller
+  parameters. The child now uses the existing `hydrate_prior` API to supply
+  the original 2 and 3 parameter batches before it checks prior state. It
+  retains the original 12 and 103 checkpoint assertions. No production prior
+  rule or parameter archive changes. The corrected focused run passes both
+  cases in 0.21 seconds. All 208 native managed integration cases pass in
+  19.61 seconds. Data unit compilation reports 194 diagnostics, down from
+  212, and still does not compile or run. Read
+  `native-managed-recovery-focused.log`, `native-managed-recovery-hydrated.log`,
+  `native-managed-recovery-qualified.log`, and `native-managed-recovery-unit.log`
+  under `output/araphor-fjall-migration-20261110`.
+  The release library check without default features passes in 8.47 seconds;
+  read `native-managed-recovery-default.log` in the same directory. Changed
+  Rust formatting and whitespace checks pass.
+  Result: **Done for native managed corruption and crash qualification;
+  Not done for complete Data unit qualification and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - The old usage fixture family no longer uses SQL. Two runnable native
   lifecycle cases preserve witness accounting and segment cost. They retain

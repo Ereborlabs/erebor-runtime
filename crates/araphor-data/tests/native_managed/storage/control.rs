@@ -14,6 +14,8 @@ use serde_value::Value;
 mod history;
 #[path = "control/lifecycle.rs"]
 mod lifecycle;
+#[path = "control/recovery.rs"]
+mod recovery;
 #[path = "control/removal.rs"]
 mod removal;
 #[path = "control/renewal.rs"]

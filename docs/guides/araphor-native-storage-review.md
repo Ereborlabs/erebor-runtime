@@ -4,6 +4,27 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native corruption and crash cases](../../crates/araphor-data/tests/native_managed/storage/control/recovery.rs)
+with [managed publication](../../crates/araphor-data/src/analysis/native/managed/commit.rs)
+and [prior hydration](../../crates/araphor-data/src/analysis/managed/model.rs).
+The two old SQL cases are removed. Four real native record faults retain live
+and reopen rejection. Two test-only crash calls bracket the actual durable
+commit. They add no work to the normal production library configuration.
+All four child outcomes require exit 73. Q heads, X result bytes, U checkpoints,
+dependency references, instance generation and lifecycle, progress, receipts,
+and history prove the before/after boundary. Previous results remain exact.
+The ordinary before-commit case still publishes after recovery.
+
+The caller supplies the original parameter batches through `hydrate_prior`
+after reopen. Storage does not archive those parameters. The child retains
+the original 12 and 103 checkpoint assertions. The corrected focused run
+passes both cases; all 208 native managed integration cases pass. Data unit
+compilation still reports 194 diagnostics. The production library check without
+default features, changed Rust formatting, and whitespace checks pass.
+Read `native-managed-recovery-*`
+under `output/araphor-fjall-migration-20261110`. Complete qualification and
+incident performance remain open.
+
 Read the [public usage cases](../../crates/araphor-data/tests/native_lifecycle/usage.rs)
 with [witness accounting](../../crates/araphor-data/src/analysis/native/witnesses.rs),
 the [trace reserve case](../../crates/araphor-data/src/analysis/native/trace/tests.rs),
