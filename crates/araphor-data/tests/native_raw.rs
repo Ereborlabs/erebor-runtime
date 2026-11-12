@@ -17,6 +17,8 @@ mod recovery;
 
 #[path = "native_raw/store.rs"]
 mod store;
+#[path = "native_raw/trace.rs"]
+mod trace;
 
 fn identity() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {

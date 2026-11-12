@@ -4,6 +4,31 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [public raw/trace cases](../../crates/araphor-data/tests/native_raw/trace.rs),
+[private native trace cases](../../crates/araphor-data/src/analysis/native/trace/tests/raw.rs),
+and [retained raw units](../../crates/araphor-data/src/analysis/raw.rs)
+with [native trace reads and receipts](../../crates/araphor-data/src/analysis/native/trace/raw.rs).
+The public cases preserve frames, bounds, identity rejection, receipts,
+terminals, retries, and reopen. Native snapshot, journal, head, and receipt
+checks replace SQL probes. The four raw appends advance their visible receipts
+without writing native metadata. The maximum receipt counters fail live reads
+and reopen with the exact native bounds error. All 29 native raw cases pass.
+
+The private native cases preserve terminal-pin crash, segment identity,
+unchanged witness charges, 5-second freeze/retention locking, and sixteen
+1 MiB plus one-byte frames. They also keep empty-terminal reserve release and
+exact expired receipt state. Historical raw entries remain with expiry markers;
+no live or active segment, physical file, or expired payload read remains.
+The raw owner keeps execution-key identity, malformed record rejection, and
+standalone journal reconstruction. Shared fixture helpers retain their paths.
+
+All eight old store bodies and their SQL probes are removed. The five private
+native trace cases and two raw-owner units remain unexecuted and unqualified
+while Data unit compilation fails with 116 diagnostics. These raw sources
+report no compilation diagnostic. Read `native-raw-trace-*` under
+`output/araphor-fjall-migration-20261110`. No production logic changed.
+Complete qualification and incident performance remain open.
+
 Read the [native metadata owner cases](../../crates/araphor-data/tests/native_managed/storage/metadata.rs)
 with [managed resume](../../crates/araphor-data/src/analysis/native/managed/status.rs),
 [managed capture](../../crates/araphor-data/src/analysis/native/managed/capture.rs),

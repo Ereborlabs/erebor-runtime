@@ -4,6 +4,9 @@ use crate::{AnalysisReadControl, TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "tests/raw.rs"]
+mod raw_cases;
+
 #[test]
 fn raw_projection_keeps_terminal_reserves() -> TestResult {
     use crate::analysis::raw::tests::{trace_intent, trace_terminal};

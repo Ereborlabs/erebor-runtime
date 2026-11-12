@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 134 diagnostics.
+  The last unit compilation reports 116 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,43 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- All ten raw fixture cases have native owner mappings. Five public cases
+  run under `native_raw/trace`: raw trace recovery, empty terminal recovery,
+  1 MiB frames and changed identities, receipt bounds corruption, and four
+  deferred raw appends. Native snapshot, head, receipt, complete record, and
+  original-journal checks replace the SQL probes. The receipt fault changes
+  only the stored sequence and byte counters to their maximum values; live
+  reads and reopen require the exact native receipt-bounds error. Payloads,
+  retries, invalid sequences, terminals, and reopen assertions remain.
+
+  Terminal-pin crash, freeze/retention locking, and sixteen 1 MiB plus one-byte
+  frame rotation cases move beside native trace. Their workloads, 5-second
+  synchronization deadlines, exact child filter and exit 73, distinct segment
+  IDs, pin charges, retention totals, retries, and reopen remain. The existing
+  AfterTraceFreeze hook stays unchanged. Private probes retain the empty
+  terminal reserve-zero check and verify expired history has no live or active
+  segment, no physical file, the original receipt cursor, and read expiration
+  before and after reopen. Native storage retains expired entries and markers
+  for history; total historical entry count zero is not the native guarantee.
+
+  The execution-key and standalone journal units remain at the raw owner.
+  Shared trace helpers retain their caller paths. The malformed record check
+  moves to the raw key unit. Standalone directory setup uses the existing
+  `RawJournal::directory`. Eight old store bodies and all raw SQL probes are
+  removed. The five private native trace cases and two raw-owner units remain
+  unexecuted and unqualified while Data unit compilation fails with 116
+  diagnostics, down from 134. Neither raw test source reports a diagnostic.
+
+  The five focused public cases pass in 0.06 seconds. All 29 native raw
+  integration cases pass in 0.49 seconds. Changed Rust formatting and whitespace
+  checks pass. Read `native-raw-trace-focused.log`,
+  `native-raw-trace-qualified.log`, and `native-raw-trace-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for public native raw/trace qualification and raw SQL fixture
+  retirement; Not done for private raw/trace qualification or complete
+  migration**. No production logic change, incident timing comparison, or
+  full CI is included.
 
 - The metadata fixture family uses current native owners. Two public cases
   replace the removed dependency-revision polling API. Generation, lifecycle,
