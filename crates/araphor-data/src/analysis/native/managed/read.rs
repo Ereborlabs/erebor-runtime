@@ -1,10 +1,13 @@
 use std::collections::BTreeSet;
 
-use super::{results::ResultBody, results::StoredResult, CallHead, InstanceRecord, Records};
+use super::{
+    results::ResultBody, results::StoredResult, source::SourceRecord, CallHead, InstanceRecord,
+    Records,
+};
 use crate::analysis::native::{DataView, NativeStore};
 use crate::{
-    AnalysisReadControl, InstanceResultKindV1, InstanceResultV1, ManagedAttempt, ManagedInstance,
-    ManagedSpec, PackageErrorCodeV1 as Code, Result,
+    AnalysisReadControl, InstanceResultKindV1, InstanceResultV1, ManagedAttempt,
+    ManagedDestination, ManagedInstance, ManagedSpec, PackageErrorCodeV1 as Code, Result,
 };
 
 impl NativeStore {
@@ -212,6 +215,25 @@ impl NativeStore {
                 .ok_or_else(|| Code::Missing.error("managed result receipt"))?;
             for (call, reference) in &receipt.results {
                 view.selected_call(&attempt.0, &attempt.1.spec, *call, reference, control)?;
+            }
+            if let (
+                Some(source),
+                ManagedDestination::Graph {
+                    source: identity, ..
+                },
+            ) = (&step.source, &attempt.instance().spec.destination)
+            {
+                let header = SourceRecord::header(
+                    id,
+                    |key| Records::read(key, &view.snapshot),
+                    &mut |_| control.check(),
+                )?;
+                header.check_ranges()?;
+                header.check_capture(attempt.captured_revision(), stored.revision)?;
+                for (record, position) in &source.records {
+                    control.check()?;
+                    header.check_member(identity, source.first..=source.last, record, *position)?;
+                }
             }
         }
         let current = match &stored.body {

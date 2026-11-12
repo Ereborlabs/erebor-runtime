@@ -41,10 +41,9 @@ impl NativeStore {
                 ManagedDestination::Graph { source, .. } => source,
                 _ => return Err(Code::Invalid.error("source recovery destination")),
             };
-            if header.captured.commit_revision != owner.captured_revision()
-                || header.captured.ordinal != u32::MAX
-                || owner.receipt().and_then(|receipt| receipt.graph.as_ref())
-                    != Some(&header.summary(&stored)?.reference)
+            header.check_capture(owner.captured_revision(), stored.revision)?;
+            if owner.receipt().and_then(|receipt| receipt.graph.as_ref())
+                != Some(&header.summary(&stored)?.reference)
                 || source.first == 0
                 || source.last < source.first
                 || source.records.windows(2).any(|pair| pair[0].0 >= pair[1].0)
@@ -155,16 +154,11 @@ impl NativeStore {
                 }
             }
             for (record, position) in &source.records {
-                if &record.stream != identity
-                    || !(source.first..=source.last).contains(&record.durable_cursor)
-                    || position.commit_revision == 0
-                    || *position > header.captured
-                    || !step.witnesses.iter().any(|witness| {
-                        witness.identity
-                            == crate::AnalysisStreamIdentityV1::Evidence(identity.clone())
-                            && witness.cursor == record.durable_cursor
-                    })
-                {
+                header.check_member(identity, source.first..=source.last, record, *position)?;
+                if !step.witnesses.iter().any(|witness| {
+                    witness.identity == crate::AnalysisStreamIdentityV1::Evidence(identity.clone())
+                        && witness.cursor == record.durable_cursor
+                }) {
                     return Err(Code::Denied.error("source member authority"));
                 }
                 let restricted = restricted.get(record).copied().unwrap_or(0);

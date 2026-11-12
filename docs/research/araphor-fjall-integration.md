@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 188 diagnostics.
+  The last unit compilation reports 176 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,46 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Native selected Source reads now share the existing capture and member
+  qualification predicates with Source reads and recovery. The baseline uses
+  two real publications over one raw record. The first result remains readable
+  after the later publication. Direct native APIs reject a foreign tenant,
+  foreign pinned source, call result, and incorrect publication revision.
+  The foreign-source capture requests metadata only; it adds no raw input.
+
+  The failure-first matrix proves that live reads accepted a missing header,
+  a later header under the first key, malformed header bytes, and a foreign
+  source ID in the selected record metadata. Reopen rejects all five fault
+  modes, including an incorrect receipt. Exact stamped byte repair restores
+  every original result and receipt. The earlier destination fix already
+  rejects the incorrect receipt during live reads.
+
+  `SourceRecord` now owns the existing capture-position and local member
+  predicates. Live selected Source reads perform one header point read and
+  check record fields already decoded with the result. Source reads and
+  recovery reuse those predicates. Recovery keeps witness, membership, proof,
+  coverage, and history validation. The live path adds none of those scans.
+  No external API, schema, index, cache, archive, or producer rule is added.
+
+  Final live assertions require the exact missing-header, invalid-capture,
+  invalid-destination, decode, and denied-member errors. Both focused Follow
+  cases pass in 0.26 seconds. After exact assertions and SQL case removal,
+  all 214 native managed integration cases pass in 19.38 seconds. Data unit
+  compilation reports 176 diagnostics, down from 188, and still does not
+  compile or run. All 15 native Query integration cases pass in 7.14 seconds.
+  The Data and Query production library check without default features passes
+  in 33.82 seconds. Changed Rust formatting and whitespace checks pass.
+  Read `native-follow-binding-baseline.log`,
+  `native-follow-binding-fixed.log`, `native-follow-binding-qualified.log`,
+  `native-follow-binding-unit.log`, `native-follow-binding-query.log`,
+  and `native-follow-binding-default.log` under
+  `output/araphor-fjall-migration-20261110`.
+  The replaced SQL binding case is removed. Seven other Follow cases and
+  their shared SQL snapshot helper remain open.
+  Result: **Done for native selected Source binding qualification;
+  Not done for the remaining Follow ports and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Empty Graph Follow results now use the same destination check during live
   reads and startup. The native regression first passes the empty publication

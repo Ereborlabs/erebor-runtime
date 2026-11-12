@@ -127,13 +127,10 @@ impl<R: serde::de::DeserializeOwned, P: serde::de::DeserializeOwned> SourceRead<
             result_id: result.id.clone(),
             commit_revision: result.revision,
         };
+        header.check_capture(owner.captured_revision(), result.revision)?;
         if result.revision == 0
             || result.revision > view.metadata_revision
             || result.tenant == [0; 16]
-            || header.captured.commit_revision != owner.captured_revision()
-            || header.captured.ordinal != u32::MAX
-            || header.captured.commit_revision == 0
-            || header.captured.commit_revision >= result.revision
             || owner.receipt().is_none_or(|receipt| {
                 receipt.selected != reference || receipt.graph.as_ref() != Some(&reference)
             })

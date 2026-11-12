@@ -39,7 +39,7 @@ impl SourceRecord {
         .concat()
     }
 
-    pub(super) fn header(
+    pub(in crate::analysis::native) fn header(
         id: u64,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
         charge: &mut dyn FnMut(usize) -> Result<()>,
@@ -71,7 +71,7 @@ impl SourceRecord {
         Ok((header, result))
     }
 
-    pub(super) fn check_ranges(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn check_ranges(&self) -> Result<()> {
         if self
             .gaps
             .iter()
@@ -79,6 +79,38 @@ impl SourceRecord {
             || self.gaps.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(Code::Invalid.error("source publication gaps"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis::native) fn check_capture(
+        &self,
+        captured: u64,
+        published: u64,
+    ) -> Result<()> {
+        if self.captured.commit_revision != captured
+            || self.captured.ordinal != u32::MAX
+            || self.captured.commit_revision == 0
+            || self.captured.commit_revision >= published
+        {
+            return Err(Code::Invalid.error("source selected authority"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis::native) fn check_member(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        range: std::ops::RangeInclusive<u64>,
+        record: &DiscoveryRecordIdV1,
+        position: StorePositionV1,
+    ) -> Result<()> {
+        if &record.stream != identity
+            || !range.contains(&record.durable_cursor)
+            || position.commit_revision == 0
+            || position > self.captured
+        {
+            return Err(Code::Denied.error("source member authority"));
         }
         Ok(())
     }

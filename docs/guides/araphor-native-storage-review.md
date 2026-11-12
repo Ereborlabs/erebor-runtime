@@ -4,6 +4,31 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native Source binding matrix](../../crates/araphor-data/tests/native_managed/source/follow.rs)
+with [live result reads](../../crates/araphor-data/src/analysis/native/managed/read.rs),
+[Source record checks](../../crates/araphor-data/src/analysis/native/managed/source/records.rs),
+[Source reads](../../crates/araphor-data/src/analysis/native/managed/source/read.rs),
+and [Source recovery](../../crates/araphor-data/src/analysis/native/managed/source/recovery.rs).
+Live selected results first qualify their scope, receipt, dependencies, and calls.
+For a Source result, one header point read binds its original captured cut.
+Local checks qualify the record source, cursor range, and saved positions
+already decoded with the result. The same predicates serve Source reads and
+recovery. Witness and retained membership validation stay at their existing
+owners; live reads add no history walk.
+
+The baseline proves four accepted live faults while all reopen and byte-repair
+checks pass. Final assertions require each exact native error. Two real Source
+publications, positive historical reads, and wrong tenant, source, kind, and
+revision references remain in the case. No separate Graph publication or
+self-dependency is fabricated for native Source records. Both focused Follow
+cases and all 214 native managed integration cases pass. Data unit compilation
+still reports 176 diagnostics. All 15 native Query integration cases and the
+Data and Query production library check without default features pass. Changed
+Rust formatting and whitespace checks pass. The SQL binding case is removed; seven Follow
+cases and their shared SQL helper remain open. Read `native-follow-binding-*`
+under `output/araphor-fjall-migration-20261110`. Complete qualification and
+incident performance remain open.
+
 Read the [native empty Follow case](../../crates/araphor-data/tests/native_managed/source/follow.rs)
 with [stored result qualification](../../crates/araphor-data/src/analysis/native/managed/results.rs)
 and [startup result validation](../../crates/araphor-data/src/analysis/native/managed/result_recovery.rs).
