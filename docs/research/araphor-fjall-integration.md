@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 190 diagnostics.
+  The last unit compilation reports 188 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,43 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Empty Graph Follow results now use the same destination check during live
+  reads and startup. The native regression first passes the empty publication
+  and original-log checks, then changes only `X.Selected.rows` from zero to one.
+  Before the fix, the live reader accepts that invalid result. The existing
+  four-arm destination check now belongs to `StoredResult::check`; its startup
+  duplicate is removed. Selected result identity keeps its earlier check order.
+  Call result checks do not change. This move adds no read, Graph scan, API,
+  archive, or producer restriction.
+
+  The test keeps one raw input, no returned calls, and no selected rows. The
+  commit advances Data but leaves the raw receipt and native Source and Graph
+  publication maps unchanged. A second subscription starts at the same saved
+  cut and walks the original committed logs through the current cut. Both
+  subscriptions keep their matching position. Live reads and reopen reject
+  the changed row count with `Invalid / managed success destination`. Exact
+  byte repair restores the original selected result, receipt, and empty maps.
+  No timer or polling loop is added.
+
+  The failure-first run rejects the live-read assertion in 0.07 seconds. The
+  corrected focused case passes in 0.07 seconds. After exact error assertions
+  and SQL case removal, all 213 native managed integration cases pass in
+  11.24 seconds. Data unit compilation reports 188 diagnostics, down from
+  190, and still does not compile or run. Read `native-follow-empty-baseline.log`,
+  `native-follow-empty-fixed.log`, `native-follow-empty-qualified.log`, and
+  `native-follow-empty-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  All 15 native Query integration cases pass in 7.36 seconds; read
+  `native-follow-empty-query.log` in the same directory.
+  The Data and Query release library check without default features passes
+  in 34.19 seconds; read `native-follow-empty-default.log`. Changed Rust
+  formatting and whitespace checks pass.
+  The replaced SQL empty-step case is removed. Eight other Follow cases and
+  their shared SQL snapshot helper remain open.
+  Result: **Done for shared empty Graph result qualification;
+  Not done for the remaining Follow ports and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Four current-input cases now use native storage. The saved fixture keeps
   raw cursor 1, the `saved-input` context with body `{}`, output values 7 and 3,

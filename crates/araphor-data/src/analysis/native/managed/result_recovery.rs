@@ -11,8 +11,8 @@ use crate::analysis::native::{DataView, NativeStore};
 use crate::analysis::PackageResultRefV1;
 use crate::ManagedSpec;
 use crate::{
-    AnalysisContextRefV1, AnalysisReadControl, AnalysisWitnessV1, ManagedDestination,
-    NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
+    AnalysisContextRefV1, AnalysisReadControl, AnalysisWitnessV1, NativeStorageSnafu,
+    PackageErrorCodeV1 as Code, Result,
 };
 
 impl DataView {
@@ -33,22 +33,6 @@ impl DataView {
         let spec = &owner.1.spec;
         if owner.0 != *attempt {
             return Err(Code::Invalid.error("managed success owner"));
-        }
-        match &spec.destination {
-            ManagedDestination::Selected | ManagedDestination::DiscoveryProfile { .. }
-                if receipt.graph.is_none() && step.source.is_none() => {}
-            ManagedDestination::Graph {
-                operation: crate::ManagedGraphOperation::Evaluate,
-                ..
-            } if receipt.graph.as_ref() == Some(&receipt.selected) && step.source.is_some() => {}
-            ManagedDestination::Graph {
-                operation: crate::ManagedGraphOperation::Evaluate,
-                ..
-            } if receipt.graph.is_none()
-                && step.source.is_none()
-                && step.rows == 0
-                && receipt.results.is_empty() => {}
-            _ => return Err(Code::Invalid.error("managed success destination")),
         }
         self.check_step_evidence(attempt, step, spec)?;
         step.check_dependencies(attempt)?;

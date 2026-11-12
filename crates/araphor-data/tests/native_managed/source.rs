@@ -19,6 +19,8 @@ mod read;
 
 #[path = "source/fixtures.rs"]
 mod fixtures;
+#[path = "source/follow.rs"]
+mod follow_cases;
 
 #[test]
 fn source_empty_gate() -> TestResult {

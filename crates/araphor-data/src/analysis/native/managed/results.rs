@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use super::{attempts::Attempts, InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Attempt, Packet, Record, Step};
 use crate::analysis::native::{DataView, DataWrite};
-use crate::{AnalysisReadControl, ManagedAttempt, ManagedSpec, PackageErrorCodeV1 as Code, Result};
+use crate::{
+    AnalysisReadControl, ManagedAttempt, ManagedDestination, ManagedSpec,
+    PackageErrorCodeV1 as Code, Result,
+};
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) enum ResultBody {
@@ -106,7 +109,23 @@ impl StoredResult {
             ResultBody::Selected(_) if receipt.selected.result_id != self.id => {
                 return Err(Code::Invalid.error("managed selected receipt"));
             }
-            ResultBody::Selected(_) => {}
+            ResultBody::Selected(step) => match &spec.destination {
+                ManagedDestination::Selected | ManagedDestination::DiscoveryProfile { .. }
+                    if receipt.graph.is_none() && step.source.is_none() => {}
+                ManagedDestination::Graph {
+                    operation: crate::ManagedGraphOperation::Evaluate,
+                    ..
+                } if receipt.graph.as_ref() == Some(&receipt.selected) && step.source.is_some() => {
+                }
+                ManagedDestination::Graph {
+                    operation: crate::ManagedGraphOperation::Evaluate,
+                    ..
+                } if receipt.graph.is_none()
+                    && step.source.is_none()
+                    && step.rows == 0
+                    && receipt.results.is_empty() => {}
+                _ => return Err(Code::Invalid.error("managed success destination")),
+            },
         }
         Ok(())
     }

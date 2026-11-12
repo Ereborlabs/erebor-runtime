@@ -4,6 +4,29 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native empty Follow case](../../crates/araphor-data/tests/native_managed/source/follow.rs)
+with [stored result qualification](../../crates/araphor-data/src/analysis/native/managed/results.rs)
+and [startup result validation](../../crates/araphor-data/src/analysis/native/managed/result_recovery.rs).
+The existing destination condition now runs in `StoredResult::check`. Live
+selected reads, staged results, and startup therefore use one owner. Selected
+ID checks keep priority; Call checks remain unchanged. No new I/O or Graph
+traversal is added.
+
+The native case first proves the empty publication and original-log behavior.
+Data advances while the raw receipt and Source and Graph maps stay unchanged.
+Registration from the same saved cut walks the log and preserves both matching
+positions. The test then changes only the selected row count. Live reads and
+reopen require the exact destination error. A stamped byte repair restores
+the original result, receipt, and maps. The baseline reproduces live acceptance;
+the fixed case, all 213 native managed integration cases, and all 15 native
+Query integration cases pass. The old SQL
+case is removed. Eight Follow cases and their shared SQL helper remain open.
+The Data and Query production library check without default features, changed
+Rust formatting, and whitespace checks pass.
+Data unit compilation still reports 188 diagnostics. Read `native-follow-empty-*`
+under `output/araphor-fjall-migration-20261110`. Complete qualification and
+incident performance remain open.
+
 Read the [native current-input cases](../../crates/araphor-data/tests/native_managed/storage/guards/current.rs)
 with the [native guard inventory](../../crates/araphor-data/tests/native_managed/storage/guards.rs).
 The saved fixture retains the original event, context, 7 and 3 output values,
