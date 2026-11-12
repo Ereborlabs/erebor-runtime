@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-- Resolve the remaining Query contracts. The last complete run has 17
+- Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
   MVCC currently retains all history. Data startup validation still scans
@@ -87,6 +87,35 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- The incremental aggregate Kernel now returns its validated committed input
+  position. It previously returned `(0, 0)` after it advanced its internal
+  frontier. Runtime therefore could leave the consumed position behind the
+  input and evaluate that input again. The fix passes the existing complete
+  position to Output. It adds no read, state, allocation, or validation rule.
+  Native DataFusion aggregation and failure handling remain unchanged.
+
+  Kernel cases assert the exact output and snapshot cut. Public COUNT and SUM
+  cases assert complete consumed positions and no immediate repeated output.
+  The unrelated append remains; its metadata-only health frame uses the
+  existing discovery owner control notice. JOIN retains its values and native
+  parity checks and now asserts the complete captured cut. The context case
+  walks real log notices after capture. If its prior matched cut is still
+  pending, it consumes that cut before it waits for the next committed cut.
+  Both original capture anchors remain. No source-position getter performs I/O.
+
+  The final complete Query unit run passes 431 cases, fails 14, and ignores
+  five in 27.85 seconds. The three position-related failures pass; no new
+  failure appears against the previous complete run. All 15 native Query
+  integration cases pass in 7.35 seconds. The release library check without
+  default features passes in 24.78 seconds. Changed Rust formatting and
+  whitespace checks pass. Read `native-kernel-position-focused.log`,
+  `native-kernel-position-final-query.log`, and
+  `native-kernel-position-default.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for incremental aggregate position propagation;
+  Not done for complete Query qualification and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Clock notices now evaluate only when a saved deadline is due. Runtime samples
   the actual Clock; the watch supplies a change notice. Evaluation keeps

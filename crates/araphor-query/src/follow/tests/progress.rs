@@ -128,23 +128,46 @@ async fn progress_keeps_context_during_capture() {
     let control = AnalysisReadControl::default();
     let revision = progress.source_position();
     assert_eq!(progress.begin().unwrap(), 10);
+    let first = fixture.store.meta().unwrap().commit_revision;
     progress.captured(revision, None);
-    assert!(progress.source_position() > revision);
     assert!(matches!(
         wake(&mut progress, &control, None).await,
         Wake::Source
     ));
+    assert!(progress.source_position() > revision);
+    assert_eq!(
+        progress.source_position(),
+        araphor_data::StorePositionV1 {
+            commit_revision: first,
+            ordinal: u32::MAX
+        }
+    );
     progress.captured(progress.source_position(), None);
     assert_eq!(progress.observed(), progress.source_position());
 
     assert_eq!(progress.begin().unwrap(), 10);
     fixture.store.commit_context(&context(2)).unwrap();
+    let second = fixture.store.meta().unwrap().commit_revision;
     progress.captured(revision, None);
-    assert!(progress.source_position() > revision);
     assert!(matches!(
         wake(&mut progress, &control, None).await,
         Wake::Source
     ));
+    assert!(progress.source_position() > revision);
+    let target = araphor_data::StorePositionV1 {
+        commit_revision: second,
+        ordinal: u32::MAX,
+    };
+    assert!(progress.source_position() <= target);
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
+    if progress.source_position() < target {
+        assert!(matches!(
+            wake(&mut progress, &control, None).await,
+            Wake::Source
+        ));
+    }
+    assert_eq!(progress.source_position(), target);
     progress.captured(progress.source_position(), None);
     assert_eq!(progress.observed(), progress.source_position());
 }

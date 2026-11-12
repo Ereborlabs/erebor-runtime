@@ -4,6 +4,26 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [incremental Kernel](../../crates/araphor-query/src/stream/physical/kernel.rs),
+its [position cases](../../crates/araphor-query/src/stream/physical/kernel/tests.rs),
+and the [public cursor cases](../../crates/araphor-query/src/follow/tests/runtime.rs)
+with [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs).
+Kernel validates the complete advancing change position before it updates its
+native aggregate. Its Output now carries that same position. Runtime records
+it as consumed. The former zero position could leave that input pending after
+successful evaluation. No new state, read, or validation rule is added.
+Invalid frontiers and failed aggregate updates keep their existing handling.
+
+COUNT, SUM, and JOIN assert exact snapshot cuts. The aggregate case rejects
+immediate repeated output. The context capture case consumes any pending prior
+matched cut, then walks the next real notice to its exact complete position.
+Both original capture anchors remain. The final complete Query unit run passes
+431 cases, fails 14, and ignores five. All 15 native integration cases pass.
+The release library check without default features, changed Rust formatting,
+and whitespace checks pass. Read `native-kernel-position-*` under
+`output/araphor-fjall-migration-20261110`. Complete qualification and incident
+performance remain open.
+
 Read [Progress](../../crates/araphor-query/src/stream/progress.rs) with
 [Runtime clock updates](../../crates/araphor-query/src/stream/physical/runtime.rs),
 the [timer regression](../../crates/araphor-query/src/follow/tests/progress.rs),

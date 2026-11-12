@@ -274,10 +274,13 @@ impl Fixture {
 
     async fn apply(&mut self, before: &[RecordBatch], after: &[RecordBatch]) -> Vec<i64> {
         let change = self.change(before, after).await;
+        let position = change.position;
         let snapshot = Arc::clone(&change.snapshot);
         let control = Arc::clone(&change.control);
         self.send(change).await;
         let output = self.output.next().await.unwrap().unwrap();
+        assert_eq!(output.position, position);
+        assert_eq!(output.position, snapshot.page.scanned_through);
         assert!(Arc::ptr_eq(&output.snapshot, &snapshot));
         assert!(Arc::ptr_eq(&output._control, &control));
         let batches = output.batches.unwrap();
@@ -766,7 +769,8 @@ async fn commit_requires_complete_advancing_frontier() {
         let change = fixture.change(&[], &[]).await;
         let snapshot = Arc::clone(&change.snapshot);
         fixture.send(change).await;
-        assert!(fixture.output.next().await.unwrap().is_ok());
+        let output = fixture.output.next().await.unwrap().unwrap();
+        assert_eq!(output.position, snapshot.page.scanned_through);
         let mut change = fixture.change(&[], &[]).await;
         assert!(change.position > snapshot.page.scanned_through);
         match invalid {

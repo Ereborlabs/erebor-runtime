@@ -182,6 +182,9 @@ async fn committed_change_advances_cursor() {
         assert_eq!(first.operation, Operation::Replace);
         assert_eq!(values(&first, 0), [ScalarValue::Int64(Some(1))]);
         assert_eq!(first.evaluated_utc_ns, 2_000_000_000);
+        assert_eq!(first.cursor.position(), first.snapshot.page.scanned_through);
+        assert_eq!(first.cursor.position().ordinal, u32::MAX);
+        assert!(first.exhausted && !first.limited);
 
         // Change the test time without an extra clock notification.
         clock.now.store(3_000_000_000, Ordering::SeqCst);
@@ -196,6 +199,12 @@ async fn committed_change_advances_cursor() {
             completed.snapshot.page.extraction.meta.commit_revision
         );
         assert_ne!(completed.cursor, first.cursor);
+        assert_eq!(
+            completed.cursor.position(),
+            completed.snapshot.page.scanned_through
+        );
+        assert_eq!(completed.cursor.position().ordinal, u32::MAX);
+        assert!(completed.exhausted && !completed.limited);
         assert_eq!(
             completed
                 .snapshot
@@ -212,6 +221,7 @@ async fn committed_change_advances_cursor() {
             2
         );
         assert_eq!(completed.snapshot.page.extraction.scanned_bytes, 0);
+        assert!(futures_util::poll!(subscription.next()).is_pending());
 
         let other = EvidenceIntakeIdentityV1 {
             source_id: [8; 16],
@@ -219,6 +229,7 @@ async fn committed_change_advances_cursor() {
         };
         clock.now.store(4_000_000_000, Ordering::SeqCst);
         fixture.commit(&other, 1, 1, 3_500_000_000);
+        fixture.store.register_discovery_owner();
         let unrelated = next(&mut subscription).await;
         assert!(unrelated.batches.is_none());
         assert!(!unrelated.clock_changed);
@@ -239,7 +250,8 @@ async fn committed_change_advances_cursor() {
             health.snapshot.page.extraction.meta,
             unrelated.snapshot.page.extraction.meta
         );
-        subscription.cancel().unwrap();
+        subscription.cancel_and_join().await.unwrap();
+        fixture.store.release_discovery_owner();
     }
 }
 
@@ -436,7 +448,18 @@ async fn join_uses_new_cut() {
     assert_eq!(values(&second, 0), vec![ScalarValue::Int64(Some(2))]);
     assert_eq!(second.snapshot.witnesses.len(), 2);
     assert!(second.cursor.read_revision() > cursor.read_revision());
-    assert_eq!(second.cursor.position().ordinal, 0);
+    assert_eq!(
+        second.cursor.position(),
+        second.snapshot.page.scanned_through
+    );
+    assert_eq!(
+        second.cursor.position(),
+        araphor_data::StorePositionV1 {
+            commit_revision: second.snapshot.page.extraction.meta.commit_revision,
+            ordinal: u32::MAX,
+        }
+    );
+    assert!(second.exhausted && !second.limited);
     assert_eq!(
         second.cursor.read_revision(),
         second.snapshot.page.extraction.meta.commit_revision,
