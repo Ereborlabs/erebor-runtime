@@ -4,6 +4,26 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [progress contracts](../../crates/araphor-data/tests/native_managed/progress/contracts.rs)
+and [retirement cases](../../crates/araphor-data/tests/native_managed/progress/retirement.rs)
+with [processor registration](../../crates/araphor-data/src/analysis/native/progress/mod.rs),
+[optional resume](../../crates/araphor-data/src/analysis/native/progress/health.rs),
+and [result storage](../../crates/araphor-data/src/analysis/native/progress/result.rs).
+The cases keep cancellation rollback, optional registration, all 16 request
+conflicts, exact native request and body bytes, foreign reads, identical retries,
+mixed evidence and trace witnesses, retirement gaps, corruption, and reopen.
+The two commit hooks are test-only and precede the existing final guard.
+Production commit behavior and no-op guards stay unchanged.
+
+All seven old unit bodies and four unused SQL string or request-JSON helpers
+are removed. The public string conversion remains. All 38 progress cases,
+231 native managed cases, and 35 native raw cases pass. The Data unit target
+still fails to compile with 101 diagnostics; neither retired owner reports a
+diagnostic. The default-feature Data production library passes the release
+check. Read `native-progress-*` under
+`output/araphor-fjall-migration-20261110`. Complete migration and current-source
+incident performance remain open.
+
 Read the [native segment cases](../../crates/araphor-data/tests/native_raw/segments.rs)
 with [deletion authority](../../crates/araphor-data/src/analysis/native/retention/expiry.rs),
 [retention publication](../../crates/araphor-data/src/analysis/native/retention/mod.rs),

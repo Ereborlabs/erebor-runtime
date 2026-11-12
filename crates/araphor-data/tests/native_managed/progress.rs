@@ -3,6 +3,14 @@ use araphor_data::{
     AnalysisResultCommitV1, ProcessorClassV1, ProcessorRetirementV1, ProcessorScopeV1,
 };
 
+#[cfg(feature = "test-fixtures")]
+#[path = "progress/contracts.rs"]
+mod contracts;
+
+#[cfg(feature = "test-fixtures")]
+#[path = "progress/retirement.rs"]
+mod retirement;
+
 #[path = "progress/profile.rs"]
 mod profile;
 

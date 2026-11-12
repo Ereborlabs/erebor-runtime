@@ -200,6 +200,8 @@ impl NativeStore {
         };
         tx.stage_processor(id, &state)?;
         let revision = tx.revision;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         check()?;
         tx.commit([])?;
         Ok(revision)

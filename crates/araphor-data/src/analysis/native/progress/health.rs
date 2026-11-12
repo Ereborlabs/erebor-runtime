@@ -124,6 +124,8 @@ impl NativeStore {
         processor.resumed = gap.last_cursor;
         processor.revision = tx.revision;
         tx.stage_processor(id, &processor)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         check()?;
         tx.commit([])?;
         Ok(Some(gap))

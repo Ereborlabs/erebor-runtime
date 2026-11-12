@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 111 diagnostics.
+  The last unit compilation reports 101 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,40 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Five processor progress cases and two retirement cases use the native
+  storage owner. The native cases keep all 16 changed-request conflicts,
+  exact stored request fields and body bytes, foreign and missing reads,
+  identical retries, and reopen. Mixed evidence and trace witnesses keep the
+  exact frame, terminal, invalid cursor and identity checks, expiry, and retry.
+  Retirement keeps the 128-byte node, witness expiry, Required-input pin,
+  consumed cursor 1, cutoff 3, gap 2 through 3, late cursor 4, changed-request
+  refusal, replacement method 2, and exactly two processor records. All three
+  retirement recovery faults use actual native state and gap records.
+
+  The failure-first run passes three progress cases and fails the two
+  cancellation-at-commit cases. Registration and optional resume already
+  check cancellation before commit. Both native methods lack the existing
+  test hook that triggers cancellation at that point. Each method now calls
+  that hook immediately before its final guard. The hook is test-only.
+  No-op guards and the production commit path stay unchanged.
+
+  The focused progress family passes all 38 cases in 0.74 seconds. The
+  connected run passes all 231 native managed cases in 21.17 seconds and all
+  35 native raw cases in 0.50 seconds. The seven old unit bodies and four
+  unused SQL string or request-JSON helpers are removed. The public
+  `TryFrom<&str>` conversion remains. No request archive or compatibility API
+  replaces the removed helpers. Data unit compilation still fails with 101
+  diagnostics, down from 111; neither retired owner has a diagnostic.
+  The default-feature Data production library passes the release check in
+  8.43 seconds. Changed Rust formatting and scoped whitespace checks pass.
+  Read `native-progress-baseline.log`, `native-progress-fixed.log`,
+  `native-progress-qualified.log`, `native-progress-unit.log`, and
+  `native-progress-production.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native processor progress and retirement fixture
+  qualification; Not done for complete migration or the performance proof**.
+  No incident timing experiment or full CI is included.
 
 - Four segment fixtures now use the native storage owner. The cases keep
   ownership and tail recovery, missing and damaged files, complete deletion
