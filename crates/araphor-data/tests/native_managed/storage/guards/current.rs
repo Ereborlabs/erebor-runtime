@@ -10,10 +10,16 @@ use std::collections::BTreeSet;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
+#[path = "current/origins.rs"]
+mod origins;
+#[path = "current/scope.rs"]
+mod scope;
+
 struct Saved {
     _directory: tempfile::TempDir,
     store: Arc<AnalysisStore>,
     fixture: Arc<StorageFixture>,
+    context: araphor_data::AnalysisContextRefV1,
     receipt: ManagedReceipt,
     requests: AnalysisTableRequests,
 }
@@ -36,7 +42,11 @@ impl Saved {
             sensitivity: araphor_data::ContextSensitivityV1::Tenant,
             body: b"{}".to_vec(),
         };
-        store.commit_context(&context)?;
+        let revision = store.commit_context(&context)?;
+        let context = araphor_data::AnalysisContextRefV1 {
+            key: context.key,
+            commit_revision: revision,
+        };
         let fixture = Arc::new(StorageFixture::new_scope(
             &store,
             "counter",
@@ -85,6 +95,7 @@ impl Saved {
             _directory: directory,
             store,
             fixture,
+            context,
             receipt,
             requests,
         })

@@ -196,6 +196,9 @@ impl NativeStore {
             }
         }
         let mut projected = selection.project(read.requests)?;
+        if matches!(read.mode, AnalysisReadModeV1::Metadata) && !selection.contexts.is_all() {
+            projected.contexts = selection.contexts.clone();
+        }
         if let Some(request) = projected.graph_traversal() {
             if !request.result_ids.is_empty() {
                 projected.graphs = crate::Selection::Exact(request.result_ids.clone());

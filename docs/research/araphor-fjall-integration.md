@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 153 diagnostics.
+  The last unit compilation reports 151 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,43 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Saved-result scope and provenance now use the existing native fixture.
+  It keeps output values 7 and 3, raw cursor 1, expiry 100, and the exact
+  `saved-input` context key and `{}` body. The fixture saves the context
+  reference from the actual commit revision. The scope case preserves the
+  complete removal, recreation, narrow and foreign grants, historical result,
+  saved grant, and receipt assertions before and after reopen.
+
+  The provenance baseline exposes a native production gap. An empty-request
+  Metadata read projects out a directly selected context, so the combined
+  context reports only `ExplicitResult` instead of `Context, ExplicitResult`.
+  Native extraction now preserves exact context keys only for literal
+  Metadata mode, before existing key and allocation checks. `All` projection
+  stays unchanged. The existing ContextRead verifier and reference merge do
+  the work. No API, format, archive, or history scan is added.
+
+  The original exact origin lists, all three reference identities, separate
+  result evidence lists, and minimum expiry 50 now pass. An empty-request
+  tenant-wide read over the same populated store returns no tables,
+  references, or witnesses. All six focused current-input cases pass in
+  0.20 seconds. All 222 native managed integration cases pass in 19.46 seconds.
+  All 15 native Query integration cases pass in 7.18 seconds. The Data and
+  Query production library check without default features passes in
+  34.64 seconds. Changed Rust formatting and whitespace checks pass.
+
+  The old origins and scope bodies and Saved helper are removed. Its raw
+  append method moves unchanged to the sole private Follow owner. Data unit
+  compilation still fails with 151 diagnostics, down from 153. The two
+  private Capture units remain unexecuted and unqualified. Read
+  `native-saved-scope-focused.log`, `native-saved-scope-fixed.log`,
+  `native-saved-scope-qualified.log`, `native-saved-scope-unit.log`,
+  `native-saved-scope-query.log`, and `native-saved-scope-default.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native Saved scope and provenance qualification and
+  explicit Metadata context origin repair; Not done for remaining unit
+  qualification and complete migration**. No incident timing comparison or
+  full CI is included.
 
 - The complete old SQL Follow fixture family is removed. Native Source
   binding qualification now includes a sixth fault: decrement only the

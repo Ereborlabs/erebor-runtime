@@ -33,12 +33,32 @@ impl FollowFixture {
             true,
             || Ok(()),
         )?;
-        Saved::append(&store, 1)?;
+        Self::append(&store, 1)?;
         Ok(Self {
             _directory: directory,
             store,
             fixture,
         })
+    }
+
+    fn append(store: &AnalysisStore, cursor: u64) -> crate::Result<()> {
+        let record = crate::EvidenceRecord {
+            observed_boottime_ns: cursor,
+            ..Default::default()
+        };
+        let framed = Vec::<u8>::try_from(&record)?;
+        store.accept_validated_batch(
+            crate::analysis::tests::identity(),
+            crate::ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: cursor,
+                last_cursor: cursor,
+                intake_utc_ns: cursor,
+                frame_ends: vec![framed.len()],
+                framed_records: framed.into(),
+            },
+        )?;
+        Ok(())
     }
 
     fn capture(&self) -> TestResult<ManagedCapture> {

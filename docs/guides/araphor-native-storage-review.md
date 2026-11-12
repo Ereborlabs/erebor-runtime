@@ -4,6 +4,33 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [native Saved provenance](../../crates/araphor-data/tests/native_managed/storage/guards/current/origins.rs)
+and [historical Saved scope](../../crates/araphor-data/tests/native_managed/storage/guards/current/scope.rs)
+with the [Saved fixture](../../crates/araphor-data/tests/native_managed/storage/guards/current.rs),
+[native extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs),
+and [ContextRead](../../crates/araphor-data/src/analysis/native/extraction/context.rs).
+The fixture keeps outputs 7 and 3, raw cursor 1, expiry 100, and the original
+context key and body. Its reference uses the actual context commit revision.
+Scope qualification keeps all recreate, grant, tenant, historical result,
+history, and saved receipt assertions before and after reopen.
+
+The baseline loses the direct Context origin during projection for an
+empty-request Metadata read. The fix preserves only exact context keys in
+literal Metadata mode before existing limits and accounting. The original
+ContextRead verifier and origin merge remain unchanged. Tenant-wide `All`
+projection stays unchanged; the same populated-store negative returns no
+tables, references, or witnesses. The exact combined origins and minimum
+expiry 50 pass. No history scan, API, format, or archive is added.
+
+All 222 native managed and all 15 native Query integration cases pass.
+The production Data and Query library check without default features passes.
+The old Saved, origins, and scope fixtures are removed. The raw append method
+moves unchanged to the sole private Follow owner. Data unit compilation still
+fails with 151 diagnostics. The two private Capture units remain unexecuted
+and unqualified. Read `native-saved-scope-*` under
+`output/araphor-fjall-migration-20261110`. Complete qualification and incident
+performance remain open.
+
 Read the [native Source binding faults](../../crates/araphor-data/tests/native_managed/source/follow.rs)
 and [Graph origin recovery case](../../crates/araphor-data/tests/native_managed/storage/source/follow/recovery.rs)
 with [Source recovery](../../crates/araphor-data/src/analysis/native/managed/source/recovery.rs),

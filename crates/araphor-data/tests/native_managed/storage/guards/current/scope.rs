@@ -1,5 +1,5 @@
 use super::*;
-use crate::PackageErrorCodeV1 as Code;
+use araphor_data::PackageErrorCodeV1 as Code;
 
 #[test]
 fn history_keeps_saved_scope() -> TestResult {
@@ -44,7 +44,7 @@ fn history_keeps_saved_scope() -> TestResult {
                 scoped.grant.selection = selection.clone();
                 assert!(matches!(
                     store.managed_result(&scoped, id, 10, &control),
-                    Err(crate::Error::Package {
+                    Err(araphor_data::Error::Package {
                         code: Code::Denied,
                         field: "whole package scope",
                         ..
@@ -57,7 +57,7 @@ fn history_keeps_saved_scope() -> TestResult {
         foreign.grant.selection = AnalysisSelectionV1::tenant([2; 16]);
         assert!(matches!(
             store.managed_result(&foreign, call, 10, &control),
-            Err(crate::Error::Package {
+            Err(araphor_data::Error::Package {
                 code: Code::Missing,
                 ..
             })
