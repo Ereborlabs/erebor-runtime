@@ -74,8 +74,7 @@ impl ControlPlane {
                 .or_default()
                 .push(node.node_id.clone());
         }
-        let mut bundles = vec![araphor_analysis::Package::causal_bundle()];
-        bundles.push(araphor_analysis::Package::discovery_bundle()?);
+        let bundles = vec![araphor_analysis::Package::discovery_bundle()?];
         let bundles = bundles
             .into_iter()
             .map(|bundle| {

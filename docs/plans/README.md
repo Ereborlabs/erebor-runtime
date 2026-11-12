@@ -23,8 +23,9 @@ master plan invented for them.
 
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL
-  owners and dependencies with one connected native owner. The unchanged
-  incident and matched builds pass. Measured creation is below 100 ms; the
+  owners and dependencies with one connected native owner. The matched
+  builds passed. The synthetic incident was removed on 2026-11-12.
+  Its measured creation below 100 ms is historical; the
   100-fold target, full storage parity, and obsolete fixture ports remain
   **Not done**. Earlier optional-owner sequences below are historical.
 - [Fjall durable history, branches, and CDC](fjall-versioned-storage.md) records

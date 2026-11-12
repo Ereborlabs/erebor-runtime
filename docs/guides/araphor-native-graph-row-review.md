@@ -1,5 +1,13 @@
 # Native Graph row review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 The sections before `Native identity reads` describe the earlier DuckDB Graph
 row rewrite and its recorded checks. They are historical evidence. The native
 storage replacement uses the versioned Fjall and lsm-tree forks. Its current

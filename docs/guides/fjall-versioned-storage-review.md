@@ -1,5 +1,13 @@
 # Fjall versioned storage review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 This guide gives the source route for the local Fjall and `lsm-tree` forks.
 The engines retain native key versions, sparse branches, and the original
 journal. Applications supply key meaning, subscriptions, and retention policy.

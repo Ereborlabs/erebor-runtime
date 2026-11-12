@@ -74,12 +74,11 @@ fn admission_requires_analysis_contract() -> TestResult {
 #[test]
 fn sdk_components_pass_admission() -> TestResult {
     let runtime = WasmExecution::new(WasmLimits::default())?;
-    let components: [(&str, &[u8]); 4] = [
+    let components: [(&str, &[u8]); 3] = [
         (
             "discovery",
             araphor_analysis_builtins::components::DISCOVERY,
         ),
-        ("causal", araphor_analysis_builtins::components::CAUSAL),
         (
             "credentials",
             araphor_analysis_builtins::components::CREDENTIALS,

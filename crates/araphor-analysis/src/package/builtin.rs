@@ -434,27 +434,6 @@ pub(crate) static LIVE_SQL: LazyLock<String> = LazyLock::new(|| {
 });
 
 impl super::Package {
-    pub fn causal_bundle() -> PackageBundleV1 {
-        let descriptor = araphor_analysis_builtins::causal::Causal::descriptor();
-        let artifact = PackageArtifactV1 {
-            implementations: vec![PackageImplementationV1::Wasm {
-                exports: descriptor
-                    .exports
-                    .iter()
-                    .map(|model| model.name.clone())
-                    .collect(),
-                artifact: araphor_analysis_builtins::components::CAUSAL.to_vec(),
-            }],
-            descriptor,
-            fixtures: Vec::new(),
-        };
-        PackageBundleV1 {
-            schema_version: 1,
-            root: artifact.reference(),
-            artifacts: vec![artifact],
-        }
-    }
-
     pub fn discovery_bundle() -> araphor_data::Result<PackageBundleV1> {
         let tables = AnalysisStore::table_schemas();
         let inputs = INPUTS

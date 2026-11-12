@@ -7,13 +7,20 @@ use sdk::guest::bindings::{araphor::analysis::types, exports::araphor::analysis:
 
 thread_local! { static CALLS: Cell<u64> = const { Cell::new(0) }; }
 
+mod graph;
+
+use graph::GraphFixture;
+
 pub struct RuntimeFixture;
 
 impl Guest for RuntimeFixture {
     fn evaluate(
         input: types::Evaluation,
-        _graph: Option<&sdk::guest::bindings::araphor::analysis::graph::Transaction>,
+        graph: Option<&sdk::guest::bindings::araphor::analysis::graph::Transaction>,
     ) -> std::result::Result<types::Output, types::EvaluationError> {
+        if input.export_name == "index" {
+            return <sdk::guest::Component<GraphFixture> as Guest>::evaluate(input, graph);
+        }
         Self::execute(input.into())
             .map(Into::into)
             .map_err(|error| sdk::wire::EvaluationError::from(error).into())
@@ -30,6 +37,9 @@ impl sdk::Guest for RuntimeFixture {
     }
 
     fn compute(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        if input.evaluation().export == "index" {
+            return <GraphFixture as sdk::Guest>::compute(input);
+        }
         let evaluation = input.evaluation();
         Self::native_fault()?;
         Self::execute(input.encode()?)?.decode(input.package(), evaluation)
@@ -456,7 +466,14 @@ impl RuntimeFixture {
         sdk::Package::new(
             "runtime-fixture",
             "1",
-            vec![model, count, accumulate, continuation, changes],
+            vec![
+                model,
+                count,
+                accumulate,
+                continuation,
+                changes,
+                GraphFixture::model(),
+            ],
         )
     }
 }

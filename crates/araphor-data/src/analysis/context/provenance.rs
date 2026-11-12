@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use crate::analysis::{native::DataView, AnalysisStore, PackageRevisionV1};
     use crate::{AnalysisReadControl, PackageArtifactV1, PackageBundleV1, PackageImplementationV1};
-    use araphor_analysis_builtins::{causal::Causal, components, graph::Detector};
+    use araphor_analysis_builtins::{components, discovery::Discovery, graph::Detector};
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
     type Stored = (PackageRevisionV1, u64, u64);
@@ -204,9 +204,13 @@ mod tests {
 
     #[test]
     fn verified_package_rechecks_current_bytes_and_export_identity() -> TestResult {
-        for (descriptor, component) in [
-            (Causal::descriptor(), components::CAUSAL),
-            (Detector::Credentials.descriptor(), components::CREDENTIALS),
+        for (descriptor, component, export) in [
+            (Discovery::package(), components::DISCOVERY, "atoms"),
+            (
+                Detector::Credentials.descriptor(),
+                components::CREDENTIALS,
+                "detect",
+            ),
         ] {
             let directory = tempfile::tempdir()?;
             let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -216,7 +220,7 @@ mod tests {
                 .descriptor
                 .exports
                 .iter()
-                .find(|model| model.name == "detect")
+                .find(|model| model.name == export)
                 .and_then(|model| model.outputs.first())
                 .ok_or("detect output")?
                 .name
@@ -234,7 +238,7 @@ mod tests {
                 || Ok(()),
             )?;
             let context = AnalysisContextVersionV1::from_package(
-                &bundle, [1; 16], &package, "detect", &output,
+                &bundle, [1; 16], &package, export, &output,
             )?;
             store.commit_context(&context)?;
             let control = AnalysisReadControl::default();
@@ -250,10 +254,7 @@ mod tests {
                 .package_revision([1; 16], &package.package_id, &package.revision, &control)?
                 .ok_or("verified package")?;
             let retained = original.decode_artifact()?;
-            assert_eq!(
-                retained.implementation("detect")?.identity()?,
-                Some(identity)
-            );
+            assert_eq!(retained.implementation(export)?.identity()?, Some(identity));
             let mut warm = VerifiedPackages::default();
             check(&held, &mut warm)?;
             assert_eq!(
@@ -358,7 +359,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
-        let mut artifact = artifact(Causal::descriptor(), components::CAUSAL);
+        let mut artifact = artifact(Detector::Credentials.descriptor(), components::CREDENTIALS);
         let mut offline = artifact
             .descriptor
             .exports

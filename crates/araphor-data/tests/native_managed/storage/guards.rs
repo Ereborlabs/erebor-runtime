@@ -16,8 +16,8 @@ fn managed_images_reject_forged_implementation_pin() -> TestResult {
         fixture.instance
     );
     let identity = PackageImplementationV1::Wasm {
-        exports: vec!["index".into(), "detect".into()],
-        artifact: araphor_analysis_builtins::components::CAUSAL.to_vec(),
+        exports: vec!["evaluate".into()],
+        artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
     }
     .identity()?
     .ok_or("Wasm identity absent")?;

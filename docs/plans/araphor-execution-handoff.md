@@ -1,5 +1,13 @@
 # Native execution performance handoff
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 ## Current work, 2026-11-10
 
 Use the [native storage integration worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)

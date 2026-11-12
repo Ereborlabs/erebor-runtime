@@ -1,5 +1,13 @@
 # Araphor retained execution state review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 Current Fjall source-frame checks are in the
 [native storage review](araphor-native-storage-review.md). The source test link
 below retains its earlier source revision.
@@ -421,9 +429,11 @@ Araphor Graph and stages changes. Data commits Graph, finding, and progress
 changes together. The notification subscription delivers the resulting finding.
 The target requires millisecond latency and a measured 100-fold improvement.
 
-### Current builtin causal package
+### Removed builtin causal package
 
-The default Definition calls `HF-CAUSAL-001` revision `1`, export `detect`.
+This section is historical. The package and its synthetic collectors were
+removed on 2026-11-12. The removed default Definition called `HF-CAUSAL-001`
+revision `1`, export `detect`.
 That export also consumes the package's `index` outputs. Package code owns both
 operations. The generic Graph engine has no incident rules.
 

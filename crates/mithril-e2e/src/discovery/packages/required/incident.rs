@@ -20,7 +20,6 @@ use serde_json::json;
 use super::Result;
 
 mod identity;
-mod incremental;
 mod input;
 mod lightweight;
 mod physical;

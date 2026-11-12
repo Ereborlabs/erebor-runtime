@@ -1,5 +1,13 @@
 # Native Data transaction review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 This guide covers the optional native Data owner, raw source storage, and its
 package storage proof of concept (PoC) caller. The metadata source follows
 Runtime `78e909526`. The combined raw view follows `f05f444e2`. The catalogue

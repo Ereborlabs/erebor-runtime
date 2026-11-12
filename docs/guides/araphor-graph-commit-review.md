@@ -1,5 +1,13 @@
 # Araphor Graph Commit Review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
 Current Data storage uses Fjall. Links to retired package owners use source
 revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier
 SQL implementation. Read the [native storage review](araphor-native-storage-review.md)

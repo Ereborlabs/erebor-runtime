@@ -1,4 +1,0 @@
-name: mithril-control-causal
-description: Detect credential use and privileged workload expansion across nodes.
-sql: |
-  SELECT * FROM "HF-CAUSAL-001"."1".detect('summary')

@@ -10,7 +10,8 @@ tree contains only named, no-clobber copies selected during triage.
   explicitly named recovery indexes.
 - [DuckDB retirement](research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the current native storage worklist. Commit `abdc4694e` replaces the
-  production SQL owner. The unchanged incident passes. Complete storage parity,
+  production SQL owner. The synthetic incident was removed on 2026-11-12.
+  Its prior results are historical. Complete storage parity,
   obsolete fixture ports, and the 100-fold timing proof remain **Not done**.
 - [Research](research/README.md) contains market, interview, compliance, and
   generated-research documents.

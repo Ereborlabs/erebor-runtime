@@ -38,8 +38,8 @@ async fn indexed_versions_keep_graph() -> TestResult {
     let store = Arc::new(NativeStore::open(&root)?);
     let engine = Engine::new(store.clone(), Limits::default())?;
     event(&store, TENANT, 1)?;
-    store.commit_contexts(&[super::graph::audit(1)?])?;
-    let definition = sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#);
+    store.commit_contexts(&[super::graph::input(1)?])?;
+    let definition = sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#);
     let (initial, _) = prepare(&engine, &super::graph::image()?, &definition).await?;
     let control = AnalysisReadControl::default();
     let admitted = store
@@ -192,11 +192,11 @@ async fn tokenless_follow_consumes_replay() -> TestResult {
     let store = Arc::new(NativeStore::open(&root)?);
     let engine = Engine::new(store.clone(), Limits::default())?;
     event(&store, TENANT, 1)?;
-    store.commit_contexts(&[super::graph::audit(1)?])?;
+    store.commit_contexts(&[super::graph::input(1)?])?;
     let (definition, _) = prepare(
         &engine,
         &super::graph::image()?,
-        &sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#),
+        &sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#),
     )
     .await?;
     let current = store
@@ -210,7 +210,7 @@ async fn tokenless_follow_consumes_replay() -> TestResult {
         .next()
         .is_none());
     event(&store, TENANT, 2)?;
-    store.commit_contexts(&[super::graph::audit(2)?])?;
+    store.commit_contexts(&[super::graph::input(2)?])?;
     let publication =
         publication::Publication::new(&engine, definition.plan().schema().inner().clone());
     let mut stream = subscribe(&engine, definition, publication.clone())?;
@@ -221,7 +221,7 @@ async fn tokenless_follow_consumes_replay() -> TestResult {
         returned.changes().ok_or("changes")?.base.as_ref(),
         finite.receipt().results.get(&call)
     );
-    for name in ["audit_affected", "audit_after"] {
+    for name in ["affected", "after"] {
         assert_eq!(
             returned
                 .evaluation()
@@ -243,14 +243,14 @@ async fn tokenless_follow_consumes_replay() -> TestResult {
     let (definition, _) = specification(
         &engine,
         &super::graph::image()?,
-        &sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#),
+        &sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#),
     )
     .await?;
     let publication =
         publication::Publication::new(&engine, definition.plan().schema().inner().clone());
     publication.assert_consumed(consumed)?;
     event(&store, TENANT, 3)?;
-    store.commit_contexts(&[super::graph::audit(3)?])?;
+    store.commit_contexts(&[super::graph::input(3)?])?;
     let mut stream = subscribe(&engine, definition, publication.clone())?;
     let resumed = next(&mut stream).await?;
     assert!(resumed.cursor.position() > consumed);
@@ -266,8 +266,8 @@ async fn rollback_revives_saved_consumer() -> TestResult {
     let store = Arc::new(NativeStore::open(&directory.path().join("data"))?);
     let engine = Engine::new(store.clone(), Limits::default())?;
     event(&store, TENANT, 1)?;
-    store.commit_contexts(&[super::graph::audit(1)?])?;
-    let program = sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#);
+    store.commit_contexts(&[super::graph::input(1)?])?;
+    let program = sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#);
     let (definition, publication) = prepare(&engine, &super::graph::image()?, &program).await?;
     let control = AnalysisReadControl::default();
     let mut stream = subscribe(&engine, definition.clone(), publication.clone())?;
@@ -278,7 +278,7 @@ async fn rollback_revives_saved_consumer() -> TestResult {
         .managed_instance(TENANT, "native-query", &control)?
         .ok_or("instance")?;
     event(&store, TENANT, 2)?;
-    store.commit_contexts(&[super::graph::audit(2)?])?;
+    store.commit_contexts(&[super::graph::input(2)?])?;
     let mut changed = program;
     changed.description = "Updated metadata".into();
     let (updated, spec) = specification(&engine, &super::graph::image()?, &changed).await?;
@@ -292,7 +292,7 @@ async fn rollback_revives_saved_consumer() -> TestResult {
     let finite = execute(&engine, definition.clone(), &rollback, &current).await?;
     publication.assert_consumed(first.cursor.position())?;
     event(&store, TENANT, 3)?;
-    store.commit_contexts(&[super::graph::audit(3)?])?;
+    store.commit_contexts(&[super::graph::input(3)?])?;
     let mut stream = subscribe(&engine, definition, publication.clone())?;
     let resumed = next(&mut stream).await?;
     let (&call, returned) = resumed.calls.first_key_value().ok_or("call")?;
@@ -301,7 +301,7 @@ async fn rollback_revives_saved_consumer() -> TestResult {
         finite.receipt().results.get(&call)
     );
     publication.assert_consumed(resumed.cursor.position())?;
-    for name in ["audit_affected", "audit_after"] {
+    for name in ["affected", "after"] {
         assert_eq!(
             returned
                 .evaluation()
@@ -326,11 +326,11 @@ async fn bootstrap_retries_keep_progress() -> TestResult {
         let store = Arc::new(NativeStore::open(&directory.path().join("data"))?);
         let engine = Engine::new(store.clone(), Limits::default())?;
         event(&store, TENANT, 1)?;
-        store.commit_contexts(&[super::graph::audit(1)?])?;
+        store.commit_contexts(&[super::graph::input(1)?])?;
         let (definition, publication) = prepare(
             &engine,
             &super::graph::image()?,
-            &sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#),
+            &sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#),
         )
         .await?;
         let control = AnalysisReadControl::default();
@@ -349,7 +349,7 @@ async fn bootstrap_retries_keep_progress() -> TestResult {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         event(&store, TENANT, 2)?;
-        store.commit_contexts(&[super::graph::audit(2)?])?;
+        store.commit_contexts(&[super::graph::input(2)?])?;
         let mut stream = subscribe(&engine, definition.clone(), publication.clone())?;
         let error = next(&mut stream).await.err().ok_or("failed publication")?;
         stream.cancel_and_join().await?;
@@ -404,7 +404,7 @@ async fn bootstrap_retries_keep_progress() -> TestResult {
             returned.changes().ok_or("changes")?.base.as_ref(),
             finite.receipt().results.get(&call)
         );
-        for name in ["audit_affected", "audit_after"] {
+        for name in ["affected", "after"] {
             assert_eq!(
                 returned
                     .evaluation()
@@ -418,7 +418,7 @@ async fn bootstrap_retries_keep_progress() -> TestResult {
             );
         }
         assert_eq!(super::graph::links(&store)?.len(), 6);
-        store.commit_contexts(&[super::graph::audit(3)?])?;
+        store.commit_contexts(&[super::graph::input(3)?])?;
         let later = next(&mut stream).await?;
         assert!(later.cursor.position() > retried.cursor.position());
         publication.assert_consumed(later.cursor.position())?;

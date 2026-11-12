@@ -1,5 +1,29 @@
 # Native Data storage review
 
+Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
+component, default Definition, and runnable storage PoC are removed at the user's
+request. The inputs supplied credential and remote-action links that the current
+collectors cannot observe. The removed test is not a passing qualification.
+Earlier measurements below describe synthetic inputs, not an observed incident.
+No replacement detector or benchmark is added. Raw evidence collection and the
+generic Graph, DataFusion, and storage owners remain.
+
+The retained [Query Graph fixture](../../crates/araphor-query/tests/native_execution/graph.rs)
+uses numeric context revisions and the test-only
+[SDK component](../../crates/araphor-analysis-sdk/tests/component/src/graph.rs).
+It makes no security claim. The package stages four nodes and three edges for
+each input revision through the standard Graph transaction. The cases keep
+rollback, consumed progress, prior-result, delta, version, and reopen assertions.
+All 14 generic Query cases pass. Only the removed Causal descriptor test is
+retired. This result does not qualify incident detection or notification latency.
+
+Source removal result: **Done** for the 2026-11-12 request. The release checks
+pass for the Control and E2E libraries. The focused targets pass 14 Query cases,
+14 native Graph cases, six component-build cases, and four SDK component cases.
+Read the command results under `output/araphor-speculative-removal-20261112`.
+Full CI and the Data-only test targets were not run for this removal. The broader
+storage migration and incident performance goals remain unqualified.
+
 Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.

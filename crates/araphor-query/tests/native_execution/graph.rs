@@ -1,42 +1,68 @@
 use super::*;
-use araphor_analysis_builtins::causal::{
-    model::{Action, Audit, Credential, Outcome},
-    Causal,
-};
-use araphor_analysis_types::{
-    source::DiscoveryRecordIdV1,
-    values::{
-        LocalSubjectBindingV1, OperationResultAuthorityV1, ProofIntegrityV1, ProofQualityV1,
-        RemoteSubjectBindingV1, SourceAuthorityV1, TemporalCoverageV1,
-    },
-};
 
-#[test]
-fn causal_descriptor_matches_factory() -> TestResult {
-    let descriptor = Causal::descriptor();
-    let mut expected = descriptor.clone();
-    expected
-        .exports
-        .iter_mut()
-        .find(|model| model.name == "detect")
-        .ok_or("detect model")?
-        .graph
-        .as_mut()
-        .ok_or("detect Graph")?
-        .relations = araphor_analysis_types::DomainRelations::declarations()
-        .into_iter()
-        .filter(|relation| relation.name == araphor_analysis_types::DomainRelations::FINDINGS)
-        .collect();
-    assert_eq!(descriptor, expected);
-    assert_eq!(
-        serde_json::to_vec(&descriptor)?,
-        serde_json::to_vec(&expected)?
+pub(super) fn descriptor() -> sdk::Package {
+    let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, true)]);
+    let mut model = sdk::Model::new(
+        "index",
+        vec![
+            sdk::Port::new("after", schema.clone()),
+            sdk::Port::new("before", schema.clone()),
+            sdk::Port::new("affected", schema.clone()),
+            sdk::ChangeInputs::reset_port("reset"),
+        ],
+        vec![sdk::Port::new("frontier", schema.clone())],
     );
-    Ok(())
+    model.input_mode = sdk::InputMode::Resolved;
+    let query = |image: &str| {
+        format!(
+            "SELECT owner_revision AS value FROM {image}context_versions WHERE owner_id = 'graph-fixture'"
+        )
+    };
+    for (input, query) in model.inputs.iter_mut().zip([
+        query(""),
+        format!(
+            "SELECT source.* FROM ({}) source JOIN affected USING (value)",
+            query("before.")
+        ),
+        "SELECT value FROM inserted.after UNION SELECT value FROM removed.after".into(),
+    ]) {
+        input.source = sdk::InputSource::Query(query);
+    }
+    model.change_inputs = Some(sdk::ChangeInputs {
+        reset: "reset".into(),
+        ports: vec![sdk::ChangeInput {
+            affected: "affected".into(),
+            before: "before".into(),
+            after: "after".into(),
+            current: Some(format!(
+                "SELECT source.* FROM ({}) source JOIN affected USING (value)",
+                query("after.")
+            )),
+        }],
+    });
+    model.graph = Some(sdk::GraphSpec {
+        access: sdk::GraphAccess::ReadWrite,
+        relations: vec![
+            sdk::GraphRelation {
+                name: "nodes".into(),
+                kind: sdk::GraphKind::Node,
+                properties: schema.clone(),
+            },
+            sdk::GraphRelation {
+                name: "links".into(),
+                kind: sdk::GraphKind::Edge {
+                    from: "nodes".into(),
+                    to: "nodes".into(),
+                },
+                properties: schema,
+            },
+        ],
+    });
+    sdk::Package::new("runtime-fixture", "1", vec![model])
 }
 
 pub(super) fn image() -> araphor_package::Result<PackageBundle> {
-    let descriptor = Causal::descriptor();
+    let descriptor = descriptor();
     let artifact = PackageArtifactV1 {
         implementations: vec![PackageImplementationV1::Wasm {
             exports: descriptor
@@ -44,7 +70,7 @@ pub(super) fn image() -> araphor_package::Result<PackageBundle> {
                 .iter()
                 .map(|model| model.name.clone())
                 .collect(),
-            artifact: araphor_analysis_builtins::components::CAUSAL.to_vec(),
+            artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
         }],
         descriptor,
         fixtures: Vec::new(),
@@ -56,41 +82,8 @@ pub(super) fn image() -> araphor_package::Result<PackageBundle> {
     })
 }
 
-pub(super) fn audit(revision: u64) -> TestResult<AnalysisContextVersionV1> {
-    let audit = Audit {
-        schema_version: 1,
-        record: DiscoveryRecordIdV1 {
-            stream: source(TENANT),
-            durable_cursor: revision,
-            cpu_id: 0,
-        },
-        task: 10,
-        process: [7; 16],
-        outcome: Outcome::Succeeded,
-        status_code: None,
-        proof: ProofQualityV1 {
-            source_authority: SourceAuthorityV1::AuthoritativeProvider,
-            local_subject_binding: LocalSubjectBindingV1::ExactTask,
-            remote_subject_binding: RemoteSubjectBindingV1::ExactObject,
-            operation_result_authority: OperationResultAuthorityV1::AuthoritativeSucceeded,
-            temporal_coverage: TemporalCoverageV1::Complete,
-            integrity: ProofIntegrityV1::AuthenticatedChannel,
-        },
-        action: Action::CredentialAccess {
-            credential: Credential {
-                authority: "cluster".into(),
-                lease: format!("lease-{revision}"),
-                principal: "service".into(),
-            },
-            object: [8; 16],
-            completion: format!("read-{revision}"),
-            result: 8,
-            bytes: 8,
-        },
-    };
-    let mut value = context(Audit::OWNER, revision);
-    value.body = audit.encode()?;
-    Ok(value)
+pub(super) fn input(revision: u64) -> TestResult<AnalysisContextVersionV1> {
+    Ok(context("graph-fixture", revision))
 }
 
 pub(super) fn links(store: &NativeStore) -> TestResult<Vec<[Vec<u8>; 3]>> {
@@ -103,7 +96,7 @@ pub(super) fn links(store: &NativeStore) -> TestResult<Vec<[Vec<u8>; 3]>> {
         BTreeMap::new(),
         &|_, _, _| Ok(None),
     )?;
-    let relation = mapping.relations["causal_links_v1"].0;
+    let relation = mapping.relations["links"].0;
     let writer = *mapping.writers.values().next().ok_or("graph writer")?;
     let keys = sdk::RecordBatch::new_empty(Arc::new(sdk::Schema::empty()));
     let mut links = Vec::new();
@@ -129,11 +122,11 @@ async fn package_graph_and_consumption_commit_together() -> TestResult {
     let store = Arc::new(NativeStore::open(&directory.path().join("data"))?);
     let engine = Engine::new(store.clone(), Limits::default())?;
     event(&store, TENANT, 1)?;
-    store.commit_contexts(&[audit(1)?])?;
+    store.commit_contexts(&[input(1)?])?;
     let (definition, publication) = prepare(
         &engine,
         &image()?,
-        &sql(r#"SELECT * FROM "HF-CAUSAL-001"."1".index('frontier')"#),
+        &sql(r#"SELECT * FROM "runtime-fixture"."1".index('frontier')"#),
     )
     .await?;
     let mut stream = subscribe(&engine, definition.clone(), publication.clone())?;
@@ -144,7 +137,7 @@ async fn package_graph_and_consumption_commit_together() -> TestResult {
     let before = links(&store)?;
     assert_eq!(before.len(), 3);
     publication.assert_consumed(first.cursor.position())?;
-    store.commit_contexts(&[audit(2)?])?;
+    store.commit_contexts(&[input(2)?])?;
     event(&store, TENANT, 2)?;
     publication
         .reject
@@ -161,7 +154,7 @@ async fn package_graph_and_consumption_commit_together() -> TestResult {
         returned.changes().ok_or("indexed changes")?.base.as_ref(),
         Some(&first_receipt.results[&call])
     );
-    let descriptor = Causal::descriptor();
+    let descriptor = descriptor();
     let model = descriptor
         .exports
         .iter()
@@ -172,13 +165,13 @@ async fn package_graph_and_consumption_commit_together() -> TestResult {
         .as_ref()
         .ok_or("change contract")?
         .is_reset(returned.evaluation())?);
-    for name in ["audit_affected", "audit_after"] {
+    for name in ["affected", "after"] {
         let input = returned
             .evaluation()
             .inputs
             .iter()
             .find(|input| input.data.name == name)
-            .ok_or("changed audit input")?;
+            .ok_or("changed fixture input")?;
         assert_eq!(input.data.rows(), 1);
     }
     publication.assert_consumed(retried.cursor.position())?;

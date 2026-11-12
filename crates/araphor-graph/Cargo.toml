@@ -22,29 +22,7 @@ rmp-serde = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
-araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
-araphor-analysis-types = { path = "../araphor-analysis-types" }
-arrow-buffer = "=59.2.0"
-arrow-ipc = "=59.2.0"
-crc32c.workspace = true
-fjall = { path = "../../fjall", version = "=3.1.13", features = ["journal-cdc"] }
-log = "=0.4.29"
-redb = "=4.4.0"
-surrealkv = "=1.2.0"
-rmp-serde.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-serde_bytes = "=0.11.19"
-serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-59"] }
-erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 tempfile = "3.23.0"
-tokio.workspace = true
-
-[[example]]
-name = "storage_poc"
-path = "examples/storage_poc/main.rs"
-required-features = ["native-store"]
 
 [lints]
 workspace = true

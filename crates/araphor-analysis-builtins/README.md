@@ -9,14 +9,11 @@ dependency.
 `discovery::Discovery::package()` declares four exports: `atoms`, `merge`,
 `groups`, and `compare`. `graph::Detector::descriptor()` declares `detect` for
 `HF-DW-001`. The denial-based process detector and the Kubernetes placeholder
-have been removed. The multi-source causal replacement is not qualified.
-`causal::Causal::descriptor()` declares `HF-CAUSAL-001` with `index` and
-`detect` exports. `index` changes the causal graph and returns canonical proof
-keys. `detect` reads those keys through native DataFusion joins and stages a
-cross-node privileged-workload finding. The exports share the host transaction.
-The default Definition is `packages/default-definitions/causal.yaml`. It uses
-the same admission and Instance Host as an operator Definition. Runtime and
-performance qualification are not complete.
+have been removed. The speculative `HF-CAUSAL-001` package, collector,
+component, and default Definition were removed on 2026-11-12. Its synthetic
+inputs did not come from implemented collectors. No default detector Definition
+is installed. The retained credential computation does not prove cross-node
+credential use.
 Call `evaluate` with an SDK
 `Evaluation`. Each call checks inputs and outputs against its descriptor.
 The declarations and ports are initialized once. A guest wrapper can pass an
