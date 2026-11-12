@@ -1,4 +1,66 @@
 use super::*;
+use serde::Serialize as _;
+
+struct Artifact {
+    key: Vec<u8>,
+    header: Vec<u8>,
+    body_key: Vec<u8>,
+    body: Vec<u8>,
+}
+
+impl Artifact {
+    fn load(store: &AnalysisStore) -> TestResult<Self> {
+        let view = store.view()?;
+        for row in view.snapshot().prefix(b"\0data/P") {
+            let (key, bytes) = row?;
+            if key.len() != 15 {
+                continue;
+            }
+            assert_eq!(bytes.first(), Some(&0));
+            let header: (crate::analysis::PackageRevisionV1, u64, u64) =
+                rmp_serde::from_slice(&bytes[1..])?;
+            if header.0.package_id != "managed-fixture" {
+                continue;
+            }
+            let body_key = [b"\0data/@package-body/".as_slice(), &key[7..]].concat();
+            let body = view.snapshot().get(&body_key)?.ok_or("package body")?;
+            assert_eq!(body.first(), Some(&0));
+            assert_eq!(body.len() as u64 - 1, header.2);
+            return Ok(Self {
+                key: key.to_vec(),
+                header: bytes.to_vec(),
+                body_key,
+                body: body.to_vec(),
+            });
+        }
+        Err("retained package header".into())
+    }
+
+    fn replace(&self, store: &AnalysisStore, body: &[u8]) -> TestResult {
+        let mut header: (crate::analysis::PackageRevisionV1, u64, u64) =
+            rmp_serde::from_slice(&self.header[1..])?;
+        header.2 = body.len() as u64;
+        let mut bytes = vec![0];
+        header.serialize(
+            &mut rmp_serde::Serializer::new(&mut bytes)
+                .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
+        )?;
+        let mut tx = store.write()?;
+        tx.native().insert(self.key.clone(), bytes);
+        tx.native()
+            .insert(self.body_key.clone(), [b"\0", body].concat());
+        tx.commit([])?;
+        Ok(())
+    }
+
+    fn restore(&self, store: &AnalysisStore) -> TestResult {
+        let mut tx = store.write()?;
+        tx.native().insert(self.key.clone(), self.header.clone());
+        tx.native().insert(self.body_key.clone(), self.body.clone());
+        tx.commit([])?;
+        Ok(())
+    }
+}
 
 #[test]
 fn execution_retains_only_committed_state() -> TestResult {
@@ -166,10 +228,7 @@ fn execution_retains_only_committed_state() -> TestResult {
         .and_then(|prior| prior.retained.as_ref())
         .is_some_and(|retained| retained.evaluation.previous_outputs.is_empty()));
     current.contract.contexts.push(reference);
-    store.writer()?.get_mut()?.execute(
-        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
-        params![b"changed".as_slice()],
-    )?;
+    Artifact::load(&store)?.replace(&store, b"changed")?;
     assert!(store
         .register_managed_attempt(&current, &request("retained-tampered"), || Ok(()))
         .is_err());
@@ -203,10 +262,36 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
     let warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     let last = warm.prior(10).ok_or("last prior")?;
     let first = &receipts[0].results[&10];
-    store.writer()?.get_mut()?.execute(
-        "UPDATE managed_calls SET state_revision=?,result_id=? WHERE tenant_id=? AND instance_id=? AND call_id=10",
-        params![first.commit_revision, first.result_id, fixture.instance.spec.tenant.as_slice(), fixture.instance.spec.id],
-    )?;
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Head {
+        revision: u64,
+        result: Option<String>,
+    }
+    let view = store.view()?;
+    let mut heads = view.snapshot().prefix(b"\0data/Q");
+    let mut head = None;
+    for row in &mut heads {
+        let (key, bytes) = row?;
+        if key.len() == 23 && key[15..] == 10u64.to_be_bytes() {
+            assert!(head.is_none());
+            head = Some((key, bytes));
+        }
+    }
+    let (head_key, head_bytes) = head.ok_or("call 10 head")?;
+    assert_eq!(head_bytes.first(), Some(&0));
+    let original: Head = rmp_serde::from_slice(&head_bytes[1..])?;
+    assert_eq!(original.revision, receipts[1].results[&10].commit_revision);
+    assert_eq!(original.result.as_deref(), Some(last.result.as_str()));
+    let mut bytes = vec![0];
+    bytes.extend(rmp_serde::to_vec_named(&Head {
+        revision: first.commit_revision,
+        result: Some(first.result_id.clone()),
+    })?);
+    let mut tx = store.write()?;
+    tx.native().insert(head_key.clone(), bytes);
+    tx.commit([])?;
+    drop(heads);
+    drop(view);
     let changed = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     let previous = changed.prior(10).ok_or("changed prior")?;
     assert_eq!(previous.result, first.result_id);
@@ -215,11 +300,9 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
     assert!(previous.checkpoint.is_some());
     let before = changed.prior(11).ok_or("retained prior")?;
     assert!(before.retained.is_some());
-    let latest = &receipts[1].results[&10];
-    store.writer()?.get_mut()?.execute(
-        "UPDATE managed_calls SET state_revision=?,result_id=? WHERE tenant_id=? AND instance_id=? AND call_id=10",
-        params![latest.commit_revision, latest.result_id, fixture.instance.spec.tenant.as_slice(), fixture.instance.spec.id],
-    )?;
+    let mut tx = store.write()?;
+    tx.native().insert(head_key, head_bytes);
+    tx.commit([])?;
     drop(store);
     let reopened = AnalysisStore::open(directory.path().join("store"))?;
     let mut meta = reopened.meta()?;
@@ -273,22 +356,8 @@ fn execution_checks_package_restore() -> TestResult {
     ];
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    let artifact = store.read_snapshot(|reader| {
-        reader
-            .query_row(
-                "SELECT artifact FROM package_revisions WHERE package_id='managed-fixture'",
-                [],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read retained test artifact",
-            })
-    })?;
-    let changed = b"invalid".to_vec();
-    store.writer()?.get_mut()?.execute(
-        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
-        params![changed],
-    )?;
+    let artifact = Artifact::load(&store)?;
+    artifact.replace(&store, b"invalid")?;
     let warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     assert!(Arc::ptr_eq(
         outputs[0].datasets[0].batches[0].column(0),
@@ -311,10 +380,7 @@ fn execution_checks_package_restore() -> TestResult {
     assert!(store
         .retained_package_image([1; 16], pin, &control)
         .is_err());
-    store.writer()?.get_mut()?.execute(
-        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
-        params![artifact],
-    )?;
+    artifact.restore(&store)?;
     assert_eq!(
         store
             .retained_package_image([1; 16], pin, &control)?
@@ -322,10 +388,9 @@ fn execution_checks_package_restore() -> TestResult {
             .digest(),
         pin.digest
     );
-    store.writer()?.get_mut()?.execute(
-        "DELETE FROM package_revisions WHERE package_id='managed-fixture'",
-        [],
-    )?;
+    let mut tx = store.write()?;
+    tx.native().remove(artifact.key);
+    tx.commit([])?;
     assert!(fixture.capture(&store, false).is_err());
     Ok(())
 }

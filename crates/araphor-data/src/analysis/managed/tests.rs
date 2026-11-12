@@ -971,23 +971,93 @@ fn managed_witness_lifetime_check() -> TestResult {
     commit.now_utc_ns = 19;
     assert!(Fixture::commit(&store, &commit, || crate::AnalysisReadDeniedSnafu.fail()).is_err());
     assert_eq!(store.meta()?, before);
-    let count: u64 = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT count(*) FROM evidence_refs", [], |row| row.get(0))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "count rolled back witness refs",
-            })
-    })?;
-    assert_eq!(count, 0);
+    {
+        let view = store.view()?;
+        assert!(view.snapshot().prefix(b"\0data/ref/raw/").next().is_none());
+        assert!(view
+            .snapshot()
+            .prefix(b"\0data/ref/segment/")
+            .next()
+            .is_none());
+    }
     let receipt = Fixture::commit(&store, &commit, || Ok(()))?;
-    let count: u64 = store.read_snapshot(|reader| {
-        reader
-            .query_row("SELECT count(*) FROM evidence_refs", [], |row| row.get(0))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "count committed witness refs",
-            })
-    })?;
-    assert_eq!(count, 3);
+    {
+        let view = store.view()?;
+        let mut ends = view.snapshot().prefix(b"\0data/raw/end/");
+        let (end_key, _) = ends.next().ok_or("witness segment")??;
+        assert!(ends.next().is_none());
+        assert_eq!(end_key.len(), b"\0data/raw/end/".len() + 8);
+        let segment = &end_key[end_key.len() - 8..];
+        let names = receipt
+            .results
+            .values()
+            .chain([&receipt.selected])
+            .map(|reference| (reference.result_id.as_str(), reference.commit_revision))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(names.len(), 3);
+        let mut owners = BTreeSet::new();
+        for entry in view.snapshot().prefix(b"\0data/X") {
+            let (key, bytes) = entry?;
+            if key.len() != 15 {
+                continue;
+            }
+            assert_eq!(bytes.first(), Some(&0));
+            let saved: Stored = rmp_serde::from_slice(&bytes[1..])?;
+            if let Some(revision) = names.get(saved.id.as_str()) {
+                assert_eq!(saved.revision, *revision);
+                owners.insert(key[7..].to_vec());
+            }
+        }
+        assert_eq!(owners.len(), 3);
+        let expiry = 20u64.to_be_bytes();
+        let raw = view
+            .snapshot()
+            .prefix(b"\0data/ref/raw/")
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        assert_eq!(
+            raw.keys().map(|key| key.to_vec()).collect::<BTreeSet<_>>(),
+            owners
+                .iter()
+                .map(|id| [
+                    b"\0data/ref/raw/".as_slice(),
+                    id.as_slice(),
+                    segment,
+                    &expiry
+                ]
+                .concat())
+                .collect()
+        );
+        for bytes in raw.values() {
+            assert_eq!(bytes.first(), Some(&0));
+            assert_eq!(
+                rmp_serde::from_slice::<Vec<(u64, u64)>>(&bytes[1..])?,
+                vec![(1, 1)]
+            );
+        }
+        let reverse = view
+            .snapshot()
+            .prefix(b"\0data/ref/segment/")
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        assert_eq!(
+            reverse
+                .keys()
+                .map(|key| key.to_vec())
+                .collect::<BTreeSet<_>>(),
+            owners
+                .iter()
+                .map(|id| [
+                    b"\0data/ref/segment/".as_slice(),
+                    segment,
+                    id.as_slice(),
+                    &expiry
+                ]
+                .concat())
+                .collect()
+        );
+        for bytes in reverse.values() {
+            assert_eq!(bytes.as_ref(), expiry.as_slice());
+        }
+    }
     assert!(
         store
             .managed_result(

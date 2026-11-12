@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 101 diagnostics.
+  The last unit compilation reports 84 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -87,7 +87,51 @@ Remaining functional work:
 
 Complete these items before more incident latency experiments.
 
+The reviewed history-maintenance direction uses the earliest retained managed
+generation as a conservative managed-history bound. This key-only bound also
+protects captures that have no registered attempt. Processor and trace recovery
+need the cut before their first state. Durable input generations, notification
+completion records, the shared reader, and ordinary subscription anchors also
+protect their cuts. Convert each Data revision through the stamped-cut index.
+Engine snapshots and branch forks already protect held views and ancestry.
+
+Checkpoint can replace the existing open-ended native policy only after the
+required bound advances. Protect the new range before releasing the old policy.
+Keep logical records and cut-index entries. Startup must check the required
+bound instead of requiring the initial cut unconditionally. Restore must load
+the policies and durable consumer roots before maintenance. No new collection
+API or age, size, or count window is required. A processor or trace first saved
+at Data revision 1 can require revision 0 through its retained recovery chain.
+This outcome is valid. This maintenance change remains **Not done**.
+
 Current evidence:
+
+- Three private retained-execution cases now use native package and call-head
+  records. The package faults keep the original `changed` and `invalid` bodies.
+  Their headers keep the descriptor, dependencies, and install revision, with
+  the exact changed body length. Restore writes the original header and body
+  bytes. Removing the actual package header still requires cold capture to
+  fail. The call-head case rewinds only call 10, checks cold checkpoint fallback
+  while call 11 stays retained, and restores the exact original head bytes
+  before reopen. Continuation remains enabled. All original Arrow identity,
+  shared-root, invalidation, checkpoint, and recovery-epoch assertions remain.
+
+  The private witness-lifetime case replaces two SQL counts with native pin
+  checks. Denied publication leaves both pin prefixes empty. Successful
+  publication has exactly three raw groups for the two call results and the
+  selected result. Each group has cursor 1, deadline 20, the actual anchored
+  segment, and its exact reverse reference. Lifetime checks at 21, 20, and 19,
+  cancellation rollback, current-result checks, and retained raw count remain.
+
+  Data unit compilation still fails with 84 diagnostics, down from 101.
+  Neither changed private source reports a diagnostic. These four private
+  cases remain unexecuted and unqualified until that target compiles.
+  Changed Rust formatting and scoped whitespace checks pass. Read
+  `native-retained-execution-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for the four native probe ports; Not done for private
+  qualification, complete migration, or the performance proof**. No production
+  source, incident timing experiment, or full CI is included.
 
 - Five processor progress cases and two retirement cases use the native
   storage owner. The native cases keep all 16 changed-request conflicts,

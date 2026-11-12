@@ -4,6 +4,23 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [private retained-execution cases](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
+and [private witness-lifetime case](../../crates/araphor-data/src/analysis/managed/tests.rs).
+Package faults change actual native package headers and bodies. The cases keep
+the original malformed bytes, metadata, exact restore, cold failure, and retained
+Arrow identity checks. Call 10 uses its actual native head. The case restores
+the exact head bytes before reopen and keeps call 11 retained during the rewind.
+Continuation, shared-root, checkpoint, and recovery-epoch assertions remain.
+
+Witness rollback leaves both native pin prefixes empty. Publication creates
+exactly three raw groups for the two calls and selected result. Each group
+contains cursor 1 at deadline 20 in the anchored segment and has the exact
+reverse reference. The original lifetime and retained-input checks remain.
+These four cases remain unexecuted and unqualified while the Data unit target
+fails to compile with 84 diagnostics. Neither changed private source reports
+a diagnostic. Read `native-retained-execution-unit.log` under
+`output/araphor-fjall-migration-20261110`. No production behavior changes.
+
 Read the [progress contracts](../../crates/araphor-data/tests/native_managed/progress/contracts.rs)
 and [retirement cases](../../crates/araphor-data/tests/native_managed/progress/retirement.rs)
 with [processor registration](../../crates/araphor-data/src/analysis/native/progress/mod.rs),
