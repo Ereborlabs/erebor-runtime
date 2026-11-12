@@ -2,7 +2,7 @@ use std::sync::{atomic::Ordering, Arc};
 
 use snafu::ResultExt as _;
 
-use super::{capacity::RevisionCounts, NativeStore};
+use super::{capacity::RevisionCounts, NativeStore, HEAD};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result};
 
 impl NativeStore {
@@ -38,7 +38,9 @@ impl NativeStore {
         let snapshot = self.branch.snapshot().context(NativeStorageSnafu {
             operation: "capture recovery metadata",
         })?;
-        let recovered = Self::decode_view(snapshot)?;
+        let revision = Self::number(&Self::required(&snapshot, HEAD)?)?;
+        let cut = Self::required(&snapshot, &Self::cut(revision))?;
+        let recovered = Self::cut_view(&self.branch, revision, &cut)?;
         if recovered.store_uuid != prior.store_uuid
             || recovered.schema_version != prior.schema_version
             || recovered.recovery_epoch != prior.recovery_epoch

@@ -135,6 +135,7 @@ values have `sequence < cut`. The engine owns conversion from batch sequences.
 | `BranchSnapshot` | `revision()`, `cursor() -> Result<Option<Cursor>>`, `get(key)`, `prefix(prefix)`, `range(bounds)`, `iter()` |
 | `Branch` | `retain_history(range) -> RetentionId` |
 | `SingleWriterTxDatabase` | `history()` lists policies and branch IDs; `release_history(id)` works after a branch name is deleted. |
+| `SingleWriterTxDatabase` | `advance_history(id, first)` advances one policy's lower bound in one durable catalogue batch. The policy keeps its ID, branch, and upper bound. |
 | `SingleWriterTxDatabase` | `checkpoint(destination)` exports retained native trees, branch metadata, history policies, and original journal prefixes to a new directory under one protected cut. |
 | `SingleWriterTxDatabase` | `checkpoint_with(destination, admit)` calls `admit(&Path, Option<u64>)` before each output entry is created. `None` means a directory. `Some(bytes)` gives the exact file length. A refusal removes the incomplete checkpoint and preserves source readiness. |
 | `Database` | `is_poisoned()` reports uncertain source writes or manifest publication. It does not reset the engine. |
@@ -153,6 +154,18 @@ Default retention is the current head plus active views and required fork bases.
 Call `retain_history(branch.info().head..)` before the first data write to keep
 all subsequent history. Pre-fork history requests protect the corresponding
 ancestor ranges; each ancestor lookup uses the smaller requested and fork cut.
+
+Fjall `f745c54` adds `advance_history` for the production Data migration.
+A backward bound or a bound above the policy's upper cut fails before a write.
+An unchanged bound writes no batch. A changed bound writes the existing policy
+record and the native clock in one `SyncAll` batch. The in-memory protection
+changes after durable completion. Other policies, active views, and branch
+forks keep their own protection. Future lower bounds remain valid within the
+policy's upper bound. Thirty-two versioned engine cases pass, including the
+new bound, original-journal, compaction, restart, and checkpoint checks. Read
+`output/araphor-fjall-migration-20261110/native-history-engine.log`.
+Data policy ownership and automatic floor advancement remain **Not done**.
+No incident latency comparison or full CI is included.
 
 A current `snapshot()` captures its revision, lineage, and exact CDC start
 cursor together. A historical `read_at(R)` exposes R; its cursor can be absent

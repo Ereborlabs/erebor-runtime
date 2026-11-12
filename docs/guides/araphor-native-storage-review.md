@@ -4,6 +4,23 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [native recovery](../../crates/araphor-data/src/analysis/native/recovery.rs)
+with [catalogue recovery qualification](../../crates/araphor-data/tests/native_backup.rs)
+and [changed-cut refusal](../../crates/araphor-data/tests/native_managed/lifecycle/faults.rs).
+A history-policy commit changes the engine catalogue cut without changing Data
+HEAD. Recovery resolves HEAD through the stamped Data cut before the existing
+identity, schema, epoch, revision, and native-cut comparisons. The new case keeps
+metadata, raw records, the Data cut, and policies exact through recover and
+reopen. A real changed Data cut still requires reopen and leaves access closed.
+All 283 connected cases and the default-feature production Data release check
+pass. Read `native-history-recovery-*` under
+`output/araphor-fjall-migration-20261110`.
+
+The [generic engine advancement API](../../fjall/src/versioned/branch.rs)
+keeps policy IDs stable. Data policy ownership and automatic checkpoint floor
+advancement remain **Not done**; the reviewed direction is in the current
+worklist. No incident latency comparison is included.
+
 Read the [private retained-execution cases](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
 and [private witness-lifetime case](../../crates/araphor-data/src/analysis/managed/tests.rs).
 Package faults change actual native package headers and bodies. The cases keep

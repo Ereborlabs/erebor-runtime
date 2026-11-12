@@ -95,16 +95,59 @@ completion records, the shared reader, and ordinary subscription anchors also
 protect their cuts. Convert each Data revision through the stamped-cut index.
 Engine snapshots and branch forks already protect held views and ancestry.
 
-Checkpoint can replace the existing open-ended native policy only after the
-required bound advances. Protect the new range before releasing the old policy.
+Checkpoint can advance its own open-ended native policy only after the required
+bound advances. Fjall `f745c54` adds an atomic lower-bound update that keeps the
+same policy ID. Data must save its owned ID at initialization. An existing
+format-11 store without an owned ID must create and save one after recovery
+validation. Preserve all unknown policies; an unknown broad policy can retain
+extra history. Never infer ownership from equal ranges or policy order.
+
+Keep the Data writer and input scan locks during floor advancement. Advance
+journal admission and `scan.retained` before native history. Ordinary watches
+constrain history, not the existing journal floor. Earliest retained managed
+generations also cover notification completion cuts through the existing
+generation, input, and completion bounds. No second completion scan is needed.
 Keep logical records and cut-index entries. Startup must check the required
 bound instead of requiring the initial cut unconditionally. Restore must load
-the policies and durable consumer roots before maintenance. No new collection
-API or age, size, or count window is required. A processor or trace first saved
-at Data revision 1 can require revision 0 through its retained recovery chain.
-This outcome is valid. This maintenance change remains **Not done**.
+the policies and durable consumer roots before maintenance. No new Data
+collection API or age, size, or count window is required. A processor or trace
+first saved at Data revision 1 can require revision 0 through its retained
+recovery chain. This outcome is valid. Data policy ownership and automatic
+floor advancement remain **Not done**.
 
 Current evidence:
+
+- Fjall `f745c54` adds stable-ID history advancement. One native catalogue
+  batch changes the policy lower bound and native clock after `SyncAll`.
+  The ID, branch, upper bound, other policies, held readers, and branch fork
+  protection remain. Invalid bounds and missing policies fail without a
+  journal change. Equality is a no-op. All 32 versioned engine cases pass,
+  including compaction, restart, and copied-checkpoint history. Read
+  `native-history-engine.log` under
+  `output/araphor-fjall-migration-20261110`. This generic API has no Data,
+  package, or Graph semantics. Its Data maintenance caller remains **Not done**.
+
+  The recovery baseline finds a production error. A catalogue policy commit
+  advances the global native cut without changing Data's committed cut.
+  `recover()` decodes the global snapshot and fails with `published cut`.
+  Recovery now resolves Data HEAD through its stamped cut before it applies
+  the existing UUID, schema, epoch, Data revision, and exact native-cut checks.
+  The new case preserves metadata, raw records, the Data snapshot, and policies
+  through recover and reopen after actual policy advancement.
+
+  The connected run passes 283 cases: native backup 9, lifecycle 8,
+  managed 231, and raw 35. The existing `synced_failure_requires_reopen` case
+  still rejects a real changed Data cut with its exact error and keeps access
+  closed until reopen. The default-feature production Data library passes
+  the release check in 14.64 seconds. Changed Rust formatting and scoped
+  whitespace checks pass. Read `native-history-recovery-baseline.log`,
+  `native-history-recovery-qualified.log`, and
+  `native-history-recovery-production.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for generic policy advancement and Data recovery across
+  catalogue commits; Not done for automatic Data history maintenance,
+  complete migration, or the performance proof**. No incident timing
+  experiment or full CI is included.
 
 - Three private retained-execution cases now use native package and call-head
   records. The package faults keep the original `changed` and `invalid` bodies.

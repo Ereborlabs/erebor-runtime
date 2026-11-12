@@ -24,7 +24,8 @@ notification delivery.
 ## Atomic caller revision references
 
 Fjall `cceaa84` adds exact caller revision references for the approved Data
-migration. The production Data caller remains **Not implemented**.
+migration. The current production caller is
+[DataWrite::commit_locked](../../crates/araphor-data/src/analysis/native/mod.rs).
 
 [BranchWriteTransaction::commit_stamped](../../fjall/src/versioned/write.rs) Caller commits changes with revision-reference keys
   -> [BranchWriteTransaction::commit_stamped](../../fjall/src/versioned/write.rs) The transaction rejects duplicate, staged, empty, or over-width stamp keys before sequence allocation.
@@ -47,6 +48,20 @@ documentation 86, formatting, and library clippy with existing warnings.
 This check does not establish a production latency improvement.
 
 ## Implementation review flow
+
+[SingleWriterTxDatabase::advance_history](../../fjall/src/versioned/branch.rs) Caller advances one policy's lower bound
+  -> [Catalogue::advance](../../fjall/src/versioned/catalogue.rs) Fjall holds the single-writer and catalogue locks and checks the policy and bounds.
+  -> [Catalogue::advance](../../fjall/src/versioned/catalogue.rs) An equal bound writes no batch.
+  -> [WriteBatch::commit_receipt](../../fjall/src/batch/mod.rs) One SyncAll batch saves the existing policy row and native clock.
+  -> [Catalogue::update_history](../../fjall/src/versioned/catalogue.rs) Fjall replaces that policy's projected contribution after durable completion.
+
+Fjall `f745c54` keeps the policy ID, branch, and upper bound. The two new cases
+in [branch tests](../../fjall/src/versioned/branch_tests.rs) check exact journal
+items, no-op and invalid bounds, other owners, held views, forks, compaction,
+reopen, and native checkpoint restore. All 32 versioned cases pass. Read
+`output/araphor-fjall-migration-20261110/native-history-engine.log`.
+Automatic Data policy ownership and advancement remain **Not done**. No
+production latency result or full CI is included.
 
 [Branch::retain_history and Branch::fork](../../fjall/src/versioned/branch.rs) Caller retains a revision range or forks a retained revision
   -> [Catalogue::pins and Catalogue::update_history](../../fjall/src/versioned/catalogue.rs) Fjall protects the required cuts against concurrent maintenance.

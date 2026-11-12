@@ -247,6 +247,37 @@ fn backup_serializes_with_writer() -> TestResult {
 }
 
 #[test]
+fn catalogue_commits_preserve_recovery() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = AnalysisStore::open(&root)?;
+    let initial = store.view()?.snapshot().revision();
+    let policy = store.branch().retain_history(initial..)?;
+    store.accept_validated_batch(identity(), batch(1))?;
+    store.checkpoint()?;
+    let before = store.meta()?;
+    let cut = store.view()?.snapshot().revision();
+    let page = store.read_page(&identity(), 1)?;
+    let journal = store.database().inner().journal_head()?;
+    store.database().advance_history(policy, cut)?;
+    assert_ne!(store.database().inner().journal_head()?, journal);
+    assert!(store.branch().snapshot()?.revision() > cut);
+    let policies = store.database().history()?;
+    store.recover()?;
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.view()?.snapshot().revision(), cut);
+    assert_eq!(store.read_page(&identity(), 1)?.records, page.records);
+    assert_eq!(store.database().history()?, policies);
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    assert_eq!(store.meta()?, before);
+    assert_eq!(store.view()?.snapshot().revision(), cut);
+    assert_eq!(store.read_page(&identity(), 1)?.records, page.records);
+    assert_eq!(store.database().history()?, policies);
+    Ok(())
+}
+
+#[test]
 fn uncertain_owner_rejects_access() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
