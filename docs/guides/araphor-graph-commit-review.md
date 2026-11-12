@@ -1,12 +1,13 @@
 # Araphor Graph Commit Review
 
-Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
-component, default Definition, and runnable storage PoC are removed at the user's
-request. The inputs supplied credential and remote-action links that the current
-collectors cannot observe. The removed test is not a passing qualification.
-Earlier measurements below describe synthetic inputs, not an observed incident.
-No replacement detector or benchmark is added. Raw evidence collection and the
-generic Graph, DataFusion, and storage owners remain.
+Restoration, 2026-11-12: The storage PoC sources, Causal package/component, and
+`follows_incremental_sources` are restored. The incident test has an explicit
+`#[ignore]`. Its workload, assertions, and timeouts are unchanged. The collector
+helper is available only to tests and the existing `test-fixtures` feature.
+Default Causal installation and its default Definition remain disabled.
+The ignored body still requires a default instance. It needs deliberate test
+setup and valid collector inputs before execution. Earlier measurements below
+use synthetic inputs and do not prove physical incident detection.
 
 Current Data storage uses Fjall. Links to retired package owners use source
 revision `5028dbeba6ad19ceb86375cf33b4dd56f6392993`. Those links describe the earlier

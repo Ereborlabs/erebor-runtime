@@ -9,11 +9,11 @@ dependency.
 `discovery::Discovery::package()` declares four exports: `atoms`, `merge`,
 `groups`, and `compare`. `graph::Detector::descriptor()` declares `detect` for
 `HF-DW-001`. The denial-based process detector and the Kubernetes placeholder
-have been removed. The speculative `HF-CAUSAL-001` package, collector,
-component, and default Definition were removed on 2026-11-12. Its synthetic
-inputs did not come from implemented collectors. No default detector Definition
-is installed. The retained credential computation does not prove cross-node
-credential use.
+have been removed. The `HF-CAUSAL-001` prototype source and component are
+restored for the storage PoC and ignored incident test. Its synthetic inputs do
+not come from implemented collectors. The collector helper is test-only.
+No default detector Definition is installed. The retained credential computation
+does not prove cross-node credential use.
 Call `evaluate` with an SDK
 `Evaluation`. Each call checks inputs and outputs against its descriptor.
 The declarations and ports are initialized once. A guest wrapper can pass an

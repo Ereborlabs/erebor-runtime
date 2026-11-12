@@ -44,6 +44,8 @@ pub use notification::*;
 pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use service::causal::{CausalCollector, CausalRole, CollectedAction};
 pub use service::{
     AllowedNodeIdentity, ControlPlane, KubernetesNodeSessionV1, PolicySignerTrustV1,
     TrustGenerationV1,

@@ -21,6 +21,8 @@ fn workspace_command_isolated() {
         "--target-dir",
         "/guest-target",
         "--package",
+        "araphor-causal-component",
+        "--package",
         "araphor-discovery-component",
         "--package",
         "araphor-credentials-component",
@@ -69,6 +71,7 @@ fn workspace_inputs_complete() {
     for directory in [
         "crates/araphor-analysis-builtins/components/discovery",
         "crates/araphor-analysis-builtins/components/credentials",
+        "crates/araphor-analysis-builtins/components/causal",
         "crates/araphor-detector-example",
         "crates/araphor-analysis-sdk/tests/component",
     ] {

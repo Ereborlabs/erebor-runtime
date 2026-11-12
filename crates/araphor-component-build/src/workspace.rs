@@ -8,6 +8,11 @@ use crate::{error, ComponentBuilder, Result};
 const TARGET: &str = "wasm32-unknown-unknown";
 const GUESTS: &[(&str, &str, &str)] = &[
     (
+        "araphor-causal-component",
+        "crates/araphor-analysis-builtins/components/causal",
+        "causal.wasm",
+    ),
+    (
         "araphor-discovery-component",
         "crates/araphor-analysis-builtins/components/discovery",
         "discovery.wasm",

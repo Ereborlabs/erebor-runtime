@@ -1,12 +1,13 @@
 # Araphor retained execution state review
 
-Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
-component, default Definition, and runnable storage PoC are removed at the user's
-request. The inputs supplied credential and remote-action links that the current
-collectors cannot observe. The removed test is not a passing qualification.
-Earlier measurements below describe synthetic inputs, not an observed incident.
-No replacement detector or benchmark is added. Raw evidence collection and the
-generic Graph, DataFusion, and storage owners remain.
+Restoration, 2026-11-12: The storage PoC sources, Causal package/component, and
+`follows_incremental_sources` are restored. The incident test has an explicit
+`#[ignore]`. Its workload, assertions, and timeouts are unchanged. The collector
+helper is available only to tests and the existing `test-fixtures` feature.
+Default Causal installation and its default Definition remain disabled.
+The ignored body still requires a default instance. It needs deliberate test
+setup and valid collector inputs before execution. Earlier measurements below
+use synthetic inputs and do not prove physical incident detection.
 
 Current Fjall source-frame checks are in the
 [native storage review](araphor-native-storage-review.md). The source test link
@@ -429,11 +430,11 @@ Araphor Graph and stages changes. Data commits Graph, finding, and progress
 changes together. The notification subscription delivers the resulting finding.
 The target requires millisecond latency and a measured 100-fold improvement.
 
-### Removed builtin causal package
+### Disabled builtin causal package
 
-This section is historical. The package and its synthetic collectors were
-removed on 2026-11-12. The removed default Definition called `HF-CAUSAL-001`
-revision `1`, export `detect`.
+This section describes the unsupported prototype. Its source is restored for
+the PoC and ignored test. The default Definition remains disabled. It called
+`HF-CAUSAL-001` revision `1`, export `detect`.
 That export also consumes the package's `index` outputs. Package code owns both
 operations. The generic Graph engine has no incident rules.
 

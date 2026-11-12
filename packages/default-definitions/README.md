@@ -15,5 +15,6 @@ instances remain stopped and removed. Changed image or Definition pins require
 an explicit managed update.
 
 No detector Definition is shipped in this folder. The speculative causal
-Definition and its package were removed on 2026-11-12. Operators can supply
+Definition remains disabled. Its package source is restored for the storage
+PoC and ignored incident test. Operators can supply
 Definitions through the same configured folder. No replacement is installed.

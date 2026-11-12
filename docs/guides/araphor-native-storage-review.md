@@ -1,12 +1,21 @@
 # Native Data storage review
 
-Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
-component, default Definition, and runnable storage PoC are removed at the user's
-request. The inputs supplied credential and remote-action links that the current
-collectors cannot observe. The removed test is not a passing qualification.
-Earlier measurements below describe synthetic inputs, not an observed incident.
-No replacement detector or benchmark is added. Raw evidence collection and the
-generic Graph, DataFusion, and storage owners remain.
+Restoration, 2026-11-12: The storage PoC sources, Causal package/component, and
+`follows_incremental_sources` are restored. The incident test has an explicit
+`#[ignore]`. Its workload, assertions, and timeouts are unchanged. The collector
+helper is available only to tests and the existing `test-fixtures` feature.
+Default Causal installation and its default Definition remain disabled.
+The ignored body still requires a default instance. It needs deliberate test
+setup and valid collector inputs before execution. Earlier measurements below
+use synthetic inputs and do not prove physical incident detection.
+
+Restoration result: **Done** for source recovery and test disablement. The
+release compile checks pass for `mithril-e2e --lib --tests` and the
+`araphor-graph` `storage_poc` example with `native-store`. The restored incident
+body is ignored. No incident, benchmark, full CI, or engine timing run was made.
+Read `output/araphor-source-restoration-20261112` for the compile logs. The
+standalone Neon and CDC targets were restored but were not compiled in this
+check. Their previous results remain historical.
 
 The retained [Query Graph fixture](../../crates/araphor-query/tests/native_execution/graph.rs)
 uses numeric context revisions and the test-only
@@ -17,8 +26,8 @@ rollback, consumed progress, prior-result, delta, version, and reopen assertions
 All 14 generic Query cases pass. Only the removed Causal descriptor test is
 retired. This result does not qualify incident detection or notification latency.
 
-Source removal result: **Done** for the 2026-11-12 request. The release checks
-pass for the Control and E2E libraries. The focused targets pass 14 Query cases,
+Historical removal checks for `319028a7a`: the release checks passed for the
+Control and E2E libraries. The focused targets passed 14 Query cases,
 14 native Graph cases, six component-build cases, and four SDK component cases.
 Read the command results under `output/araphor-speculative-removal-20261112`.
 Full CI and the Data-only test targets were not run for this removal. The broader

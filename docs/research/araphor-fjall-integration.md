@@ -1,12 +1,13 @@
 # Replace DuckDB with versioned Fjall
 
-Removal, 2026-11-12: The synthetic incident and its collector, `HF-CAUSAL-001`,
-component, default Definition, and runnable storage PoC are removed at the user's
-request. The inputs supplied credential and remote-action links that the current
-collectors cannot observe. The removed test is not a passing qualification.
-Earlier measurements below describe synthetic inputs, not an observed incident.
-No replacement detector or benchmark is added. Raw evidence collection and the
-generic Graph, DataFusion, and storage owners remain.
+Restoration, 2026-11-12: The storage PoC sources, Causal package/component, and
+`follows_incremental_sources` are restored. The incident test has an explicit
+`#[ignore]`. Its workload, assertions, and timeouts are unchanged. The collector
+helper is available only to tests and the existing `test-fixtures` feature.
+Default Causal installation and its default Definition remain disabled.
+The ignored body still requires a default instance. It needs deliberate test
+setup and valid collector inputs before execution. Earlier measurements below
+use synthetic inputs and do not prove physical incident detection.
 
 ## Intended end state
 
@@ -29,7 +30,7 @@ or Graph knowledge.
 
 The performance goals remain notification creation below 100 milliseconds and
 the requested 100-fold improvement. Neither result follows from engine selection.
-The removed synthetic incident cannot qualify these goals. A valid observed
+The ignored synthetic incident cannot qualify these goals. A valid observed
 workload and its measurement boundary require user agreement before new work.
 
 ## Storage quota removal, 2026-11-10
@@ -67,8 +68,8 @@ Result: **Not done for the complete replacement and performance proof**.
 The current source uses the native Data owner through the public storage API.
 The connected replacement removes the SQL Data owner, SQL Graph backend,
 caller backend switches, DuckDB dependencies, and vendored DuckDB code.
-The default production release build passed. The synthetic incident was removed
-on 2026-11-12 and is not current qualification. Reference-safe
+The default production release build passed. The synthetic incident is restored
+and ignored. It is not current qualification. Reference-safe
 history maintenance is qualified below. SQL-only fixture ports and complete
 migration qualification remain open.
 
@@ -80,7 +81,7 @@ migration qualification remain open.
 | Subscription and execution | Ordinary Query resumes from its saved original-log position. Partial ordinals replay the same original commit. Fourteen generic native Query cases pass. Six native input cases passed at the earlier qualification. Keep retained native DataFusion plans and durable managed consumption. Complete production qualification and obsolete fixture ports remain open. |
 | Original journal collection | Checkpoint saves safe filtered positions and releases eligible sealed journals. All durable generations, the published cut, and the shared reader protect their anchors. Removed and dormant generations remain revivable. Data advances its owned native history policy only past unreferenced cuts. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Historical synthetic performance | The removed fixture measured durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
+| Historical synthetic performance | The ignored fixture measured durable creation at 43.115–86.277 ms, a 6.6–8.9-fold gain against matched DuckDB. The combined Causal draft regresses after bulk input and is now unapplied. Restored package source with grouped native pins has no separate timing result. The 100-fold target is not met. |
 
 Remaining functional work:
 

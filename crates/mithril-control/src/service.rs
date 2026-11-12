@@ -1,5 +1,8 @@
 #![allow(clippy::result_large_err)]
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) mod causal;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     pin::Pin,
