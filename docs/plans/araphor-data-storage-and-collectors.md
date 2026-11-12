@@ -2,7 +2,8 @@
 
 Investigate each item in order. This file keeps the findings and approval
 boundary for each item. It can accept more numbered items. The current request
-authorizes investigation of item 1 only. No implementation is approved.
+authorizes item 1. The user then explicitly required benchmark development
+and execution. Production replacement and items 2 and 3 are not approved.
 
 ## Intended end state
 
@@ -13,7 +14,7 @@ and the versioned Fjall fork. A storage choice requires matched results.
 
 | Item | Request | Current state |
 | --- | --- | --- |
-| 1 | Compare raw log segments with Fjall | Source and evidence review complete. Direct comparison not measured. Benchmark proposal awaits approval. |
+| 1 | Compare raw log segments with Fjall | Matched raw-storage pilot complete: 16 final process runs. Production replacement and sustained compaction remain unqualified. |
 | 2 | Define the abstraction for tables on Fjall | Deferred. No API or implementation proposed. |
 | 3 | Define how to add collectors | Deferred. Inventory collectors before confirming whether only BPF intake exists. |
 
@@ -23,6 +24,28 @@ and the versioned Fjall fork. A storage choice requires matched results.
 Fjall means the local versioned Fjall/lsm-tree forks used by production Data.
 This item concerns raw payload placement. Graph and ordinary metadata already
 use Fjall. This investigation does not select a table API for item 2.
+
+### Measured pilot, 2026-11-12
+
+The user explicitly required implementation and execution of the benchmark.
+The [measured record](../research/results/araphor-raw-storage-2026-11-12.md)
+contains the source route, exact conditions, samples, environment, and limits.
+
+Four alternating pairs ran at each existing dataset size. All 16 final process
+runs pass byte/cursor checks, retained-cut reads, owner reopen, saved positions in
+original logs, and continued replay. At 262,144 records, median write rates
+are 210,646 records/s for segments and 373,741 for Fjall. Pooled append p95 is
+1.264 versus 0.737 ms per 256-record batch. Paged-read rates are 5,572,239 versus
+4,920,938 records/s. Allocated space after forced maintenance is 36.40 versus
+52.96 MiB. These are pilot measurements, not complete Data replacement proof.
+
+The implemented fixture compares RawJournal directly with a versioned Fjall
+branch. Both use the same RawCommit codec and in-memory range index. The
+candidate persists entry metadata and receipts with its payload. The pilot
+covers disjoint contiguous inputs. It does not implement overlapping retry,
+expiry/witness parity, killed-process recovery, or sustained natural compaction.
+Reopen integrity work differs and is stated in the record. The later proposal
+below retains the wider qualification work as unimplemented scope.
 
 ### Current event flow
 
@@ -95,15 +118,17 @@ durability of a new directory entry; see
   compares Graph workloads and explicitly excludes raw ingestion. Its timings
   cannot be reused as raw-event storage timings.
 
-**Result:** no matched current raw-segment-versus-Fjall measurement was found
-in the reviewed sources and records. Neither backend has an established speed
-advantage for this workload. No latency, throughput, or speedup figure is inferred.
+**Initial review result:** no matched current raw-segment-versus-Fjall result
+was found in those earlier sources. The new measured pilot above supplies the
+first comparison in this investigation. No performance is inferred from the
+older DuckDB or Graph workloads.
 
-### Proposed measurement, pending approval
+### Measurement design and remaining qualification
 
-Implement an isolated benchmark after user approval. Reuse the existing raw
-harness's record generator and correctness checks. Keep its production baseline
-unchanged. Add an experimental Fjall payload condition in temporary storage.
+The approved pilot implements the shared codec, raw/Fjall backends, and runner
+under the existing `test-fixtures` feature. It reuses the raw harness record
+shape and uses temporary storage. The wider checks below remain necessary
+before production replacement.
 Do not replace production storage or copy live payloads into a second archive.
 
 The benchmark belongs with `araphor-data`. The first candidate stores one newly
@@ -128,18 +153,17 @@ spans. This is an experiment layout, not the production table abstraction.
 | Full owner cost | Report native metadata anchoring/checkpoint separately from raw acceptance. Raw-only segment writes currently do not commit Fjall; a bare Fjall put cannot stand in for all Data work. |
 
 Run release binaries in separate processes on the same device and filesystem.
-For each of the two core dataset sizes, propose four pairs with orders AB, BA,
+For each of the two core dataset sizes, the pilot ran four pairs with orders AB, BA,
 AB, BA: 16 finite process runs in total. Record the binary/source identities,
 engine settings, prepared input bytes, page/cache conditions, and actual elapsed time.
 Run without concurrent builds or benchmarks. Report median, p95, p99, maximum,
 throughput, CPU, peak memory, logical/allocated bytes, and maintenance work.
 Retain samples rather than only rounded summaries.
 
-Runtime is not measured. The plan sets no invented elapsed-time estimate or
-performance threshold. The core runs stop after their declared inputs and read
+The pilot runtime and process resource samples are in the measured record.
+The plan sets no invented elapsed-time estimate or performance threshold. The core runs stop after their declared inputs and read
 checks. The retained counts are benchmark datasets, not production quotas.
-Agree a pilot wall-time budget and its stop behavior before adding or running
-the benchmark. The current plan does not invent that budget. A sustained
+The user required the finite pilot to run. A sustained
 compaction extension needs a concrete run size/runtime proposal based on that
 pilot. Do not keep growing a database without an approved stop
 condition. If compaction is not exercised, mark that coverage **Not done**.
@@ -154,15 +178,15 @@ test workload, assertion, or timeout changes. The ignored incident stays ignored
 
 ### Recommendation and approval boundary
 
-Keep the current hybrid owner while the comparison is unmeasured. First approve
-the batch-shaped experiment above. A per-record Fjall layout is a separate
+Keep the current production owner until the user approves a replacement. The
+batch-shaped pilot above is measured. A per-record Fjall layout is a separate
 experiment if the batch results leave selective-read cost unresolved. Do not
 select a replacement from the old DuckDB or Graph PoC numbers.
 
-The source/evidence investigation is **Done**. The direct performance comparison
-and production storage decision are **Not done**. User approval is required
-before benchmark code or production changes. Approval of a benchmark does not
-approve storage migration or items 2 and 3.
+The source/evidence investigation and bounded matched pilot are **Done**.
+Complete performance/recovery/retention qualification and the production storage
+decision are **Not done**. Benchmark authorization does not approve production
+migration or items 2 and 3. No full CI or ignored incident run was made.
 
 ### Source reading route
 

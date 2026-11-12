@@ -52,5 +52,9 @@ prost-build.workspace = true
 flatbuffers = "=25.12.19"
 tempfile = "3.23.0"
 
+[[example]]
+name = "raw_storage_bench"
+required-features = ["test-fixtures"]
+
 [lints]
 workspace = true

@@ -22,9 +22,9 @@ master plan invented for them.
 ## Proposed Master Plans
 
 - [Data storage and collector investigations](araphor-data-storage-and-collectors.md)
-  records the ordered user requests. Item 1 reviews raw segments against Fjall;
-  matched performance measurements and implementation await approval. Table
-  abstraction and collector registration remain deferred.
+  records the ordered user requests. Item 1 has a measured 16-process raw
+  segments/Fjall pilot and a reproducible benchmark. Production replacement,
+  table abstraction, and collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL
   owners and dependencies with one connected native owner. The matched

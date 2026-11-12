@@ -25,6 +25,9 @@ mod packages;
 mod progress;
 mod quota;
 mod raw;
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod raw_benchmark;
 
 mod raw_segments;
 mod read;
