@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 151 diagnostics.
+  The last unit compilation reports 134 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,48 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- The metadata fixture family uses current native owners. Two public cases
+  replace the removed dependency-revision polling API. Generation, lifecycle,
+  completion, and foreign scope keep their exact errors through managed
+  Metadata capture. Pending work keeps the exact `Incomplete / managed pending
+  attempt` error through `managed_resume`; native capture can prepare concurrent
+  attempts and is not a pending-work health API.
+
+  The payload case changes exactly two native `U` checkpoint records and
+  preserves all `X` metadata bytes. Resume, ordinary subscription metadata,
+  and exact context Metadata point reads still work. Real managed capture
+  requires `ManagedDecoding`. Broad and projected metadata reads return the
+  same saved fresh Data metadata without rows or witnesses. The context
+  reference keeps its original commit revision and the zero-key limit still
+  rejects that selected key. Outputs 2 and 3 and frontier cursor 1 remain.
+
+  The old global dependency scalar is replaced by actual original-log
+  subscriptions. Registration before the context commit and replay from that
+  saved view both report exactly `(context_revision, MAX)`. Package publication
+  and checkpoint corruption do not advance that matching position. The later
+  actual Data cut can advance; subsequent reads preserve it. No scalar poll,
+  timer, hash, compatibility API, or production change is added.
+
+  The private witness case remains beside its owner. Both deadlines 100 and
+  300, reverse order, four captured witnesses, two zero-expiry placeholders,
+  exact context references, minimum expiry, strict order, all result references,
+  identical saved attempt bytes, changed-expiry conflict, and reopen remain.
+  Metadata extraction replaces the old evidence helper. Native grouped RAW
+  intervals and reverse SEGMENT references replace SQL physical rows.
+  This private case has no compilation diagnostic but remains unexecuted and
+  unqualified, with the two private Capture cases, while Data unit compilation
+  fails with 134 diagnostics, down from 151.
+
+  Both focused cases pass in 0.03 seconds. With final fresh-metadata and broad
+  scope assertions, all 224 native managed integration cases pass in
+  11.54 seconds. Changed Rust formatting and whitespace checks pass. Read
+  `native-metadata-focused.log`, `native-metadata-qualified.log`, and
+  `native-metadata-unit.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native metadata owner qualification and SQL metadata
+  fixture retirement; Not done for private witness and Capture qualification
+  or complete migration**. No incident timing comparison or full CI is included.
 
 - Saved-result scope and provenance now use the existing native fixture.
   It keeps output values 7 and 3, raw cursor 1, expiry 100, and the exact

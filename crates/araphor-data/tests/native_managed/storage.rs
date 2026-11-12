@@ -12,6 +12,8 @@ mod calls;
 mod control;
 #[path = "storage/guards.rs"]
 mod guards;
+#[path = "storage/metadata.rs"]
+mod metadata;
 #[path = "storage/output.rs"]
 mod output;
 #[path = "storage/replay.rs"]

@@ -4,6 +4,32 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native metadata owner cases](../../crates/araphor-data/tests/native_managed/storage/metadata.rs)
+with [managed resume](../../crates/araphor-data/src/analysis/native/managed/status.rs),
+[managed capture](../../crates/araphor-data/src/analysis/native/managed/capture.rs),
+[metadata extraction](../../crates/araphor-data/src/analysis/native/extraction/mod.rs),
+and [original-log registration](../../crates/araphor-data/src/analysis/native/inputs.rs).
+The cases keep exact generation, pending, completion, and scope errors at their
+current owners. Exactly two `U` checkpoint faults leave `X` metadata intact.
+Resume and metadata point reads skip those payloads; execution capture rejects
+them. Broad and projected health reads preserve the same fresh Data metadata.
+The original context revision, 2 and 3 checkpoints, cursor 1, and selected-key
+limit remain. Both original and replayed subscriptions keep the exact matching
+context position through unrelated publication and checkpoint commits.
+
+Read the [private witness normalization case](../../crates/araphor-data/src/analysis/managed/tests/metadata.rs)
+for both deadlines, literal witness counts, reversal, normalization, exact
+attempt bytes, conflict, and reopen assertions. Native interval and reverse
+references replace SQL rows; exact result Metadata extraction replaces the
+old evidence helper. This case and the two private Capture units remain
+unexecuted and unqualified while Data unit compilation fails with 134
+diagnostics. The remaining private metadata source has no compilation error.
+
+All 224 native managed integration cases pass. No production API or polling
+path is added. Read `native-metadata-*` under
+`output/araphor-fjall-migration-20261110`. Complete qualification and incident
+performance remain open.
+
 Read [native Saved provenance](../../crates/araphor-data/tests/native_managed/storage/guards/current/origins.rs)
 and [historical Saved scope](../../crates/araphor-data/tests/native_managed/storage/guards/current/scope.rs)
 with the [Saved fixture](../../crates/araphor-data/tests/native_managed/storage/guards/current.rs),
