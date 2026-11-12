@@ -4,6 +4,30 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native current-input cases](../../crates/araphor-data/tests/native_managed/storage/guards/current.rs)
+with the [native guard inventory](../../crates/araphor-data/tests/native_managed/storage/guards.rs).
+The saved fixture retains the original event, context, 7 and 3 output values,
+and expiry 100. Source changes preserve the exact historical result and reject
+stale registration and publication. Trace membership uses the public extraction
+receipt. Revocation rejects before the caller guard. Native source guards
+return `AnalysisSourceChanged` before the trace authority check. Real raw
+truncation returns the exact native incomplete-witness error. Restored bytes
+permit the same attempt to publish. Guard snapshots compare native reference
+bytes and original journal cursors within one store.
+
+The first Graph publication uses the existing package fixture and native
+transaction. Empty selected and unselected captures keep no deadline. Only
+the selected capture becomes stale. Fresh reads require one manifest, deadline
+2000, and the exact receipt reference. Captures use projected native scopes;
+the caller hydrates only the known retained parameters. No archive is added.
+All six focused guard cases and all 212 native managed integration cases pass.
+The production library check without default features, changed Rust formatting,
+and whitespace checks pass. Data unit compilation still reports 190 diagnostics.
+The four old case bodies are removed; nine Follow cases and their shared SQL
+helper remain open. Read `native-current-guards-*` under
+`output/araphor-fjall-migration-20261110`. Complete qualification and incident
+performance remain open.
+
 Read the [native corruption and crash cases](../../crates/araphor-data/tests/native_managed/storage/control/recovery.rs)
 with [managed publication](../../crates/araphor-data/src/analysis/native/managed/commit.rs)
 and [prior hydration](../../crates/araphor-data/src/analysis/managed/model.rs).

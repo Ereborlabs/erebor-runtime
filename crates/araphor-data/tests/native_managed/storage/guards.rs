@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "guards/current.rs"]
+mod current;
+
 #[test]
 fn managed_images_reject_forged_implementation_pin() -> TestResult {
     let directory = tempfile::tempdir()?;
@@ -124,6 +127,8 @@ struct GuardCut {
     history: Vec<ManagedReceipt>,
     states: BTreeMap<Vec<u8>, Vec<u8>>,
     counts: [u64; 8],
+    references: BTreeMap<Vec<u8>, Vec<u8>>,
+    journal: Option<fjall::Cursor>,
 }
 
 impl GuardCut {
@@ -177,6 +182,8 @@ impl GuardCut {
             )?,
             states,
             counts,
+            references: records(&view, b"\0data/ref/")?,
+            journal: store.database().inner().journal_head()?,
         })
     }
 }

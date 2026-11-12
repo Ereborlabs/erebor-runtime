@@ -327,7 +327,7 @@ pub(super) fn commit_named(
     commit_named_expiry(store, model, observation, step, None, name, None)
 }
 
-fn commit_named_expiry(
+pub(super) fn commit_named_expiry(
     store: &NativeStore,
     model: &sdk::Model,
     observation: &algorithm::Observation,

@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 194 diagnostics.
+  The last unit compilation reports 190 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,47 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Four current-input cases now use native storage. The saved fixture keeps
+  raw cursor 1, the `saved-input` context with body `{}`, output values 7 and 3,
+  and witness expiry 100. Public captures request the original event cursor,
+  context metadata, and trace metadata. The caller supplies the known parameter
+  batches through the existing prior hydration API. No parameter archive is
+  added. Native guard snapshots now include exact reference bytes and the
+  original journal cursor. Independent stores do not compare physical cursors.
+
+  A later source event rejects stale registration and publication while it
+  keeps the prior call context, result, source, receipt, and history. Trace
+  revocation retains exact captured trace membership and rejects before the
+  caller guard runs. Its exact native error is `AnalysisSourceChanged` because
+  the source guard runs before trace authorization. Real segment truncation
+  rejects registration and publication with `Incomplete / witness segment is
+  truncated`. Restoring the same bytes permits the original attempt to commit.
+
+  A real package-owned Graph publication replaces the removed GraphRows fixture.
+  The case keeps selected and unselected captures. Empty captures have no rows
+  or deadline. The first Graph publication invalidates only the selected capture;
+  the unselected case still commits. A fresh selected capture reads one manifest,
+  deadline 2000, and the exact native receipt reference. The Graph capture uses
+  the required projected scope and the same caller-side parameter hydration.
+  A visibility change makes the existing Graph state helper available to
+  sibling tests.
+  No production guard, API, or Graph analysis rule changes.
+
+  The focused native guard run passes six cases in 0.22 seconds. After final
+  caller preparation and old case removal, all 212 native managed integration
+  cases pass in 9.09 seconds. Data unit compilation reports 190 diagnostics,
+  down from 194, and still does not compile or run. Changed Rust formatting,
+  whitespace, and the release library check without default features pass.
+  Read `native-current-guards-focused.log`, `native-current-guards-contracts.log`,
+  `native-current-guards-qualified.log`, `native-current-guards-unit.log`, and
+  `native-current-guards-default.log` under
+  `output/araphor-fjall-migration-20261110`.
+  The four old case bodies are removed. The nine Follow cases and their shared
+  SQL snapshot helper remain open; they are not covered by these four ports.
+  Result: **Done for native current-input guard qualification;
+  Not done for the remaining Follow ports and complete migration**.
+  No incident timing comparison or full CI is run.
 
 - Native managed recovery now replaces the two SQL corruption and crash cases.
   The four fault classes remain: invalid call body, checkpoint version, both
