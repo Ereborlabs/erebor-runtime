@@ -88,6 +88,27 @@ Complete these items before more incident latency experiments.
 
 Current evidence:
 
+- Nested SQL package inputs now keep captured parent metadata when native
+  optimization removes the parent's physical scan. The receipt owner still
+  uses qualified read metadata first. Its existing fallback reads only a
+  declared logical parent's captured input. It no longer skips that fallback
+  when the physical plan has no scan. Missing bindings still supply no metadata.
+  Identity forwarding, row and schema checks, source bounds, and receipt
+  encoding remain unchanged. The fix removes five lines and adds no API,
+  source read, archive, or retained state.
+
+  All 11 unchanged focused cases pass in 0.22 seconds. They cover elided body
+  metadata, ordinary body metadata, nested origins and unused ports, binding
+  cuts and retries, missing binding contracts, and metadata memory charges.
+  The release library check without default features passes in 25.50 seconds.
+  Changed Rust formatting and whitespace checks pass. Read
+  `native-parent-metadata-focused.log` and `native-parent-metadata-default.log`
+  under `output/araphor-fjall-migration-20261110`.
+  The last complete Query run below precedes this fix; it still records the
+  body metadata failure. No new complete run or incident comparison is made.
+  Result: **Done for captured parent metadata after scan elision;
+  Not done for complete Query qualification and complete migration**.
+
 - The incremental aggregate Kernel now returns its validated committed input
   position. It previously returned `(0, 0)` after it advanced its internal
   frontier. Runtime therefore could leave the consumed position behind the

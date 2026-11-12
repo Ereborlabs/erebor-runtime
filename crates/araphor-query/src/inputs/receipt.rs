@@ -192,11 +192,6 @@ impl Inputs {
         let snapshot = source.snapshot().context(SqlSnafu)?;
         let mut bound = Vec::new();
         for origin in &port.origins {
-            if matches!(origin, SourceOrigin::Port(id) if !bounds.ports.contains(id)
-                && !bounds.qualified.contains_key(id))
-            {
-                continue;
-            }
             if let SourceOrigin::Port(id) = origin {
                 if let Some(reads) = bounds.qualified.get(id) {
                     for read in reads {

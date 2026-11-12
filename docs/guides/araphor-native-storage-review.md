@@ -4,6 +4,20 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read [input receipts](../../crates/araphor-query/src/inputs/receipt.rs) with
+[SQL input binding](../../crates/araphor-query/src/definition/physical/sql.rs)
+and [captured metadata](../../crates/araphor-query/src/sources/rows/package.rs).
+SQL binds the evaluated parent Input before body execution. After native scan
+elision, receipt construction still consults that declared parent's captured
+metadata. Qualified read metadata keeps priority. Missing bindings, identity
+forwarding, exact row and schema checks, source bounds, and receipt encoding
+keep their existing behavior. No input rows are read again.
+All 11 unchanged focused metadata, origin, binding, and memory cases pass.
+The production library check without default features, changed Rust formatting,
+and whitespace checks pass. Read `native-parent-metadata-*` under
+`output/araphor-fjall-migration-20261110`. No complete Query run or incident
+comparison follows this fix yet.
+
 Read the [incremental Kernel](../../crates/araphor-query/src/stream/physical/kernel.rs),
 its [position cases](../../crates/araphor-query/src/stream/physical/kernel/tests.rs),
 and the [public cursor cases](../../crates/araphor-query/src/follow/tests/runtime.rs)
