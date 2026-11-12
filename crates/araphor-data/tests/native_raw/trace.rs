@@ -31,7 +31,7 @@ fn stored_receipt(store: &NativeStore) -> TraceResult<(Vec<u8>, TraceOutputRecei
     Ok((key.to_vec(), rmp_serde::from_slice(&bytes[1..])?))
 }
 
-fn trace_intent() -> araphor_data::Result<araphor_data::TraceIntentV1> {
+pub(super) fn trace_intent() -> araphor_data::Result<araphor_data::TraceIntentV1> {
     let source = araphor_data::TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
     Ok(araphor_data::TraceIntentV1 {
         tenant_id: [1; 16],

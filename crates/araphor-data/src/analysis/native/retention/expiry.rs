@@ -1,11 +1,17 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::super::{records::Records, DataView, NativeStore};
 use crate::analysis::raw::{RawEntry, RawIdentity, RawIndex, RawJournal, RawKind, RawReceipt};
-use crate :: { AnalysisSourceReceiptV1 , NativeStateSnafu , NativeStorageSnafu , Result , TraceOutputReceiptV1 } ;
+use crate::{
+    AnalysisSourceReceiptV1, NativeStateSnafu, NativeStorageSnafu, Result, TraceOutputReceiptV1,
+};
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct ExpiredSegment {
@@ -26,7 +32,10 @@ impl ExpiredSegment {
         [prefix, &id.to_be_bytes()].concat()
     }
 
-    pub(in crate::analysis::native) fn read(snapshot: &fjall::BranchSnapshot, id: u64) -> Result<Self> {
+    pub(in crate::analysis::native) fn read(
+        snapshot: &fjall::BranchSnapshot,
+        id: u64,
+    ) -> Result<Self> {
         Self::read_charged(snapshot, id, &mut |_| Ok(()))
     }
 
@@ -36,8 +45,8 @@ impl ExpiredSegment {
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Self> {
         let key = Self::key(Self::PREFIX, id);
-        let bytes =
-            Records::charged_payload(&key, |key| Records::read(key, snapshot), charge)?.ok_or_else(|| {
+        let bytes = Records::charged_payload(&key, |key| Records::read(key, snapshot), charge)?
+            .ok_or_else(|| {
                 NativeStateSnafu {
                     field: "expired segment authority",
                 }
@@ -47,7 +56,10 @@ impl ExpiredSegment {
         record.check(id)?;
         let head = NativeStore::number(&NativeStore::required(snapshot, super::super::HEAD)?)?;
         if record.revision > head {
-            return NativeStateSnafu { field: "expired segment revision" }.fail();
+            return NativeStateSnafu {
+                field: "expired segment revision",
+            }
+            .fail();
         }
         Ok(record)
     }
@@ -72,8 +84,16 @@ impl ExpiredSegment {
                 || entry.frame_bytes < 8
                 || Some(entry.reference.offset) != end.checked_add(entry.frame_bytes as u64)
                 || entry.body_start < end
-                || entry.body_start.checked_add(entry.body_bytes as u64).is_none_or(|end| end > entry.reference.offset)
-                || entry.reference.offset.checked_sub(4).and_then(|end| end.checked_sub(entry.body_bytes as u64)) != Some(entry.body_start)
+                || entry
+                    .body_start
+                    .checked_add(entry.body_bytes as u64)
+                    .is_none_or(|end| end > entry.reference.offset)
+                || entry
+                    .reference
+                    .offset
+                    .checked_sub(4)
+                    .and_then(|end| end.checked_sub(entry.body_bytes as u64))
+                    != Some(entry.body_start)
             {
                 return NativeStateSnafu {
                     field: "expired original commit metadata",
@@ -117,7 +137,7 @@ impl ExpiredSegment {
         Ok(())
     }
 
-    pub(super) fn unlink(&self, root: &Path) -> Result<()> {
+    fn file(&self, root: &Path) -> Result<Option<PathBuf>> {
         self.check(self.id)?;
         let kind = if self.entries[0].identity.evidence().is_some() {
             "r"
@@ -132,44 +152,100 @@ impl ExpiredSegment {
                 let file = crate::analysis::SegmentFile::reader(&path)?;
                 let header = crate::analysis::SegmentFile::encode_raw(&self.entries[0].identity)?;
                 if file.read(0, header.len())? != header {
-                    return crate::Error::reject_path(&path, "the deleting segment identity differs from its authority");
+                    return crate::Error::reject_path(
+                        &path,
+                        "the deleting segment identity differs from its authority",
+                    );
                 }
                 for entry in &self.entries {
-                    let commit = crate::analysis::raw::RawCommit::read(&file,
-                        entry.reference.offset - entry.frame_bytes as u64, entry.frame_bytes)?;
+                    let commit = crate::analysis::raw::RawCommit::read(
+                        &file,
+                        entry.reference.offset - entry.frame_bytes as u64,
+                        entry.frame_bytes,
+                    )?;
                     if commit.revision != entry.commit.revision
                         || commit.kind.as_ref() != Some(&entry.commit.kind)
                         || commit.intake != entry.commit.intake
-                        || commit.spans.iter().map(crate::analysis::raw::RawRange::from).collect::<Vec<_>>() != entry.commit.spans
-                        || commit.body.len() != entry.body_bytes {
-                        return crate::Error::reject_path(&path, "the deleting segment commits differ from their authority");
+                        || commit
+                            .spans
+                            .iter()
+                            .map(crate::analysis::raw::RawRange::from)
+                            .collect::<Vec<_>>()
+                            != entry.commit.spans
+                        || commit.body.len() != entry.body_bytes
+                    {
+                        return crate::Error::reject_path(
+                            &path,
+                            "the deleting segment commits differ from their authority",
+                        );
                     }
-                    if matches!(&entry.commit.kind, RawKind::Diagnostic(progress) if progress.terminal) {
-                        let terminal = commit.records().last().ok_or_else(|| NativeStateSnafu { field: "expired trace terminal" }.build())?.1;
-                        let crate::analysis::raw::TracePayload::Terminal(bytes) = crate::analysis::raw::TraceRecord::read(terminal, root)? else {
-                            return NativeStateSnafu { field: "expired trace terminal" }.fail();
+                    if matches!(&entry.commit.kind, RawKind::Diagnostic(progress) if progress.terminal)
+                    {
+                        let terminal = commit
+                            .records()
+                            .last()
+                            .ok_or_else(|| {
+                                NativeStateSnafu {
+                                    field: "expired trace terminal",
+                                }
+                                .build()
+                            })?
+                            .1;
+                        let crate::analysis::raw::TracePayload::Terminal(bytes) =
+                            crate::analysis::raw::TraceRecord::read(terminal, root)?
+                        else {
+                            return NativeStateSnafu {
+                                field: "expired trace terminal",
+                            }
+                            .fail();
                         };
-                        if Some(crate::analysis::raw::TraceRecord::terminal(&bytes, root)?) != self.terminal {
-                            return NativeStateSnafu { field: "expired trace terminal" }.fail();
+                        if Some(crate::analysis::raw::TraceRecord::terminal(&bytes, root)?)
+                            != self.terminal
+                        {
+                            return NativeStateSnafu {
+                                field: "expired trace terminal",
+                            }
+                            .fail();
                         }
                     }
                 }
-                fs::remove_file(&path).context(crate::IoSnafu { path: &path })
+                Ok(Some(path))
             }
             Ok(_) => {
                 crate::Error::reject_path(&path, "the deleting segment differs from its authority")
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(source) => Err(source).context(crate::IoSnafu { path }),
         }
+    }
+
+    pub(super) fn remove_files(
+        root: &Path,
+        records: impl IntoIterator<Item = Result<Self>>,
+    ) -> Result<Vec<u64>> {
+        let mut completed = Vec::new();
+        let mut paths = Vec::new();
+        for record in records {
+            let record = record?;
+            if let Some(path) = record.file(root)? {
+                paths.push(path);
+            }
+            completed.push(record.id);
+        }
+        for path in paths {
+            fs::remove_file(&path).context(crate::IoSnafu { path: &path })?;
+        }
+        if !completed.is_empty() {
+            Self::sync(root)?;
+        }
+        Ok(completed)
     }
 
     pub(in crate::analysis::native) fn finish_files(
         root: &Path,
         snapshot: &fjall::BranchSnapshot,
     ) -> Result<Vec<u64>> {
-        let mut completed = Vec::new();
-        for row in snapshot.prefix(Self::DELETING) {
+        let records = snapshot.prefix(Self::DELETING).map(|row| {
             let (key, value) = row.context(NativeStorageSnafu {
                 operation: "recover segment deletion",
             })?;
@@ -187,13 +263,9 @@ impl ExpiredSegment {
                 }
                 .fail();
             }
-            record.unlink(root)?;
-            completed.push(id);
-        }
-        if !completed.is_empty() {
-            Self::sync(root)?;
-        }
-        Ok(completed)
+            Ok(record)
+        });
+        Self::remove_files(root, records)
     }
 
     pub(super) fn sync(root: &Path) -> Result<()> {
@@ -237,9 +309,13 @@ impl ExpiredSegment {
                 }
                 .fail();
             }
-            expired.insert_mut(id, crate::analysis::raw::RawExpiry {
-                revision: record.revision, identity: record.entries[0].identity.clone(),
-            });
+            expired.insert_mut(
+                id,
+                crate::analysis::raw::RawExpiry {
+                    revision: record.revision,
+                    identity: record.entries[0].identity.clone(),
+                },
+            );
             for entry in record.entries {
                 let terminal = match &entry.commit.kind {
                     RawKind::Diagnostic(progress) if progress.terminal => record.terminal.clone(),
@@ -383,17 +459,30 @@ impl DataView {
         key.starts_with(ExpiredSegment::PREFIX) && key.len() == ExpiredSegment::PREFIX.len() + 8
     }
 
-    pub(in crate::analysis::native) fn input_expiry(&self, key: &[u8], readers: &crate::analysis::inputs::InputChanges, position: crate::StorePositionV1) -> Result<()> {
+    pub(in crate::analysis::native) fn input_expiry(
+        &self,
+        key: &[u8],
+        readers: &crate::analysis::inputs::InputChanges,
+        position: crate::StorePositionV1,
+    ) -> Result<()> {
         let id = NativeStore::number(&key[ExpiredSegment::PREFIX.len()..])?;
         let record = ExpiredSegment::read(&self.snapshot, id)?;
-        if record.revision != position.commit_revision || record.revision != self.metadata_revision {
-            return NativeStateSnafu { field: "input expiry revision" }.fail();
+        if record.revision != position.commit_revision || record.revision != self.metadata_revision
+        {
+            return NativeStateSnafu {
+                field: "input expiry revision",
+            }
+            .fail();
         }
         for entry in &record.entries {
             for span in &entry.commit.spans {
-                readers.publish(position, crate::analysis::inputs::InputChange::Removal {
-                    identity: &entry.identity, range: Some((span.first, span.last, Some(entry.commit.intake))),
-                });
+                readers.publish(
+                    position,
+                    crate::analysis::inputs::InputChange::Removal {
+                        identity: &entry.identity,
+                        range: Some((span.first, span.last, Some(entry.commit.intake))),
+                    },
+                );
             }
         }
         Ok(())

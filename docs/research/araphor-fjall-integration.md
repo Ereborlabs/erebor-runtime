@@ -75,7 +75,7 @@ remain open.
 Remaining functional work:
 
 - Port the remaining Data unit fixtures and remove their SQL-only helpers.
-  The last unit compilation reports 116 diagnostics.
+  The last unit compilation reports 111 diagnostics.
 - Resolve the remaining Query contracts. The last complete run has 14
   failures; the managed capture family passes.
 - Complete retained-history collection and recovery qualification. Native
@@ -88,6 +88,44 @@ Remaining functional work:
 Complete these items before more incident latency experiments.
 
 Current evidence:
+
+- Four segment fixtures now use the native storage owner. The cases keep
+  ownership and tail recovery, missing and damaged files, complete deletion
+  authority, witness retention, exact payloads, and reopen checks. All four
+  old SQL cases are removed.
+
+  The deletion baseline finds a production error: recovery removes the first
+  valid file before it rejects incomplete authority for the second file.
+  Native retention and recovery now use one shared operation. The operation
+  checks the complete deletion batch before it removes any file. A later
+  authority or file error preserves both files and their exact bytes. A real
+  unlink or directory-sync error can still leave partial deletion. Durable
+  deletion markers permit recovery to retry that operation.
+
+  The missing-file baseline finds a second production error: a raw-only
+  checkpoint does not save the required segment ends. Checkpoint now anchors
+  committed raw progress through the existing Data transaction before it
+  seals and flushes storage. The transaction keeps the same writer lock.
+  The checkpoint creates exactly one Data revision when raw progress needs an
+  anchor. Evidence positions, trace ordinal zero, receipts, and matching CDC
+  positions stay unchanged. A repeated clean checkpoint changes neither the
+  Data revision nor the native journal head. Backup and restore keep the
+  anchored metadata and original historical records.
+
+  The six connected targets pass 284 cases: native backup 8, inputs 6,
+  lifecycle 8, managed 224, raw 35, and raw index 3. The Data unit target still
+  fails to compile with 111 diagnostics, down from 116. The segment source
+  has no compilation diagnostic. All 15 native Query cases pass in 7.30 seconds.
+  The default-feature Data and Query production libraries pass the release
+  check. Changed Rust formatting and scoped whitespace checks pass.
+  Read `native-segments-baseline.log`,
+  `native-segments-checkpoint-baseline.log`, `native-segments-qualified.log`,
+  `native-segments-unit.log`, `native-segments-query.log`, and
+  `native-segments-production.log` under
+  `output/araphor-fjall-migration-20261110`.
+  Result: **Done for native segment fixture retirement and the two storage
+  corrections; Not done for complete migration or the performance proof**.
+  No incident timing experiment or full CI is included.
 
 - All ten raw fixture cases have native owner mappings. Five public cases
   run under `native_raw/trace`: raw trace recovery, empty terminal recovery,

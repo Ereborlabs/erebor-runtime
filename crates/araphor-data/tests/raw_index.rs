@@ -306,12 +306,18 @@ fn metadata_position_resume() -> TestResult {
     );
     let before = store.meta()?;
     store.checkpoint()?;
-    assert_eq!(store.meta()?, before);
+    let mut anchored = before.clone();
+    anchored.commit_revision += 1;
+    assert_eq!(store.meta()?, anchored);
+    assert_eq!(store.read_page(&source, 1)?.records, first.records);
     store.accept_validated_batch(source.clone(), batch(3))?;
     let next = store.read_page(&source, 3)?;
     assert_eq!(next.records.len(), 1);
     assert_eq!(next.records[0].framed_record, vec![3]);
-    assert_eq!(next.records[0].position.commit_revision, 4);
+    assert_eq!(
+        next.records[0].position.commit_revision,
+        anchored.commit_revision + 1
+    );
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
     assert_eq!(reopened.read_page(&source, 3)?.records, next.records);
@@ -322,7 +328,10 @@ fn metadata_position_resume() -> TestResult {
         AnalysisExtractLimits::default(),
         &AnalysisReadControl::default(),
     )?;
-    assert_eq!(complete.extraction.sources[0].commit_revision, 4);
+    assert_eq!(
+        complete.extraction.sources[0].commit_revision,
+        next.records[0].position.commit_revision
+    );
     Ok(())
 }
 

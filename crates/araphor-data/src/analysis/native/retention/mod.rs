@@ -88,19 +88,17 @@ impl<'a> EvidenceRetentionOwner<'a> {
         self.store
             .run_commit_hook(crate::AnalysisCommitStage::BeforeRetentionCommit)?;
         let (_, _writer) = tx.commit_locked([], || {})?;
-        for record in &records {
-            record.unlink(&self.store.root)?;
-        }
-        ExpiredSegment::sync(&self.store.root)?;
+        let completed =
+            ExpiredSegment::remove_files(&self.store.root, records.into_iter().map(Ok))?;
         let mut raw = self.store.raw.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "raw owner lock",
             }
             .build()
         })?;
-        for record in &records {
-            raw.forget_segment(record.id)?;
-            raw.budget.deletions.insert(record.id);
+        for id in completed {
+            raw.forget_segment(id)?;
+            raw.budget.deletions.insert(id);
         }
         raw.directory_changed(false)?;
         drop(raw);

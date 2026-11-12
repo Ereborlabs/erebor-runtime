@@ -4,6 +4,30 @@ Result: **Not done for the complete replacement**. This guide describes the
 connected production replacement. Read the [current worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
 for qualification and remaining work. Earlier SQL review records are historical.
 
+Read the [native segment cases](../../crates/araphor-data/tests/native_raw/segments.rs)
+with [deletion authority](../../crates/araphor-data/src/analysis/native/retention/expiry.rs),
+[retention publication](../../crates/araphor-data/src/analysis/native/retention/mod.rs),
+and [checkpoint](../../crates/araphor-data/src/analysis/native/backup/mod.rs).
+The deletion operation checks the complete batch before it removes any file.
+Both live retention and recovery use this operation. Invalid authority or a
+damaged later file leaves both files and their exact bytes intact. Real unlink
+and directory-sync errors remain retryable through durable deletion markers.
+
+Checkpoint anchors raw progress through the existing Data transaction before
+seal and flush. It retains the writer lock. One required anchor creates exactly
+one Data revision; original raw records, trace positions, receipts, and matching
+CDC positions do not change. A repeated clean checkpoint changes neither Data
+metadata nor the native journal head. The connected backup and restore cases
+check the anchored metadata and unchanged historical records.
+
+All four old segment fixtures are replaced. The six connected targets pass
+284 cases. The Data unit target still fails to compile with 111 diagnostics;
+the segment source has no diagnostic. All 15 native Query cases pass. The
+default-feature Data and Query production libraries pass the release check.
+Read `native-segments-*` under
+`output/araphor-fjall-migration-20261110`. Complete migration and current-source
+incident performance remain open.
+
 Read the [public raw/trace cases](../../crates/araphor-data/tests/native_raw/trace.rs),
 [private native trace cases](../../crates/araphor-data/src/analysis/native/trace/tests/raw.rs),
 and [retained raw units](../../crates/araphor-data/src/analysis/raw.rs)

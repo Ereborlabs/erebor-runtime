@@ -294,19 +294,23 @@ fn durable_raw_recovery_and_backup() -> TestResult {
     );
     assert_eq!(store.meta()?, first);
     store.accept_validated_batch(source.clone(), batch(2))?;
+    let raw = store.read_page(&source, 1)?.records;
     let before = store.meta()?;
     store.checkpoint()?;
-    assert_eq!(store.meta()?, before);
+    let mut anchored = before.clone();
+    anchored.commit_revision += 1;
+    assert_eq!(store.meta()?, anchored);
+    assert_eq!(store.read_page(&source, 1)?.records, raw);
     let backup = root.join("backups").join("snapshot");
     let manifest = store.backup(&backup)?;
-    assert_eq!(store.meta()?, before);
-    assert_eq!(manifest.commit_revision, before.commit_revision);
+    assert_eq!(store.meta()?, anchored);
+    assert_eq!(manifest.commit_revision, anchored.commit_revision);
     assert!(!manifest.database_files.is_empty());
     let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
     let meta = restored.meta()?;
-    assert_eq!(meta.store_uuid, before.store_uuid);
-    assert_eq!(meta.commit_revision, before.commit_revision);
-    assert_eq!(meta.recovery_epoch, before.recovery_epoch + 1);
+    assert_eq!(meta.store_uuid, anchored.store_uuid);
+    assert_eq!(meta.commit_revision, anchored.commit_revision);
+    assert_eq!(meta.recovery_epoch, anchored.recovery_epoch + 1);
     assert_eq!(restored.read_page(&source, 1)?.records.len(), 2);
     assert_eq!(
         restored

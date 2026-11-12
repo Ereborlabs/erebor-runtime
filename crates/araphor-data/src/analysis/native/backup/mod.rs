@@ -20,13 +20,10 @@ mod restore;
 impl NativeStore {
     pub fn checkpoint(&self) -> Result<()> {
         self.check()?;
-        self.checkpoint_inputs()?;
-        let _writer = self.writer.lock().map_err(|_| {
-            NativeStateSnafu {
-                field: "writer lock",
-            }
-            .build()
-        })?;
+        let mut tx = self.maintenance_write()?;
+        tx.checkpoint_inputs()?;
+        tx.dirty |= tx.raw.revision > tx.metadata_revision;
+        let (_, _writer) = tx.commit_locked([], || {})?;
         self.check()?;
         let _maintenance = self.maintenance.write().map_err(|_| {
             NativeStateSnafu {

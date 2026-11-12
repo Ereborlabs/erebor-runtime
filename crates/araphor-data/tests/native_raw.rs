@@ -15,6 +15,8 @@ mod coverage_tests;
 #[path = "native_raw/recovery.rs"]
 mod recovery;
 
+#[path = "native_raw/segments.rs"]
+mod segments;
 #[path = "native_raw/store.rs"]
 mod store;
 #[path = "native_raw/trace.rs"]
