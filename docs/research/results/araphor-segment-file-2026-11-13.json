@@ -1,0 +1,1118 @@
+{
+  "provenance": {
+    "commit": "c78e89340271b2745094c9cdd4d9c283a123df32",
+    "binary": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-segment-file-20261113/raw_storage_bench",
+    "binary_sha256": "7c7a554f1e4369be53631a9819fde04a99e8cd897aa272b38c4075e66dbca817",
+    "source_sha256": {
+      "crates/araphor-data/src/analysis/raw_benchmark.rs": "159008a7cb860b14c7996683e72502ced843686c970b208ca192f3694c1b60b8",
+      "crates/araphor-data/examples/raw_storage_bench.rs": "b40f3d805bb1489ddce4f049a06ed665511ec5137dd4fd62edfaad45adfa2d13",
+      "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+      "crates/araphor-data/src/analysis/raw_benchmark/segments.rs": "12bee08d0ff5404ba4d8684419347030e053aacf5c33a9b2005fd08649ad80d6",
+      "crates/araphor-data/src/analysis/raw.rs": "2f10340bb52f785a7d1999d3469d8bea882ee14627f7896e913ca304c89285ec",
+      "crates/araphor-data/src/analysis/raw/index.rs": "2a4a0e2840f1d02fc6dbf8ff3123ab64b7013b09f78d5544d4651c0b0c549f33",
+      "crates/araphor-data/src/analysis/raw_segments.rs": "b9c6c683f6866ffe90b12b8856038c4040deeed77596046d5f9e1ff76a3a80c7",
+      "crates/araphor-data/src/analysis/segment_file.rs": "76bf5d0089f81c3c089bfc73781c912bbed345e0762c9a69841ac1df9686618d",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_storage.py": "95e29a7a32f647019bd8f4db96ecde2fae0433f23dc977b4f829a155a625b567"
+    },
+    "engine_commits": {
+      "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+      "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+    },
+    "engine_status": {
+      "fjall": "",
+      "lsm-tree": ""
+    },
+    "host": {
+      "system": "Linux",
+      "node": "navid-laptop",
+      "release": "6.8.0-149-generic",
+      "version": "#149-Ubuntu SMP PREEMPT_DYNAMIC Fri Oct 23 13:21:10 UTC 2026",
+      "machine": "x86_64",
+      "processor": "x86_64"
+    },
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 9 5900HX with Radeon Graphics\nCPU family:                              25\nModel:                                   80\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nCPU(s) scaling MHz:                      44%\nCPU max MHz:                             4680.0000\nCPU min MHz:                             400.0000\nBogoMIPS:                                6587.55\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm debug_swap ibpb_exit_to_user\nVirtualization:                          AMD-V\nL1d cache:                               256 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                4 MiB (8 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; Safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Mitigation; Clear CPU buffers\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n",
+    "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+    "filesystem": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  462G  435G  3.6G 100% /\n",
+    "mount": "SOURCE         FSTYPE OPTIONS\n/dev/nvme0n1p7 ext4   rw,relatime,errors=remount-ro\n",
+    "cache": "OS page cache retained; fresh store and process per run; setup filesystem sync outside append timing",
+    "maintenance": "explicit flush and major compaction; not a steady natural compaction test",
+    "dataset_records": [
+      16384,
+      262144
+    ],
+    "batch_records": 256,
+    "orders_per_dataset": [
+      [
+        "segments",
+        "segments-file",
+        "fjall"
+      ],
+      [
+        "segments",
+        "fjall",
+        "segments-file"
+      ],
+      [
+        "segments-file",
+        "segments",
+        "fjall"
+      ],
+      [
+        "segments-file",
+        "fjall",
+        "segments"
+      ],
+      [
+        "fjall",
+        "segments",
+        "segments-file"
+      ],
+      [
+        "fjall",
+        "segments-file",
+        "segments"
+      ]
+    ],
+    "comparison": "original and file-synced raw segments versus Fjall"
+  },
+  "summary": [
+    {
+      "records": 16384,
+      "backend": "segments",
+      "runs": 6,
+      "input_bytes": 2301638,
+      "append": {
+        "count": 384,
+        "median_ms": 1.267567,
+        "p95_ms": 1.353682,
+        "p99_ms": 1.471436,
+        "max_ms": 1.989525
+      },
+      "commit": {
+        "count": 384,
+        "median_ms": 1.244728,
+        "p95_ms": 1.326723,
+        "p99_ms": 1.448388,
+        "max_ms": 1.974579
+      },
+      "write_records_s_median": 204383.8724889288,
+      "reopened_read_records_s_median": 7612466.906049628,
+      "reopen_ms_median": 3.2085859999999995,
+      "allocated_mib_median": 2.2421875,
+      "replay_ms_median": 1.100539,
+      "maintenance": [
+        {
+          "seal_s": 0.000538483
+        },
+        {
+          "seal_s": 0.000564116
+        },
+        {
+          "seal_s": 0.000565024
+        },
+        {
+          "seal_s": 0.00057124
+        },
+        {
+          "seal_s": 0.00059792
+        },
+        {
+          "seal_s": 0.00057997
+        }
+      ],
+      "point_read": {
+        "count": 384,
+        "median_ms": 0.021581,
+        "p95_ms": 0.025771,
+        "p99_ms": 0.031988,
+        "max_ms": 0.034363
+      }
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "runs": 6,
+      "input_bytes": 2301638,
+      "append": {
+        "count": 384,
+        "median_ms": 0.693533,
+        "p95_ms": 0.764213,
+        "p99_ms": 0.852145,
+        "max_ms": 2.3328
+      },
+      "commit": {
+        "count": 384,
+        "median_ms": 0.67279,
+        "p95_ms": 0.740817,
+        "p99_ms": 0.830703,
+        "max_ms": 2.317086
+      },
+      "write_records_s_median": 364394.5265697212,
+      "reopened_read_records_s_median": 7368212.731980099,
+      "reopen_ms_median": 3.226536,
+      "allocated_mib_median": 2.2421875,
+      "replay_ms_median": 1.1092,
+      "maintenance": [
+        {
+          "seal_s": 0.000573195
+        },
+        {
+          "seal_s": 0.000563418
+        },
+        {
+          "seal_s": 0.000571519
+        },
+        {
+          "seal_s": 0.000550636
+        },
+        {
+          "seal_s": 0.000611399
+        },
+        {
+          "seal_s": 0.000641221
+        }
+      ],
+      "point_read": {
+        "count": 384,
+        "median_ms": 0.021442,
+        "p95_ms": 0.027099,
+        "p99_ms": 0.034293,
+        "max_ms": 0.037645
+      }
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "runs": 6,
+      "input_bytes": 2301638,
+      "append": {
+        "count": 384,
+        "median_ms": 0.725381,
+        "p95_ms": 0.813103,
+        "p99_ms": 0.88504,
+        "max_ms": 3.232437
+      },
+      "commit": {
+        "count": 384,
+        "median_ms": 0.701007,
+        "p95_ms": 0.786493,
+        "p99_ms": 0.849421,
+        "max_ms": 3.205408
+      },
+      "write_records_s_median": 345608.28950760304,
+      "reopened_read_records_s_median": 6381910.058865301,
+      "reopen_ms_median": 2.7695935,
+      "allocated_mib_median": 3.328125,
+      "replay_ms_median": 1.2448324999999998,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "flush_s": 0.008612105,
+          "major_compact_s": 0.008117552
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.009960479,
+          "major_compact_s": 0.008618111
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.010025432,
+          "major_compact_s": 0.008659387
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.009567826,
+          "major_compact_s": 0.008812551
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.009904605,
+          "major_compact_s": 0.008654639
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.00955288,
+          "major_compact_s": 0.008691865
+        }
+      ],
+      "point_read": {
+        "count": 384,
+        "median_ms": 0.01341,
+        "p95_ms": 0.014737,
+        "p99_ms": 0.019975,
+        "max_ms": 0.023257
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "runs": 6,
+      "input_bytes": 37445318,
+      "append": {
+        "count": 6144,
+        "median_ms": 1.287053,
+        "p95_ms": 1.363321,
+        "p99_ms": 1.495322,
+        "max_ms": 6.913122
+      },
+      "commit": {
+        "count": 6144,
+        "median_ms": 1.263585,
+        "p95_ms": 1.338386,
+        "p99_ms": 1.472833,
+        "max_ms": 6.891052
+      },
+      "write_records_s_median": 198676.46807071037,
+      "reopened_read_records_s_median": 6901749.950354759,
+      "reopen_ms_median": 45.698427,
+      "allocated_mib_median": 36.40234375,
+      "replay_ms_median": 12.796944499999999,
+      "maintenance": [
+        {
+          "seal_s": 0.001047843
+        },
+        {
+          "seal_s": 0.000587443
+        },
+        {
+          "seal_s": 0.000565023
+        },
+        {
+          "seal_s": 0.000552731
+        },
+        {
+          "seal_s": 0.000567608
+        },
+        {
+          "seal_s": 0.000635843
+        }
+      ],
+      "point_read": {
+        "count": 6144,
+        "median_ms": 0.02207,
+        "p95_ms": 0.029543,
+        "p99_ms": 0.033873,
+        "max_ms": 0.085976
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "runs": 6,
+      "input_bytes": 37445318,
+      "append": {
+        "count": 6144,
+        "median_ms": 0.723984,
+        "p95_ms": 0.820297,
+        "p99_ms": 0.921499,
+        "max_ms": 6.129074
+      },
+      "commit": {
+        "count": 6144,
+        "median_ms": 0.701495,
+        "p95_ms": 0.793687,
+        "p99_ms": 0.892234,
+        "max_ms": 6.102324
+      },
+      "write_records_s_median": 345151.2720330261,
+      "reopened_read_records_s_median": 6877213.409935044,
+      "reopen_ms_median": 44.1334025,
+      "allocated_mib_median": 36.40234375,
+      "replay_ms_median": 12.453600999999999,
+      "maintenance": [
+        {
+          "seal_s": 0.000556154
+        },
+        {
+          "seal_s": 0.000667272
+        },
+        {
+          "seal_s": 0.000548122
+        },
+        {
+          "seal_s": 0.000558947
+        },
+        {
+          "seal_s": 0.000565862
+        },
+        {
+          "seal_s": 0.0005975
+        }
+      ],
+      "point_read": {
+        "count": 6144,
+        "median_ms": 0.02207,
+        "p95_ms": 0.028566,
+        "p99_ms": 0.032407,
+        "max_ms": 0.044699
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "runs": 6,
+      "input_bytes": 37445318,
+      "append": {
+        "count": 6144,
+        "median_ms": 0.745496,
+        "p95_ms": 0.848932,
+        "p99_ms": 0.936305,
+        "max_ms": 6.247875
+      },
+      "commit": {
+        "count": 6144,
+        "median_ms": 0.72168,
+        "p95_ms": 0.821135,
+        "p99_ms": 0.904387,
+        "max_ms": 6.219798
+      },
+      "write_records_s_median": 333840.09236623114,
+      "reopened_read_records_s_median": 6000414.882176613,
+      "reopen_ms_median": 19.972150499999998,
+      "allocated_mib_median": 52.95703125,
+      "replay_ms_median": 13.2844095,
+      "maintenance": [
+        {
+          "background_compactions": 0,
+          "flush_s": 0.053600062,
+          "major_compact_s": 0.042417694
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.054089865,
+          "major_compact_s": 0.043175481
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.054027565,
+          "major_compact_s": 0.042699017
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.053458141,
+          "major_compact_s": 0.044198739
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.053949969,
+          "major_compact_s": 0.043129385
+        },
+        {
+          "background_compactions": 0,
+          "flush_s": 0.051873,
+          "major_compact_s": 0.042325221
+        }
+      ],
+      "point_read": {
+        "count": 6144,
+        "median_ms": 0.015016,
+        "p95_ms": 0.026191,
+        "p99_ms": 0.032407,
+        "max_ms": 0.055734
+      }
+    }
+  ],
+  "paired_ratios": [
+    {
+      "records": 16384,
+      "pair": 1,
+      "fjall_write_rate_over_segments": 1.6607486769993636,
+      "segments_append_p95_over_fjall": 1.6361111177943897,
+      "segments_reopen_over_fjall": 0.9367851983557616
+    },
+    {
+      "records": 16384,
+      "pair": 1,
+      "fjall_write_rate_over_segments-file": 0.9890773930981858,
+      "segments-file_append_p95_over_fjall": 0.9451352281230226,
+      "segments-file_reopen_over_fjall": 1.1617144638469428
+    },
+    {
+      "records": 16384,
+      "pair": 2,
+      "fjall_write_rate_over_segments": 1.6815870391746568,
+      "segments_append_p95_over_fjall": 1.6363231105167322,
+      "segments_reopen_over_fjall": 1.1836749970553084
+    },
+    {
+      "records": 16384,
+      "pair": 2,
+      "fjall_write_rate_over_segments-file": 0.9403971635033368,
+      "segments-file_append_p95_over_fjall": 0.9109942501378909,
+      "segments-file_reopen_over_fjall": 1.16463375926477
+    },
+    {
+      "records": 16384,
+      "pair": 3,
+      "fjall_write_rate_over_segments": 1.7340007603790144,
+      "segments_append_p95_over_fjall": 1.7054342530670092,
+      "segments_reopen_over_fjall": 1.2112410969211114
+    },
+    {
+      "records": 16384,
+      "pair": 3,
+      "fjall_write_rate_over_segments-file": 0.971039331431754,
+      "segments-file_append_p95_over_fjall": 0.954573465862717,
+      "segments-file_reopen_over_fjall": 1.1919219382404844
+    },
+    {
+      "records": 16384,
+      "pair": 4,
+      "fjall_write_rate_over_segments": 1.7184227347574852,
+      "segments_append_p95_over_fjall": 1.7693651968577817,
+      "segments_reopen_over_fjall": 1.0232970783692583
+    },
+    {
+      "records": 16384,
+      "pair": 4,
+      "fjall_write_rate_over_segments-file": 0.9545358300044827,
+      "segments-file_append_p95_over_fjall": 1.000364889308222,
+      "segments-file_reopen_over_fjall": 0.9603946439639143
+    },
+    {
+      "records": 16384,
+      "pair": 5,
+      "fjall_write_rate_over_segments": 1.6089775933661823,
+      "segments_append_p95_over_fjall": 1.644006672319403,
+      "segments_reopen_over_fjall": 0.9069687537034052
+    },
+    {
+      "records": 16384,
+      "pair": 5,
+      "fjall_write_rate_over_segments-file": 0.8984424065793304,
+      "segments-file_append_p95_over_fjall": 0.888383385779951,
+      "segments-file_reopen_over_fjall": 0.9442249044468146
+    },
+    {
+      "records": 16384,
+      "pair": 6,
+      "fjall_write_rate_over_segments": 1.7018236656406116,
+      "segments_append_p95_over_fjall": 1.6018199245050824,
+      "segments_reopen_over_fjall": 1.2643502241865816
+    },
+    {
+      "records": 16384,
+      "pair": 6,
+      "fjall_write_rate_over_segments-file": 0.9408555909567196,
+      "segments-file_append_p95_over_fjall": 0.9193399519577796,
+      "segments-file_reopen_over_fjall": 1.0997755394632307
+    },
+    {
+      "records": 262144,
+      "pair": 1,
+      "fjall_write_rate_over_segments": 1.6873655922259954,
+      "segments_append_p95_over_fjall": 1.6110726937091144,
+      "segments_reopen_over_fjall": 2.2547547481431756
+    },
+    {
+      "records": 262144,
+      "pair": 1,
+      "fjall_write_rate_over_segments-file": 0.9741765110508125,
+      "segments-file_append_p95_over_fjall": 0.9646197325127847,
+      "segments-file_reopen_over_fjall": 2.305629673849656
+    },
+    {
+      "records": 262144,
+      "pair": 2,
+      "fjall_write_rate_over_segments": 1.672119816724174,
+      "segments_append_p95_over_fjall": 1.60190601102144,
+      "segments_reopen_over_fjall": 2.2729726082640687
+    },
+    {
+      "records": 262144,
+      "pair": 2,
+      "fjall_write_rate_over_segments-file": 0.9667768441646264,
+      "segments-file_append_p95_over_fjall": 0.9552666805345481,
+      "segments-file_reopen_over_fjall": 2.287095156325895
+    },
+    {
+      "records": 262144,
+      "pair": 3,
+      "fjall_write_rate_over_segments": 1.6936027386690076,
+      "segments_append_p95_over_fjall": 1.599458358997024,
+      "segments_reopen_over_fjall": 2.283300999919179
+    },
+    {
+      "records": 262144,
+      "pair": 3,
+      "fjall_write_rate_over_segments-file": 0.9655470116449244,
+      "segments-file_append_p95_over_fjall": 0.948116245938868,
+      "segments-file_reopen_over_fjall": 2.192275537891184
+    },
+    {
+      "records": 262144,
+      "pair": 4,
+      "fjall_write_rate_over_segments": 1.6775005086564392,
+      "segments_append_p95_over_fjall": 1.6046405073250711,
+      "segments_reopen_over_fjall": 2.2535759431684297
+    },
+    {
+      "records": 262144,
+      "pair": 4,
+      "fjall_write_rate_over_segments-file": 0.9635261751594417,
+      "segments-file_append_p95_over_fjall": 0.9471049538163632,
+      "segments-file_reopen_over_fjall": 2.14979089719993
+    },
+    {
+      "records": 262144,
+      "pair": 5,
+      "fjall_write_rate_over_segments": 1.6670099913997767,
+      "segments_append_p95_over_fjall": 1.6234225234867403,
+      "segments_reopen_over_fjall": 2.2233724618406616
+    },
+    {
+      "records": 262144,
+      "pair": 5,
+      "fjall_write_rate_over_segments-file": 0.9805472048056451,
+      "segments-file_append_p95_over_fjall": 1.0077250564870972,
+      "segments-file_reopen_over_fjall": 2.2860450411790447
+    },
+    {
+      "records": 262144,
+      "pair": 6,
+      "fjall_write_rate_over_segments": 1.6765577564514327,
+      "segments_append_p95_over_fjall": 1.5910361187957116,
+      "segments_reopen_over_fjall": 2.488864629374414
+    },
+    {
+      "records": 262144,
+      "pair": 6,
+      "fjall_write_rate_over_segments-file": 0.9631820376641893,
+      "segments-file_append_p95_over_fjall": 0.9590299335722012,
+      "segments-file_reopen_over_fjall": 2.247378728307468
+    }
+  ],
+  "resources": [
+    {
+      "records": 16384,
+      "backend": "segments",
+      "user_s_median": 0.02,
+      "system_s_median": 0.02,
+      "peak_rss_mib_median": 11.25,
+      "maintenance_s_median": {
+        "seal_s": 0.0005681320000000001
+      },
+      "prepare": {
+        "count": 384,
+        "median_ms": 0.018089,
+        "p95_ms": 0.029125,
+        "p99_ms": 0.049169,
+        "max_ms": 0.058108
+      }
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "user_s_median": 0.01,
+      "system_s_median": 0.015,
+      "peak_rss_mib_median": 11.25,
+      "maintenance_s_median": {
+        "seal_s": 0.000572357
+      },
+      "prepare": {
+        "count": 384,
+        "median_ms": 0.017041,
+        "p95_ms": 0.029054,
+        "p99_ms": 0.044769,
+        "max_ms": 0.054826
+      }
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "user_s_median": 0.02,
+      "system_s_median": 0.02,
+      "peak_rss_mib_median": 15.103515625,
+      "maintenance_s_median": {
+        "background_compactions": 0.0,
+        "flush_s": 0.0097362155,
+        "major_compact_s": 0.008657013
+      },
+      "prepare": {
+        "count": 384,
+        "median_ms": 0.018159,
+        "p95_ms": 0.041695,
+        "p99_ms": 0.052522,
+        "max_ms": 0.089747
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "user_s_median": 0.31,
+      "system_s_median": 0.29,
+      "peak_rss_mib_median": 104.5625,
+      "maintenance_s_median": {
+        "seal_s": 0.0005775255
+      },
+      "prepare": {
+        "count": 6144,
+        "median_ms": 0.019416,
+        "p95_ms": 0.026959,
+        "p99_ms": 0.036807,
+        "max_ms": 0.071938
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "user_s_median": 0.31,
+      "system_s_median": 0.255,
+      "peak_rss_mib_median": 104.443359375,
+      "maintenance_s_median": {
+        "seal_s": 0.0005624045
+      },
+      "prepare": {
+        "count": 6144,
+        "median_ms": 0.018648,
+        "p95_ms": 0.026889,
+        "p99_ms": 0.032896,
+        "max_ms": 0.069284
+      }
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "user_s_median": 0.435,
+      "system_s_median": 0.23,
+      "peak_rss_mib_median": 157.484375,
+      "maintenance_s_median": {
+        "background_compactions": 0.0,
+        "flush_s": 0.053775015499999995,
+        "major_compact_s": 0.042914201
+      },
+      "prepare": {
+        "count": 6144,
+        "median_ms": 0.019067,
+        "p95_ms": 0.031988,
+        "p99_ms": 0.046445,
+        "max_ms": 0.108744
+      }
+    }
+  ],
+  "file_writer_ratios": [
+    {
+      "records": 16384,
+      "pair": 1,
+      "file_write_over_original": 1.679088702853914,
+      "file_write_over_fjall": 1.011043227737316
+    },
+    {
+      "records": 16384,
+      "pair": 2,
+      "file_write_over_original": 1.7881668559166066,
+      "file_write_over_fjall": 1.0633804936997258
+    },
+    {
+      "records": 16384,
+      "pair": 3,
+      "file_write_over_original": 1.785716298249534,
+      "file_write_over_fjall": 1.0298244032252997
+    },
+    {
+      "records": 16384,
+      "pair": 4,
+      "file_write_over_original": 1.8002705406557815,
+      "file_write_over_fjall": 1.0476296107138312
+    },
+    {
+      "records": 16384,
+      "pair": 5,
+      "file_write_over_original": 1.7908522366971704,
+      "file_write_over_fjall": 1.1130373997008147
+    },
+    {
+      "records": 16384,
+      "pair": 6,
+      "file_write_over_original": 1.8088043287387952,
+      "file_write_over_fjall": 1.0628623665648187
+    },
+    {
+      "records": 262144,
+      "pair": 1,
+      "file_write_over_original": 1.7320943105124647,
+      "file_write_over_fjall": 1.0265080184712445
+    },
+    {
+      "records": 262144,
+      "pair": 2,
+      "file_write_over_original": 1.7295819886636001,
+      "file_write_over_fjall": 1.034364865103985
+    },
+    {
+      "records": 262144,
+      "pair": 3,
+      "file_write_over_original": 1.754034467761185,
+      "file_write_over_fjall": 1.0356823520134777
+    },
+    {
+      "records": 262144,
+      "pair": 4,
+      "file_write_over_original": 1.7410014921274464,
+      "file_write_over_fjall": 1.0378545241228374
+    },
+    {
+      "records": 262144,
+      "pair": 5,
+      "file_write_over_original": 1.7000813252332874,
+      "file_write_over_fjall": 1.0198387136274696
+    },
+    {
+      "records": 262144,
+      "pair": 6,
+      "file_write_over_original": 1.7406447492700854,
+      "file_write_over_fjall": 1.038225341520174
+    }
+  ],
+  "per_run_rates": [
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 1,
+      "write_records_s": 340096.3744779923,
+      "append_median_ms": 0.738302,
+      "append_p95_ms": 0.831262,
+      "append_max_ms": 0.947339
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 1,
+      "write_records_s": 343852.1361939883,
+      "append_median_ms": 0.73439,
+      "append_p95_ms": 0.785655,
+      "append_max_ms": 2.3328
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 1,
+      "write_records_s": 204784.97390253987,
+      "append_median_ms": 1.270569,
+      "append_p95_ms": 1.360037,
+      "append_max_ms": 1.95628
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 2,
+      "write_records_s": 350337.88553765905,
+      "append_median_ms": 0.722658,
+      "append_p95_ms": 0.794106,
+      "append_max_ms": 0.871072
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 2,
+      "write_records_s": 372542.4736847539,
+      "append_median_ms": 0.686828,
+      "append_p95_ms": 0.723426,
+      "append_max_ms": 0.775249
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 2,
+      "write_records_s": 208337.64614979972,
+      "append_median_ms": 1.253529,
+      "append_p95_ms": 1.299414,
+      "append_max_ms": 1.490014
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 3,
+      "write_records_s": 352959.25225030916,
+      "append_median_ms": 0.72133,
+      "append_p95_ms": 0.790265,
+      "append_max_ms": 0.877497
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 3,
+      "write_records_s": 363486.0513115226,
+      "append_median_ms": 0.6906,
+      "append_p95_ms": 0.754366,
+      "append_max_ms": 1.356406
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 3,
+      "write_records_s": 203551.95932737656,
+      "append_median_ms": 1.272037,
+      "append_p95_ms": 1.347745,
+      "append_max_ms": 1.387206
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 4,
+      "write_records_s": 355117.8773955962,
+      "append_median_ms": 0.712531,
+      "append_p95_ms": 0.767356,
+      "append_max_ms": 0.783909
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 4,
+      "write_records_s": 372032.0036534705,
+      "append_median_ms": 0.667971,
+      "append_p95_ms": 0.767636,
+      "append_max_ms": 0.953417
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 4,
+      "write_records_s": 206653.38639488653,
+      "append_median_ms": 1.255065,
+      "append_p95_ms": 1.357733,
+      "append_max_ms": 1.989525
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 5,
+      "write_records_s": 328203.7080929297,
+      "append_median_ms": 0.725801,
+      "append_p95_ms": 0.829097,
+      "append_max_ms": 3.232437
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 5,
+      "write_records_s": 365303.0018279197,
+      "append_median_ms": 0.700797,
+      "append_p95_ms": 0.736556,
+      "append_max_ms": 0.763934
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 5,
+      "write_records_s": 203982.77107531775,
+      "append_median_ms": 1.273014,
+      "append_p95_ms": 1.363041,
+      "append_max_ms": 1.378895
+    },
+    {
+      "records": 16384,
+      "backend": "fjall",
+      "pair": 6,
+      "write_records_s": 340878.6934775471,
+      "append_median_ms": 0.737813,
+      "append_p95_ms": 0.84509,
+      "append_max_ms": 0.931974
+    },
+    {
+      "records": 16384,
+      "backend": "segments-file",
+      "pair": 6,
+      "write_records_s": 362307.13486106915,
+      "append_median_ms": 0.699679,
+      "append_p95_ms": 0.776925,
+      "append_max_ms": 0.852145
+    },
+    {
+      "records": 16384,
+      "backend": "segments",
+      "pair": 6,
+      "write_records_s": 200302.0056424185,
+      "append_median_ms": 1.272385,
+      "append_p95_ms": 1.353682,
+      "append_max_ms": 1.471436
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 1,
+      "write_records_s": 334266.45645392395,
+      "append_median_ms": 0.744518,
+      "append_p95_ms": 0.848863,
+      "append_max_ms": 6.109937
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 1,
+      "write_records_s": 343127.19785592204,
+      "append_median_ms": 0.723146,
+      "append_p95_ms": 0.81883,
+      "append_max_ms": 2.374985
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 1,
+      "write_records_s": 198099.60449232295,
+      "append_median_ms": 1.286843,
+      "append_p95_ms": 1.36758,
+      "append_max_ms": 5.899642
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 2,
+      "write_records_s": 333717.6191659504,
+      "append_median_ms": 0.740886,
+      "append_p95_ms": 0.850887,
+      "append_max_ms": 6.247875
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 2,
+      "write_records_s": 345185.7801314113,
+      "append_median_ms": 0.724124,
+      "append_p95_ms": 0.812824,
+      "append_max_ms": 3.139198
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 2,
+      "write_records_s": 199577.57561879256,
+      "append_median_ms": 1.286843,
+      "append_p95_ms": 1.363041,
+      "append_max_ms": 3.367582
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 3,
+      "write_records_s": 334131.75592241157,
+      "append_median_ms": 0.744727,
+      "append_p95_ms": 0.850748,
+      "append_max_ms": 2.950554
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 3,
+      "write_records_s": 346054.36285611644,
+      "append_median_ms": 0.724473,
+      "append_p95_ms": 0.806608,
+      "append_max_ms": 2.764425
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 3,
+      "write_records_s": 197290.5146486736,
+      "append_median_ms": 1.28831,
+      "append_p95_ms": 1.360736,
+      "append_max_ms": 6.74564
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 4,
+      "write_records_s": 333962.5655665118,
+      "append_median_ms": 0.743401,
+      "append_p95_ms": 0.849002,
+      "append_max_ms": 6.118038
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 4,
+      "write_records_s": 346604.559560874,
+      "append_median_ms": 0.723705,
+      "append_p95_ms": 0.804094,
+      "append_max_ms": 3.105813
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 4,
+      "write_records_s": 199083.43624526978,
+      "append_median_ms": 1.288449,
+      "append_p95_ms": 1.362343,
+      "append_max_ms": 3.590169
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 5,
+      "write_records_s": 332757.24329390266,
+      "append_median_ms": 0.749686,
+      "append_p95_ms": 0.8409,
+      "append_max_ms": 6.135848
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 5,
+      "write_records_s": 339358.7189510766,
+      "append_median_ms": 0.729083,
+      "append_p95_ms": 0.847396,
+      "append_max_ms": 6.129074
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 5,
+      "write_records_s": 199613.22668167617,
+      "append_median_ms": 1.282373,
+      "append_p95_ms": 1.365136,
+      "append_max_ms": 3.713301
+    },
+    {
+      "records": 262144,
+      "backend": "fjall",
+      "pair": 6,
+      "write_records_s": 332410.2679186385,
+      "append_median_ms": 0.748639,
+      "append_p95_ms": 0.852354,
+      "append_max_ms": 3.110772
+    },
+    {
+      "records": 262144,
+      "backend": "segments-file",
+      "pair": 6,
+      "write_records_s": 345116.76393464097,
+      "append_median_ms": 0.719864,
+      "append_p95_ms": 0.817433,
+      "append_max_ms": 3.10707
+    },
+    {
+      "records": 262144,
+      "backend": "segments",
+      "pair": 6,
+      "write_records_s": 198269.49989615098,
+      "append_median_ms": 1.289078,
+      "append_p95_ms": 1.356126,
+      "append_max_ms": 6.913122
+    }
+  ],
+  "verification": {
+    "release_build": "passed with existing library warnings",
+    "focused_example_test": "segment_reopen_and_seal passed for all three backends",
+    "cli_smoke_runs": 3,
+    "measured_process_runs": 36,
+    "all_executable_checks": true,
+    "source_hashes_match": true,
+    "binary_hash_matches": true,
+    "engine_forks_clean": true,
+    "rustfmt_changed_files": "passed",
+    "python_py_compile": "passed",
+    "full_ci": "not run, per user instruction"
+  },
+  "sample_artifact": {
+    "path": "araphor-segment-file-2026-11-13.samples.json.gz",
+    "sha256": "eabae5609d92d9b2a7635c581ac2586ffffc062cb9394900702b16fec184ff47"
+  },
+  "statistic_definitions": {
+    "write_rate": "median of six whole timed append-loop rates",
+    "append_quantiles": "pooled per-batch samples, sorted indexes n/2, n*95/100, n*99/100",
+    "read_rate": "median of six reopened scan rates; exact-byte verification included",
+    "point_latency": "pooled reopened point samples; verification excluded; after the full scan",
+    "resources": "full process including fixture, reads, maintenance, reopen and validation"
+  }
+}

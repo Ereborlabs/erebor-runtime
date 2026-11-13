@@ -405,8 +405,20 @@ resources, source identities, and environment. Timing has no pass/fail limit.
 This is one finite matrix. It measures the combined simpler writer; it does
 not isolate each I/O change. Full CI remains outside this iteration.
 
-Result: **Not done**. Do not infer production recovery, retention, or
-sustained-compaction parity from this experiment.
+The [measured result and source review](../research/results/araphor-segment-file-2026-11-13.md)
+records all 36 passing process runs at source `c78e89340`. The focused test
+and three CLI smoke runs also pass. At 262,144 events, median rates are
+198,676 events/s for the original segments, 345,151 for the new writer, and
+333,840 for Fjall. The new writer is 1.74 times the original rate and 3.4%
+above Fjall. All six matched triples show this modest advantage over Fjall.
+The new writer's batch p50/p95 is 0.724/0.820 ms. Its allocated space remains
+36.40 MiB; Fjall uses 52.96 MiB with history and journals retained.
+
+Result: **Done** for this raw-storage PoC. The simpler writer closes the
+earlier foreground gap. This result does not isolate each I/O change or
+include the later Data result/reference/progress transaction. Production and
+both engine forks remain unchanged. Full CI is not run. Production recovery,
+retention, and sustained-compaction parity remain unqualified.
 
 ### Event flow before replacement
 

@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Persistent segment files and file-level sync](results/araphor-segment-file-2026-11-13.md)
+  records 36 matched raw-storage runs. The simpler segment writer reaches
+  1.74 times the original rate and is slightly faster than Fjall in this
+  finite comparison. Bytes, history, reopen, and log continuation checks pass.
+  Production storage and both engine forks remain unchanged.
 - [Native compression and consumed journals](results/araphor-compression-storage-2026-11-13.md)
   records 32 matched runs with default and experimental compression policies.
   It measures allocated blocks across safe journal collection at the same
