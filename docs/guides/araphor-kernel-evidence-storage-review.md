@@ -101,6 +101,12 @@ still applies to that snapshot. Native event reads do not need the Diagnostic
 file lock. A combined event and trace read selects the next original Data
 position from the two owners.
 
+A source/cursor page stops before an expired gap after retained records.
+The page returns those records and sets `next_cursor` to the first expired
+cursor. A read that starts in the gap returns `RetainedRangeExpired`. Current
+expiry authority applies to a view captured before expiry. A new expiry during
+a selected range read still returns an error.
+
 [WitnessPin](../../crates/araphor-data/src/analysis/native/managed/references/pins.rs)
 uses one interval codec with two explicit target kinds. Evidence targets name
 an actual native batch DataR. Diagnostic targets name a real file ID. Evidence
@@ -142,6 +148,17 @@ The focused release run passes 293 Data integration tests in `native_events`,
 The tests cover exact bytes and positions, partial overlaps, pending gaps,
 CPU/epoch conflicts, native log resume, pins and reverse-index faults,
 logical expiry, history, compaction, backup/restore, and Diagnostic file faults.
+
+The follow-up review found a page regression at commit `9a4937584`.
+The native reader discarded retained records before an expired gap.
+The correction restores the retained prefix and its continuation cursor.
+The [native_expiry_preserves_overlap_boundaries](../../crates/araphor-data/tests/native_events.rs)
+test checks exact bytes, original positions, byte count, and continuation.
+It checks current and captured views, forced compaction, and reopen.
+The regression fails before the correction. After the correction, the focused
+release run passes all 45 tests in `native_events`, `native_raw`, and `raw_index`.
+Changed Rust files pass formatting. This review does not rerun the benchmark
+or full CI.
 
 The native Query integration passes 14 tests. The public Control intake
 integration passes two tests. The existing owner example passes its partial

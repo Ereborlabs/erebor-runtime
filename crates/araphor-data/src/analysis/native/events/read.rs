@@ -198,16 +198,17 @@ impl NativeStore {
                 "the raw read cursor is outside accepted progress",
             );
         }
-        let current = self.source_receipt(source)?.ok_or_else(|| {
+        let current = self.view()?;
+        let retained = current.source_receipt(source)?.ok_or_else(|| {
             NativeStateSnafu {
                 field: "current evidence receipt",
             }
             .build()
         })?;
-        if first <= current.retained_floor {
+        if first <= retained.retained_floor {
             return crate::RetainedRangeExpiredSnafu {
                 first_cursor: first,
-                last_cursor: current.retained_floor,
+                last_cursor: retained.retained_floor,
             }
             .fail();
         }
@@ -225,6 +226,9 @@ impl NativeStore {
                 }
                 .fail();
             };
+            if !records.is_empty() && Events::new(&current).expiry(batch.meta.revision)?.is_some() {
+                break;
+            }
             let last = batch.meta.spans[slot].last.min(receipt.contiguous_cursor);
             let range = self.event_range(
                 view,

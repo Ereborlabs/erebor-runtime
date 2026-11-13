@@ -205,6 +205,17 @@ fn native_expiry_preserves_overlap_boundaries() -> TestResult {
     fill.intake_utc_ns = 200;
     store.accept_validated_batch(source.clone(), fill)?;
     let before = store.view()?;
+    let mut prefix = store.read_page(&source, 1)?;
+    prefix.records.truncate(1);
+    prefix.encoded_bytes = 8;
+    prefix.next_cursor = Some(2);
+    assert_eq!(prefix.records[0].cursor, 1);
+    assert_eq!(prefix.records[0].framed_record, 1u64.to_be_bytes());
+    assert_eq!(
+        prefix.records[0].position.commit_revision,
+        before.revision()
+    );
+    assert_eq!(prefix.records[0].position.ordinal, 0);
     let expired = EvidenceRetentionOwner::new(&store).retain(&source, 151)?;
     assert_eq!(expired.removed_records, 2);
     assert_eq!(expired.retained_floor, 0);
@@ -238,6 +249,16 @@ fn native_expiry_preserves_overlap_boundaries() -> TestResult {
         Err(araphor_data::Error::AnalysisState { reason, .. }) if reason == "an evidence retry crosses an expired range boundary")
     );
     assert_eq!(store.database().inner().journal_head()?, cursor);
+    assert_eq!(
+        store.read_page_at(&before, &source, 1, &AnalysisReadControl::default())?,
+        prefix
+    );
+    prefix.read_revision = store.view()?.revision();
+    assert_eq!(store.read_page(&source, 1)?, prefix);
+    assert!(matches!(
+        store.read_page(&source, 2),
+        Err(araphor_data::Error::RetainedRangeExpired { .. })
+    ));
     assert!(matches!(
         store.read_page_at(&before, &source, 2, &AnalysisReadControl::default()),
         Err(araphor_data::Error::RetainedRangeExpired { .. })
@@ -248,8 +269,16 @@ fn native_expiry_preserves_overlap_boundaries() -> TestResult {
     );
     store.checkpoint()?;
     store.database().inner().major_compact()?;
+    assert_eq!(store.read_page(&source, 1)?, prefix);
+    prefix.read_revision = before.revision();
+    assert_eq!(
+        store.read_page_at(&before, &source, 1, &AnalysisReadControl::default())?,
+        prefix
+    );
     drop((before, store));
     let store = NativeStore::open_with_retention(&root, limits)?;
+    prefix.read_revision = store.view()?.revision();
+    assert_eq!(store.read_page(&source, 1)?, prefix);
     assert!(matches!(
         store.read_page(&source, 2),
         Err(araphor_data::Error::RetainedRangeExpired { .. })
@@ -257,6 +286,10 @@ fn native_expiry_preserves_overlap_boundaries() -> TestResult {
     assert_eq!(
         store.accept_validated_batch(source.clone(), batch(2, 3))?,
         EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
+    );
+    assert_eq!(
+        store.read_page(&source, 4)?.records[0].framed_record,
+        4u64.to_be_bytes()
     );
     assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
     Ok(())

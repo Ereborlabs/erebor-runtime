@@ -219,6 +219,19 @@ qualification, and matched production comparison. **Not done** for the
 repository-wide qualification blockers above. Table abstraction and collector
 registration remain unapproved.
 
+The follow-up retirement review found one paging regression at commit
+`9a4937584`. A page with retained records failed when its next batch had
+expired. The correction returns the retained prefix and sets `next_cursor` to
+the expired gap. A read that starts in the gap still returns an error.
+The existing overlap test now checks exact bytes, positions, byte count, and
+continuation through captured views, compaction, and reopen. The test fails
+before the correction. All 45 focused release tests in `native_events`,
+`native_raw`, and `raw_index` pass after the correction. The independent reviewer
+approves the correction and finds no second material defect in the reviewed
+intake, read, retention, recovery, history, pin, and original-log paths.
+Result: **Done** for this correction and review. Full CI and performance
+measurements are not repeated.
+
 ### Event flow before replacement
 
 ```text
