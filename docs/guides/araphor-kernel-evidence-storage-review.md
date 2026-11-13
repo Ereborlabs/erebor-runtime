@@ -146,7 +146,11 @@ logical expiry, history, compaction, backup/restore, and Diagnostic file faults.
 The native Query integration passes 14 tests. The public Control intake
 integration passes two tests. The existing owner example passes its partial
 history test for both backends. The native production example also passes its
-16,384-record smoke run. The paired production comparison is pending.
+16,384-record smoke run. All 16 matched production benchmark runs pass.
+The [measurement report](../research/results/araphor-kernel-evidence-2026-11-12.md)
+records the baseline hashes, method, gains, and costs. Large cycle throughput
+is 1.54 times the baseline. Large reopened scans are 3.55% slower. Retained disk
+allocation increases from 37.94 to 54.42 MiB after forced maintenance.
 
 The Data library test target reports 80 compile errors in old tests that refer
 to removed DuckDB APIs and `graph_rows`. The filtered Control library test target

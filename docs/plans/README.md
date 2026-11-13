@@ -27,8 +27,9 @@ master plan invented for them.
   investigation records a modest continuous-scan gain and its limits. The user
   approves kernel-evidence replacement in the existing Fjall database. The
   replacement passes focused Data, Query, and public Control intake checks.
-  The paired production comparison is pending. The review records the old
-  library-test and repository formatting blockers. Table abstraction and
+  The matched production comparison passes 16 runs and records write/read
+  gains, retained-space growth, and slower large reopened reads. The review
+  records the old library-test and repository formatting blockers. Table abstraction and
   collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL

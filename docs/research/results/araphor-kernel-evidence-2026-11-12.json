@@ -1,0 +1,841 @@
+{
+  "provenance": {
+    "commit": "1250ba8ffffd0a50e8c9bb1aee12eed9ec3e691c",
+    "binaries": {
+      "before": {
+        "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_stream",
+        "sha256": "7fe9dc69dc2cc1c8ddfe6cdaccf57a1d68dd720b7c58f3e264aa40b16c42d109"
+      },
+      "after": {
+        "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-kernel-evidence-20261112/raw_owner_native",
+        "sha256": "88f05c9833c5df3c8523bbcd7a0d70c3a0589d6ed278cd13c8d30db9dd78f6cb"
+      }
+    },
+    "source_sha256": {
+      "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640",
+      "crates/araphor-data/src/analysis/native/benchmark.rs": "6119ebeac42b6d892b2afec62ede8b14f34dad618a25ee949134f97e5f8b281b",
+      "crates/araphor-data/examples/raw_owner_bench.rs": "b46a7b281dd4b978b9d2d4060a4eec4272a5c4f46f83734543415e9f535bc0d8",
+      "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+      "scripts/benchmark_raw_storage.py": "2397d79d1428a248169a865943e2472bbf688f9d3d907183927d1322ed227522",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "255d166f782beb9e0ac62dc5115a78287a8de52c5483ff3e5c92e515f7fa89d2"
+    },
+    "engine_commits": {
+      "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+      "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+    },
+    "records": [
+      16384,
+      262144
+    ],
+    "batch_records": 256,
+    "orders": [
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ],
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ]
+    ],
+    "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen",
+    "scan_modes": {
+      "before": "pages",
+      "after": "pages"
+    },
+    "backends": {
+      "before": "hybrid",
+      "after": "production"
+    },
+    "baseline_artifact": {
+      "commit": "957475fbe294931b8ec5ac02262f4ff8a83e9949",
+      "binaries": {
+        "before": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_stream",
+          "sha256": "7fe9dc69dc2cc1c8ddfe6cdaccf57a1d68dd720b7c58f3e264aa40b16c42d109"
+        },
+        "after": {
+          "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_stream",
+          "sha256": "7fe9dc69dc2cc1c8ddfe6cdaccf57a1d68dd720b7c58f3e264aa40b16c42d109"
+        }
+      },
+      "source_sha256": {
+        "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640",
+        "crates/araphor-data/src/analysis/native/benchmark.rs": "25a569728b2309542d4cec6d16ec7ef0d51ad091e601f53529d67c810c076659",
+        "crates/araphor-data/examples/raw_owner_bench.rs": "b222841da80267264f4e000e6fb145a2f400d3a8a348641611c9a546eff8f143",
+        "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+        "scripts/benchmark_raw_storage.py": "a0028fc797e0ce9f8453bdc5e094f38ed4c908a40606e99cc5d7c9902969cb0f",
+        "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "94430ac5a5f7ca995dcf08f694d8156d49dc40cd69f4ad6bebab0aea1c69c3b8"
+      },
+      "engine_commits": {
+        "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+        "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+      },
+      "records": [
+        16384,
+        262144
+      ],
+      "batch_records": 256,
+      "orders": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen",
+      "scan_modes": {
+        "before": "pages",
+        "after": "stream"
+      }
+    },
+    "compiler_and_host": "$ uname -a\nLinux navid-laptop 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n$ rustc --version --verbose\nrustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n$ findmnt -T output/araphor-kernel-evidence-20261112 -o SOURCE,FSTYPE,OPTIONS\nSOURCE         FSTYPE OPTIONS\n/dev/nvme0n1p7 ext4   rw,relatime,errors=remount-ro\n$ df -h output/araphor-kernel-evidence-20261112\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  462G  434G  3.7G 100% /\n$ git -C fjall rev-parse HEAD\nf745c5462276e33d81d897108d9a34535440df00\n$ git -C lsm-tree rev-parse HEAD\n56d74411bdcdf9fe010373393c69cac96892f85d\nCOMMAND             ELAPSED %CPU\npython3               00:00 76.9\ncode               07:11:25 73.5\ncode               07:11:22 37.8\nrtk                   00:00 22.2\nchrome             01:50:16  6.5\nchrome           1-22:22:28  5.9\ncodex            2-03:38:57  5.2\nchrome           1-07:16:15  3.0\nchrome             03:59:52  2.8\nXorg             2-03:39:48  2.5\ngnome-shell      2-03:39:45  2.2\nterminator       2-03:39:32  1.8\ncode               07:11:22  1.2\nTelegram         1-05:53:56  1.1\nmutter-x11-fram  2-03:39:44  1.0\nchrome           1-23:18:28  0.9\nrust-analyzer      07:11:17  0.8\nMainThread       2-03:40:05  0.8\ncode               07:11:25  0.8\nchrome             03:48:22  0.7\ncode               07:11:25  0.5\nchrome           1-23:18:24  0.5\nkworker/u32:1-f       23:01  0.3\nkworker/u32:6-g       19:56  0.3\nchrome           1-23:18:28  0.2\nkworker/u32:5-c       39:35  0.2\nupdate-manager     12:37:56  0.2\nkworker/u32:3-e       39:35  0.2\nxdg-desktop-por  2-03:39:42  0.1\nkworker/u32:0-c       01:42  0.1\nchrome           1-23:06:46  0.1\ncode               07:11:22  0.1\ncode               07:11:21  0.1\nrcu_preempt      2-03:40:17  0.1\nnapi/phy0-8193   2-03:40:12  0.1\ncode               07:11:02  0.0\ndbus-daemon      2-03:40:05  0.0\nkworker/u33:3-h       07:53  0.0\ncontainerd       2-03:40:05  0.0\nkcompactd0       2-03:40:17  0.0\nblueman-tray     2-03:39:44  0.0\nirq/42-ASUE1A01  2-03:40:16  0.0\nrust-analyzer-p    07:11:16  0.0\nnapi/phy0-8195   2-03:40:12  0.0\ncode               07:11:22  0.0\nkworker/2:1-eve    03:47:25  0.0\ndbus-daemon      2-03:39:45  0.0\nrust-analyzer-p    07:11:16  0.0\nskypeforlinux    2-03:39:44  0.0\nmt76-tx phy0     2-03:40:11  0.0\nibus-daemon      2-03:39:44  0.0\nkswapd0          2-03:40:16  0.0\nNetworkManager   2-03:40:07  0.0\njbd2/nvme0n1p7-  2-03:40:14  0.0\ncode               07:11:23  0.0\nsystemd-oomd     2-03:40:09  0.0\ncodex-code-mode  2-03:38:33  0.0\nchrome           1-22:22:34  0.0\ncode               07:11:25  0.0\ncodex              07:11:21  0.0\nskypeforlinux    2-03:39:41  0.0\nchrome             12:43:06  0.0\nsystemd-resolve  2-03:40:09  0.0\nchrome           1-23:18:28  0.0\nkworker/6:0-pm     01:27:51  0.0\nmigration/0      2-03:40:17  0.0\nchrome             03:48:15  0.0\nwireplumber      2-03:40:05  0.0\ndbus-daemon      2-03:40:07  0.0\nchrome             01:52:57  0.0\nskypeforlinux    2-03:39:41  0.0\ndockerd          2-03:39:52  0.0\nskypeforlinux    2-03:39:41  0.0\nUpdates            07:10:18  0.0\nmigration/8      2-03:40:17  0.0\nmigration/2      2-03:40:17  0.0\nmigration/12     2-03:40:17  0.0\nsnapd            2-03:40:07  0.0\nmigration/6      2-03:40:17  0.0\nmigration/4      2-03:40:17  0.0\npipewire-pulse   2-03:40:05  0.0\npipewire         2-03:40:05  0.0\ncode               07:11:19  0.0\nchrome           1-23:18:24  0.0\nibus-extension-  2-03:39:44  0.0\nkworker/6:1-mm_       19:48  0.0\nksoftirqd/14     2-03:40:17  0.0\ngsd-sharing      2-03:39:44  0.0\nibus-engine-sim  2-03:39:44  0.0\nupowerd          2-03:40:01  0.0\ndnsmasq          2-03:40:05  0.0\nksoftirqd/10     2-03:40:17  0.0\nsystemd          2-03:40:05  0.0\nksoftirqd/15     2-03:40:17  0.0\nksoftirqd/11     2-03:40:17  0.0\nsystemd          2-03:40:17  0.0\nkworker/11:2-ev    09:19:21  0.0\nfwupd            2-03:22:43  0.0\nkworker/14:0-ev    03:42:12  0.0\nkworker/7:1-mm_    01:41:57  0.0\nkworker/12:2-mm    16:48:10  0.0\nkworker/10:2-ev    04:16:41  0.0\nchrome                18:04  0.0\nkworker/0:2-eve    03:41:52  0.0\nksoftirqd/0      2-03:40:17  0.0\navahi-daemon     2-03:40:07  0.0\nat-spi2-registr  2-03:39:44  0.0\nnapi/phy0-8194   2-03:40:12  0.0\ngvfs-afc-volume  2-03:39:44  0.0\ncode               07:10:41  0.0\nksoftirqd/12     2-03:40:17  0.0\nkworker/8:2-eve    04:48:46  0.0\nkworker/4:2-eve    03:18:02  0.0\ngvfs-udisks2-vo  2-03:39:44  0.0\nksoftirqd/6      2-03:40:17  0.0\nwpa_supplicant   2-03:40:07  0.0\nkworker/15:1-cg    06:15:59  0.0\npolkitd          2-03:40:07  0.0\nksoftirqd/2      2-03:40:17  0.0\nxdg-desktop-por  2-03:39:42  0.0\ngsd-housekeepin  2-03:39:44  0.0\nupdate-notifier  2-03:38:44  0.0\nkworker/5:1-eve    03:16:46  0.0\nmigration/14     2-03:40:17  0.0\nmigration/10     2-03:40:17  0.0\nkworker/3:0-mm_    12:42:37  0.0\nkworker/13:0-mm  1-11:33:31  0.0\naccounts-daemon  2-03:40:07  0.0\npet                07:11:18  0.0\nsystemd-journal  2-03:40:13  0.0\nksoftirqd/8      2-03:40:17  0.0\nksoftirqd/7      2-03:40:17  0.0\nmigration/1      2-03:40:17  0.0\nkworker/9:2-eve  1-03:33:51  0.0\nkworker/1:0-mld  1-05:57:06  0.0\nmigration/5      2-03:40:17  0.0\nksoftirqd/4      2-03:40:17  0.0\nksoftirqd/13     2-03:40:17  0.0\nmigration/9      2-03:40:17  0.0\nmigration/7      2-03:40:17  0.0\nkworker/12:1H-k  2-03:40:16  0.0\nmigration/3      2-03:40:17  0.0\ngsd-color        2-03:39:44  0.0\nkworker/10:1H-k  2-03:40:16  0.0\nkworker/14:1H-k  2-03:40:16  0.0\nzsh                07:11:08  0.0\nkworker/8:1H-kb  2-03:40:16  0.0\nrtkit-daemon     2-03:40:05  0.0\nzsh                07:11:11  0.0\nmigration/13     2-03:40:17  0.0\nkworker/6:1H-kb  2-03:40:16  0.0\ngoa-identity-se  2-03:39:44  0.0\nchrome           1-23:18:28  0.0\ntracker-miner-f  2-03:39:44  0.0\nkworker/0:1H-kb  2-03:40:17  0.0\nkworker/2:1H-kb  2-03:40:16  0.0\nksoftirqd/1      2-03:40:17  0.0\nkworker/4:1H-kb  2-03:40:16  0.0\nsnapd-desktop-i  2-03:39:39  0.0\nksoftirqd/3      2-03:40:17  0.0\nblueman-applet   2-03:39:44  0.0\nsystemd-logind   2-03:40:07  0.0\nmigration/11     2-03:40:17  0.0\nsystemd-udevd    2-03:40:13  0.0\nmigration/15     2-03:40:17  0.0\nkworker/10:1-ev       24:50  0.0\nksoftirqd/9      2-03:40:17  0.0\nkworker/15:2-ev    03:41:53  0.0\nkworker/15:1H-k  2-03:40:16  0.0\nsystemd-machine  2-03:40:07  0.0\nkworker/11:1H-k  2-03:40:16  0.0\nksoftirqd/5      2-03:40:17  0.0\nkworker/7:1H-kb  2-03:40:16  0.0\ngsd-media-keys   2-03:39:44  0.0\ngsd-power        2-03:39:44  0.0\nudisksd          2-03:40:07  0.0\nkworker/13:1H-k  2-03:40:16  0.0\nsystemd-timesyn  2-03:40:09  0.0\nrsyslogd         2-03:40:07  0.0\nkworker/9:1H-kb  2-03:40:16  0.0\ngnome-session-b  2-03:39:45  0.0\nkworker/3:1H-kb  2-03:40:16  0.0\nkworker/5:1H-kb  2-03:40:16  0.0\nevolution-alarm  2-03:39:44  0.0\nkworker/1:1H-kb  2-03:40:16  0.0\ngnome-keyring-d  2-03:39:48  0.0\nnv_queue         2-03:40:08  0.0\ncron             2-03:40:07  0.0\nevolution-calen  2-03:39:44  0.0\nkhungtaskd       2-03:40:17  0.0\ngdm-session-wor  2-03:39:56  0.0\ngjs              2-03:39:44  0.0\ngnome-shell-cal  2-03:39:44  0.0\nzsh              2-00:48:24  0.0\ngvfsd-trash      2-03:39:43  0.0\ngsd-xsettings    2-03:39:44  0.0\nzsh              2-03:39:32  0.0\nxdg-desktop-por  2-03:39:42  0.0\nevolution-addre  2-03:39:44  0.0\nxdg-document-po  2-03:40:05  0.0\ndconf-service    2-03:39:44  0.0\ngsd-wacom        2-03:39:44  0.0\nevolution-sourc  2-03:39:44  0.0\nkerneloops       2-03:39:52  0.0\nkerneloops       2-03:39:52  0.0\nibus-portal      2-03:39:44  0.0\ngsd-keyboard     2-03:39:44  0.0\nModemManager     2-03:40:06  0.0\ngoa-daemon       2-03:39:44  0.0\ngvfsd            2-03:39:45  0.0\ncode               07:11:25  0.0\nThunar           2-03:39:43  0.0\ncolord           2-03:40:01  0.0\ngsd-disk-utilit  2-03:39:44  0.0\nuser-session-he  2-03:39:40  0.0\ngjs              2-03:39:44  0.0\ngdm3             2-03:40:05  0.0\nibus-x11         2-03:39:44  0.0\ngvfs-mtp-volume  2-03:39:44  0.0\ngvfs-gphoto2-vo  2-03:39:44  0.0\ngsd-printer      2-03:39:44  0.0\npower-profiles-  2-03:40:07  0.0\nbluetoothd       2-03:40:07  0.0\nkthreadd         2-03:40:17  0.0\ngvfs-goa-volume  2-03:39:44  0.0\nvirtlogd         2-03:40:07  0.0\nchrome_crashpad  1-23:18:28  0.0\ncode               07:11:25  0.0\ngvfsd-metadata   2-03:39:42  0.0\ngsd-smartcard    2-03:39:44  0.0\ngsd-print-notif  2-03:39:44  0.0\ngsd-rfkill       2-03:39:44  0.0\nunattended-upgr  2-03:40:05  0.0\nswitcheroo-cont  2-03:40:07  0.0\ngsd-sound        2-03:39:44  0.0\ngsd-datetime     2-03:39:44  0.0\ngnome-remote-de  2-03:40:07  0.0\nirq/9-acpi       2-03:40:17  0.0\nchrome_crashpad  2-03:39:41  0.0\ngsd-screensaver  2-03:39:44  0.0\ngsd-a11y-settin  2-03:39:44  0.0\nat-spi-bus-laun  2-03:39:45  0.0\ngnome-session-b  2-03:39:45  0.0\nxdg-permission-  2-03:40:05  0.0\nchrome           1-23:18:28  0.0\nchrome           1-23:18:28  0.0\nssh-agent        2-00:48:15  0.0\nskypeforlinux    2-03:39:43  0.0\nvirtlockd        2-03:40:07  0.0\nskypeforlinux    2-03:39:42  0.0\nobexd            2-03:39:44  0.0\nibus-dconf       2-03:39:44  0.0\npipewire         2-03:40:05  0.0\nkauditd          2-03:40:17  0.0\npool_workqueue_  2-03:40:17  0.0\nkworker/R-rcu_g  2-03:40:17  0.0\nkworker/R-rcu_p  2-03:40:17  0.0\nkworker/R-slub_  2-03:40:17  0.0\nkworker/R-netns  2-03:40:17  0.0\nkworker/0:0H-ev  2-03:40:17  0.0\nkworker/R-mm_pe  2-03:40:17  0.0\nrcu_tasks_kthre  2-03:40:17  0.0\nrcu_tasks_rude_  2-03:40:17  0.0\nrcu_tasks_trace  2-03:40:17  0.0\nidle_inject/0    2-03:40:17  0.0\ncpuhp/0          2-03:40:17  0.0\ncpuhp/2          2-03:40:17  0.0\nidle_inject/2    2-03:40:17  0.0\nkworker/2:0H-ev  2-03:40:17  0.0\ncpuhp/4          2-03:40:17  0.0\nidle_inject/4    2-03:40:17  0.0\nkworker/4:0H-ev  2-03:40:17  0.0\ncpuhp/6          2-03:40:17  0.0\nidle_inject/6    2-03:40:17  0.0\nkworker/6:0H-ev  2-03:40:17  0.0\ncpuhp/8          2-03:40:17  0.0\nidle_inject/8    2-03:40:17  0.0\nkworker/8:0H-ev  2-03:40:17  0.0\ncpuhp/10         2-03:40:17  0.0\nidle_inject/10   2-03:40:17  0.0\nkworker/10:0H-e  2-03:40:17  0.0\ncpuhp/12         2-03:40:17  0.0\nidle_inject/12   2-03:40:17  0.0\nkworker/12:0H-e  2-03:40:17  0.0\ncpuhp/14         2-03:40:17  0.0\nidle_inject/14   2-03:40:17  0.0\nkworker/14:0H-e  2-03:40:17  0.0\ncpuhp/1          2-03:40:17  0.0\nidle_inject/1    2-03:40:17  0.0\nkworker/1:0H-ev  2-03:40:17  0.0\ncpuhp/3          2-03:40:17  0.0\nidle_inject/3    2-03:40:17  0.0\nkworker/3:0H-ev  2-03:40:17  0.0\ncpuhp/5          2-03:40:17  0.0\nidle_inject/5    2-03:40:17  0.0\nkworker/5:0H-ev  2-03:40:17  0.0\ncpuhp/7          2-03:40:17  0.0\nidle_inject/7    2-03:40:17  0.0\nkworker/7:0H-ev  2-03:40:17  0.0\ncpuhp/9          2-03:40:17  0.0\nidle_inject/9    2-03:40:17  0.0\nkworker/9:0H-ev  2-03:40:17  0.0\ncpuhp/11         2-03:40:17  0.0\nidle_inject/11   2-03:40:17  0.0\nkworker/11:0H-e  2-03:40:17  0.0\ncpuhp/13         2-03:40:17  0.0\nidle_inject/13   2-03:40:17  0.0\nkworker/13:0H-e  2-03:40:17  0.0\ncpuhp/15         2-03:40:17  0.0\nidle_inject/15   2-03:40:17  0.0\nkworker/15:0H-e  2-03:40:17  0.0\nkdevtmpfs        2-03:40:17  0.0\nkworker/R-inet_  2-03:40:17  0.0\noom_reaper       2-03:40:17  0.0\nkworker/R-write  2-03:40:17  0.0\nksmd             2-03:40:17  0.0\nkhugepaged       2-03:40:17  0.0\nkworker/R-kinte  2-03:40:17  0.0\nkworker/R-kbloc  2-03:40:17  0.0\nkworker/R-blkcg  2-03:40:17  0.0\nkworker/R-tpm_d  2-03:40:17  0.0\nkworker/R-ata_s  2-03:40:17  0.0\nkworker/R-md     2-03:40:17  0.0\nkworker/R-md_bi  2-03:40:17  0.0\nkworker/R-edac-  2-03:40:17  0.0\nkworker/R-devfr  2-03:40:17  0.0\nwatchdogd        2-03:40:17  0.0\nkworker/R-quota  2-03:40:17  0.0\nirq/25-AMD-Vi0-  2-03:40:17  0.0\nirq/26-AMD-Vi0-  2-03:40:17  0.0\nirq/27-AMD-Vi0-  2-03:40:17  0.0\necryptfs-kthrea  2-03:40:16  0.0\nkworker/R-kthro  2-03:40:16  0.0\nirq/36-pciehp    2-03:40:16  0.0\nirq/37-pciehp    2-03:40:16  0.0\nkworker/R-acpi_  2-03:40:16  0.0\nkworker/R-mld    2-03:40:16  0.0\nkworker/R-ipv6_  2-03:40:16  0.0\nkworker/R-kstrp  2-03:40:16  0.0\nkworker/R-charg  2-03:40:16  0.0\nirq/28-ACPI:Eve  2-03:40:16  0.0\nirq/29-ACPI:Eve  2-03:40:16  0.0\nirq/30-ACPI:Eve  2-03:40:16  0.0\nirq/31-ACPI:Eve  2-03:40:16  0.0\nirq/32-ACPI:Eve  2-03:40:16  0.0\nirq/33-ACPI:Eve  2-03:40:16  0.0\nirq/34-ACPI:Eve  2-03:40:16  0.0\nirq/35-ACPI:Eve  2-03:40:16  0.0\nirq/41-ASUS2020  2-03:40:16  0.0\nscsi_eh_0        2-03:40:16  0.0\nkworker/R-scsi_  2-03:40:16  0.0\nscsi_eh_1        2-03:40:16  0.0\nkworker/R-scsi_  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-ext4-  2-03:40:14  0.0\npsimon           2-03:40:13  0.0\nkworker/R-cfg80  2-03:40:12  0.0\nkworker/R-crypt  2-03:40:12  0.0\nkworker/R-led_w  2-03:40:12  0.0\nkworker/R-amdgp  2-03:40:09  0.0\nnv_queue         2-03:40:09  0.0\nnv_queue         2-03:40:09  0.0\nkworker/R-ttm    2-03:40:09  0.0\nnv_open_q        2-03:40:09  0.0\nnvidia-modeset/  2-03:40:08  0.0\nnvidia-modeset/  2-03:40:08  0.0\nirq/93-nvidia    2-03:40:08  0.0\nkworker/R-amdgp  2-03:40:08  0.0\nkworker/R-amdgp  2-03:40:08  0.0\nkworker/R-dm_vb  2-03:40:08  0.0\ncard1-crtc0      2-03:40:08  0.0\ncard1-crtc1      2-03:40:08  0.0\ncard1-crtc2      2-03:40:08  0.0\ncard1-crtc3      2-03:40:08  0.0\nlpd              2-03:40:07  0.0\navahi-daemon     2-03:40:07  0.0\nUVM global queu  2-03:40:06  0.0\nUVM deferred re  2-03:40:06  0.0\nUVM Tools Event  2-03:40:06  0.0\nnvidia-persiste  2-03:40:06  0.0\n(sd-pam)         2-03:40:05  0.0\ndnsmasq          2-03:40:05  0.0\nfusermount3      2-03:40:05  0.0\nkrfcommd         2-03:40:04  0.0\ngdm-x-session    2-03:39:48  0.0\nnvidia-drm/time  2-03:39:47  0.0\ngcr-ssh-agent    2-03:39:45  0.0\ngnome-session-c  2-03:39:45  0.0\ngvfsd-fuse       2-03:39:45  0.0\nskypeforlinux    2-03:39:42  0.0\ncat              1-23:18:28  0.0\ncat              1-23:18:28  0.0\nchrome_crashpad  1-23:18:28  0.0\nchrome           1-22:22:28  0.0\nnvidia             12:43:12  0.0\nkworker/R-xfsal    12:41:20  0.0\nkworker/R-xfs_m    12:41:20  0.0\njfsIO              12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsSync            12:41:20  0.0\npsimon             09:03:11  0.0\ncode               07:11:25  0.0\nchrome_crashpad    07:11:25  0.0\ndconf              07:11:22  0.0\nkworker/1:1        01:49:56  0.0\nkworker/3:1        01:35:40  0.0\nkworker/8:0-cgr    01:28:41  0.0\nkworker/9:1-eve    01:19:01  0.0\nkworker/4:1-rcu    01:19:01  0.0\nkworker/14:1-ev    01:14:32  0.0\nkworker/5:0-rcu    01:05:42  0.0\nkworker/7:2-cgr       53:51  0.0\nkworker/13:2          35:56  0.0\nkworker/2:0-eve       26:57  0.0\nkworker/11:0-mm       26:39  0.0\nkworker/0:1-eve       12:52  0.0\nkworker/u33:1         12:50  0.0\nkworker/12:1-mm       12:29  0.0\nkworker/8:1-cgr       03:23  0.0\nps                    00:00  0.0\n",
+    "preexisting_tracked_differences": [
+      "crates/araphor-data/src/analysis/read/tests.rs",
+      "crates/araphor-data/src/graph/contract.rs",
+      "crates/araphor-data/src/graph/contract/tests.rs",
+      "crates/araphor-data/src/graph/mod.rs",
+      "crates/araphor-data/tests/native_store.rs",
+      "docs/guides/araphor-native-storage-review.md",
+      "docs/plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-6-python-execution.md",
+      "docs/research/araphor-fjall-integration.md",
+      "docs/research/generated/gabriela-roulin-interview-guide.md"
+    ],
+    "preexisting_diff_sha256": "6fe9bc8d4fcfd98f3c8787efdf5280a74fd719efed11cd1a5c966b55336e8d84",
+    "replacement_source_sha256": {
+      "crates/araphor-analysis-types/src/source.rs": "7d9017af644cd98172afc30da5bb399d4c872d859d7022ac7a2cb51030172bda",
+      "crates/araphor-data/examples/raw_owner_bench.rs": "b46a7b281dd4b978b9d2d4060a4eec4272a5c4f46f83734543415e9f535bc0d8",
+      "crates/araphor-data/src/analysis/extraction.rs": "7711c445632483ce01247956602a682be58d1f82f784b5ab9f5107f74031a49c",
+      "crates/araphor-data/src/analysis/extraction/append.rs": "4d5cb1b67df5021e2e0765470af81d6424141d9ade3bfac8241e16b68aee119d",
+      "crates/araphor-data/src/analysis/extraction/raw.rs": "bb36f542dbc2634ff5d09b31e8107962dabf87cdd67cb9d1036749af0ebed5bb",
+      "crates/araphor-data/src/analysis/inputs/interest.rs": "87f5bb28c308164d25e7a0abafb3835aa546602f69c987c6b406a982038d21a2",
+      "crates/araphor-data/src/analysis/inputs/mod.rs": "f966546bdffaf030a95687c3d2fb1c03ed3a0b0686aac86adbf50868ed3e32ec",
+      "crates/araphor-data/src/analysis/mod.rs": "ccbea1945ec3c682243b6b7005b2a02de666da52233d0d9ab79db34dc91d67ef",
+      "crates/araphor-data/src/analysis/native/backup/files.rs": "60ea9f1908c2305a6f308ef45d7ff03c8041ff0c2b2155c944522c845a34c122",
+      "crates/araphor-data/src/analysis/native/backup/mod.rs": "8188b90d073f121d5bb0f14fc95f23d9dba10e4105a5d3624ed6ec67c12122ed",
+      "crates/araphor-data/src/analysis/native/benchmark.rs": "6119ebeac42b6d892b2afec62ede8b14f34dad618a25ee949134f97e5f8b281b",
+      "crates/araphor-data/src/analysis/native/events/intake.rs": "4904b7aa1195708e59ab5928adee6667f21d6770ae55b731c414c80a4a8d98b3",
+      "crates/araphor-data/src/analysis/native/events/mod.rs": "23717bbb6bd6c8d199de2977d801a8d313fde14dc0ebf07953be0d9b1ab1a1c9",
+      "crates/araphor-data/src/analysis/native/events/read.rs": "346ee4bfcc9542fa37be17bb7f2098c0944981cff904f5c43ba393c6f19dd185",
+      "crates/araphor-data/src/analysis/native/events/recovery.rs": "540b7a401df12e39dda03043edb0f0de1eddb5ad4257bf4aabcf5f555070bf83",
+      "crates/araphor-data/src/analysis/native/events/retention.rs": "dd7ca87315889df403c7ec0ecafce279659189ee3bb6e550708d1aa042129723",
+      "crates/araphor-data/src/analysis/native/extraction/mod.rs": "790574f67769355c9e7d81529a8a96c32b837252caffebe6a71368c608a6b6cc",
+      "crates/araphor-data/src/analysis/native/extraction/removals.rs": "d8ff3e8e9180eafbcefbd261c953b36876ec9f3f8bd032c4158b0e50c4230fc9",
+      "crates/araphor-data/src/analysis/native/extraction/source.rs": "a493d8050e0e24fc05ee2ef058441995b3a172f3ad2a0e355ca532fb6cb7bdf2",
+      "crates/araphor-data/src/analysis/native/extraction/tests.rs": "b22e9a9aee1d4ca51ef98d79797a6246a4213c27265cf9b6bb00100d10c8bce9",
+      "crates/araphor-data/src/analysis/native/extraction/tests/bounds.rs": "53249b295a0d841189773b9ea877bda95ef145c4e581a3b13c3bf87970e4463b",
+      "crates/araphor-data/src/analysis/native/extraction/tests/lifecycle.rs": "2881eb31329a20aa5cac8787662733236c3773517870c4b64dec65d068428a89",
+      "crates/araphor-data/src/analysis/native/extraction/tests/positions.rs": "fb119dde3f75c27cb05494673050d516994cb50368deac198cabbdca742fae4b",
+      "crates/araphor-data/src/analysis/native/extraction/tests/selection.rs": "f7a675e62aecbc5244fa5763e18bc16c34e68ad8d185ed0e03ddf91e2a5b98d6",
+      "crates/araphor-data/src/analysis/native/fixtures.rs": "5b3f751cd36fd238224f0008a51b7e7a2ab28b6caf464a1d3dd244816121e94c",
+      "crates/araphor-data/src/analysis/native/history.rs": "f4cff81effcc234b977922951896f7778b1844f0ade36453c45821e8a2ccb4bb",
+      "crates/araphor-data/src/analysis/native/inputs/records.rs": "67aa07e27b9f63e97e0fc4b796e442ed9326a0148c5f5ec55edffd8d8f866cf3",
+      "crates/araphor-data/src/analysis/native/managed/attempts.rs": "02f443a199689abb3c7dd82d3135e0fdcabf2ac9e0a8f174d532bd66cbb1301c",
+      "crates/araphor-data/src/analysis/native/managed/mod.rs": "b84bd367b589d9f19b1a77d910a10771c19c3630ddc385136c346c0772292432",
+      "crates/araphor-data/src/analysis/native/managed/references.rs": "07477ca73f692c3d13dfe57343daf80e700bf6326370c4a151a6d820fabc6dcc",
+      "crates/araphor-data/src/analysis/native/managed/references/pins.rs": "a890489d0749b92866a311f31e56cfa2bd16f0d961c4f2db49aca3c45a164c8a",
+      "crates/araphor-data/src/analysis/native/managed/references/read.rs": "93035107641a342ed4ca4ee20522ae145646226226a4279ecb20070b554fa700",
+      "crates/araphor-data/src/analysis/native/mod.rs": "e35236d032304a87a95c600aced62a384e2acecea15b138655756b8b17aa19c1",
+      "crates/araphor-data/src/analysis/native/progress/coverage.rs": "1d28d9b675a1320092cf1e12184eacbdb0ce61e595b75834641eab77515ec5fc",
+      "crates/araphor-data/src/analysis/native/progress/health.rs": "5f47763f11391b679a6e045822ae965073a8351a8cb658cffdfe157ad12dd224",
+      "crates/araphor-data/src/analysis/native/progress/mod.rs": "89b0425da16307577f1cee80275b8147ca8d7ea4d8616cc5338e67b0787a6216",
+      "crates/araphor-data/src/analysis/native/progress/recovery.rs": "f62f3f52f99b79e3d2ed27fd38c678f929907f8d6f8010a1387bb5533e042ee3",
+      "crates/araphor-data/src/analysis/native/recovery.rs": "5927fc675ed91d488b22e05c30ecaa6ea123520a7c90d039013de85f3c82292f",
+      "crates/araphor-data/src/analysis/native/retention/expiry.rs": "a8ca633685ec61ffa03ed96960c2bfba5380224491c00dda83b82485ec90db21",
+      "crates/araphor-data/src/analysis/native/retention/mod.rs": "75fc15a0ae36ffc8a0504f47916357bef05a0a246d4174920f4290608648e1de",
+      "crates/araphor-data/src/analysis/native/retention/selection.rs": "45e4aaba12fbf601357cb8cde08e936466d85389194e69563f9be634e1a2ed62",
+      "crates/araphor-data/src/analysis/native/retention/write.rs": "b226f5831eb964a0ad32e3adb0df5b90e7f9eef992e547a7b99039e3a3f8e3a8",
+      "crates/araphor-data/src/analysis/native/source/coverage.rs": "af1f1bfcb87f56596b1fd4ab5cd73dfbcebf12b3a055e914bbb7d89a7cac52cc",
+      "crates/araphor-data/src/analysis/native/source/mod.rs": "e81a64c48aec290c1412138562b98a6acef31967928999d22af908e502721eb5",
+      "crates/araphor-data/src/analysis/native/source/raw.rs": "3872b53279b24e3e92e37f77177f5c3431fc6a58fb6d870dc092ec57620b8952",
+      "crates/araphor-data/src/analysis/native/source/recovery.rs": "a3813647a34eb54f3e0ad0549c5be303448f0865db86058167cfbc348f57f238",
+      "crates/araphor-data/src/analysis/native/witnesses.rs": "0af5b39ab950b3f0ba1353d4aa746c5f83de3bcf23cae8745735d060b94db69c",
+      "crates/araphor-data/src/analysis/quota.rs": "405511f94f840922ce34c1345d4a6ceb4ceb6a13309d994284e10b1b541afa60",
+      "crates/araphor-data/src/analysis/raw.rs": "2f10340bb52f785a7d1999d3469d8bea882ee14627f7896e913ca304c89285ec",
+      "crates/araphor-data/src/analysis/raw_segments.rs": "b9c6c683f6866ffe90b12b8856038c4040deeed77596046d5f9e1ff76a3a80c7",
+      "crates/araphor-data/src/analysis/segments.rs": "b9f69b10c6d021fc570325c4fbd303808ee440e30dfdaacf1174ae31e801044b",
+      "crates/araphor-data/tests/native_backup.rs": "c794f8727a4224b3d843a0e4f2191a798a52aaceedebb58555e982c7fb064363",
+      "crates/araphor-data/tests/native_backup/bundle.rs": "6d5ad94798893be2031950ccb38ba5947ceb751a17d6bd5845fac147bebd800b",
+      "crates/araphor-data/tests/native_backup/trace.rs": "9e79d26ab40c28ffa3baa4e3403b85bb78731259251bbf404f440987561abda7",
+      "crates/araphor-data/tests/native_events.rs": "45b90155c823644d5c1271e1ac504369673991eb9cf9d0842c442a7f8c2bfff2",
+      "crates/araphor-data/tests/native_inputs.rs": "ea45295ca14e44abe2660b5fd96d311901d652465e35cb80cea7ad82a95bbb27",
+      "crates/araphor-data/tests/native_managed/domain/findings.rs": "20962b8a4c46ad029aabe8379862c8add540421d06cf611cf8d3a584f040aa24",
+      "crates/araphor-data/tests/native_managed/domain/notifications.rs": "052417d83645a2e0264a336ed757a9a1e255577902a9ccd1853fb2e90694ed29",
+      "crates/araphor-data/tests/native_managed/progress/pins.rs": "dd9ff4cf03aa894d1420b57e4bfbc089a1b4feac697fd2e93f60948d04d98be2",
+      "crates/araphor-data/tests/native_managed/publication.rs": "6f232d90c6aa2568e75234f5b763bd79256deccbe74564f15d4eba560f55d361",
+      "crates/araphor-data/tests/native_managed/storage/guards.rs": "226fc78daa7cdfdca4ae876ce6dbda9a5f553a8aa9a20fffe8ceb4859648d9cf",
+      "crates/araphor-data/tests/native_managed/storage/guards/current.rs": "cc63f00295f92c9a3fc38a174e0fb6d620cf6d19659dbf855f8163f293d0d649",
+      "crates/araphor-data/tests/native_managed/storage/retention.rs": "b2de2b61ae388af154bee2487e12d04f60c248970035168d41bf516725415c15",
+      "crates/araphor-data/tests/native_managed/storage/source/retention.rs": "d48dd5bfb8f9b54cee43a202c38b0d3757f757834b7f7e9e0c29ad2aefc25644",
+      "crates/araphor-data/tests/native_raw.rs": "4431d1941ca2b21b89ac07a97eaae53039907819e647ad416128e2ce62e8f535",
+      "crates/araphor-data/tests/native_raw/freshness.rs": "d269c222825e20fb4bf25e9bb82a9e36a611b47ac793ae0d91a8135ce89f4d79",
+      "crates/araphor-data/tests/native_raw/segments.rs": "9f6ed1c1e7b176f314baf262c5755903f11e105ce21884ce47065db2b9256380",
+      "crates/araphor-data/tests/native_raw/store.rs": "95fcc998f083340d5ce0a1f5e97f4deaf6cc0921fff6994600a8701c04eae31f",
+      "crates/araphor-data/tests/native_raw/trace.rs": "c8bd9d9158a2451496bfd883b8fcf278d5e50deb743f9972be09301c579132e9",
+      "crates/araphor-data/tests/raw_index.rs": "9023af1f0184e60927f466377504b5dfd2674840c57680164cd098356d80ca16",
+      "crates/mithril-control/src/evidence.rs": "cf3e11f679ce3ac4b3eacb22d4d0ffdf4850ae4d1cf54c169e2d01cc7f514957",
+      "crates/mithril-control/tests/native_evidence.rs": "3730084c0825baf05a5012db49fe1cb05551b55da5197c63ee81154f455bf512",
+      "scripts/benchmark_raw_reads.py": "255d166f782beb9e0ac62dc5115a78287a8de52c5483ff3e5c92e515f7fa89d2",
+      "scripts/benchmark_raw_storage.py": "2397d79d1428a248169a865943e2472bbf688f9d3d907183927d1322ed227522"
+    },
+    "matched_builds": {
+      "profile": "release",
+      "feature": "test-fixtures",
+      "scan_mode": "pages",
+      "native_store_baseline_source_unchanged": "957475fbe..9bd0c6704",
+      "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+      "performance_scope": "validated Data acceptance plus benchmark result/reference/progress; no notification timing",
+      "baseline_origin": "frozen raw_owner_stream from read investigation; archived driver hashes exactly match9bd0c6704",
+      "driver_matches": {
+        "crates/araphor-data/examples/raw_owner_bench.rs": "b222841da80267264f4e000e6fb145a2f400d3a8a348641611c9a546eff8f143",
+        "crates/araphor-data/src/analysis/native/benchmark.rs": "25a569728b2309542d4cec6d16ec7ef0d51ad091e601f53529d67c810c076659",
+        "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640"
+      }
+    },
+    "superseded_comparison": {
+      "path": "output/araphor-kernel-evidence-20261112/paired",
+      "reason": "older frozen driver lacked terminal untimed validation probes; excluded from final claims",
+      "provenance": {
+        "commit": "1250ba8ffffd0a50e8c9bb1aee12eed9ec3e691c",
+        "binaries": {
+          "before": {
+            "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_before",
+            "sha256": "ddec7141291cbebd5beb8c556ed61e6f2e068670b12b580c0aad10c09f723678"
+          },
+          "after": {
+            "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-kernel-evidence-20261112/raw_owner_native",
+            "sha256": "88f05c9833c5df3c8523bbcd7a0d70c3a0589d6ed278cd13c8d30db9dd78f6cb"
+          }
+        },
+        "source_sha256": {
+          "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640",
+          "crates/araphor-data/src/analysis/native/benchmark.rs": "6119ebeac42b6d892b2afec62ede8b14f34dad618a25ee949134f97e5f8b281b",
+          "crates/araphor-data/examples/raw_owner_bench.rs": "b46a7b281dd4b978b9d2d4060a4eec4272a5c4f46f83734543415e9f535bc0d8",
+          "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+          "scripts/benchmark_raw_storage.py": "2397d79d1428a248169a865943e2472bbf688f9d3d907183927d1322ed227522",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "255d166f782beb9e0ac62dc5115a78287a8de52c5483ff3e5c92e515f7fa89d2"
+        },
+        "engine_commits": {
+          "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+          "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+        },
+        "records": [
+          16384,
+          262144
+        ],
+        "batch_records": 256,
+        "orders": [
+          [
+            "before",
+            "after"
+          ],
+          [
+            "after",
+            "before"
+          ],
+          [
+            "before",
+            "after"
+          ],
+          [
+            "after",
+            "before"
+          ]
+        ],
+        "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen",
+        "scan_modes": {
+          "before": "pages",
+          "after": "pages"
+        },
+        "backends": {
+          "before": "hybrid",
+          "after": "production"
+        },
+        "baseline_artifact": {
+          "commit": "957475fbe294931b8ec5ac02262f4ff8a83e9949",
+          "binaries": {
+            "before": {
+              "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_before",
+              "sha256": "ddec7141291cbebd5beb8c556ed61e6f2e068670b12b580c0aad10c09f723678"
+            },
+            "after": {
+              "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-raw-read-20261112/raw_owner_after",
+              "sha256": "2553efec6955e021dfd4fe6509ac443811a7ee6f12973058c569c0b7d0ac35b9"
+            }
+          },
+          "source_sha256": {
+            "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "36e91d76fa314f49388b7d431454dab3cec6e816a9af7c8bb103b737445b4757",
+            "crates/araphor-data/src/analysis/native/benchmark.rs": "3310e2ced00e6906b9fe1eec3316dcb9a4ae021e755599455fb30455c86f174e",
+            "crates/araphor-data/examples/raw_owner_bench.rs": "82be88a0bc4106c534b230fe83c3137735c99946113cf13f53344186fc5effc2",
+            "crates/araphor-data/examples/raw_storage/common.rs": "7ab38c0ffeab308ae8ac1b3ec6f5f61705c7cf3990d1549f7ac8b99d01cd3115",
+            "scripts/benchmark_raw_storage.py": "a0028fc797e0ce9f8453bdc5e094f38ed4c908a40606e99cc5d7c9902969cb0f",
+            "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/scripts/benchmark_raw_reads.py": "a8389c96d6af481e353daf56b5b241a4b2c9f3a3b789b8536e223b1032529a21"
+          },
+          "engine_commits": {
+            "fjall": "f745c5462276e33d81d897108d9a34535440df00",
+            "lsm-tree": "56d74411bdcdf9fe010373393c69cac96892f85d"
+          },
+          "records": [
+            16384,
+            262144
+          ],
+          "batch_records": 256,
+          "orders": [
+            [
+              "before",
+              "after"
+            ],
+            [
+              "after",
+              "before"
+            ],
+            [
+              "before",
+              "after"
+            ],
+            [
+              "after",
+              "before"
+            ]
+          ],
+          "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen"
+        },
+        "compiler_and_host": "$ uname -a\nLinux navid-laptop 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n$ rustc --version --verbose\nrustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n$ findmnt -T output/araphor-kernel-evidence-20261112 -o SOURCE,FSTYPE,OPTIONS\nSOURCE         FSTYPE OPTIONS\n/dev/nvme0n1p7 ext4   rw,relatime,errors=remount-ro\n$ df -h output/araphor-kernel-evidence-20261112\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  462G  434G  3.7G 100% /\n$ git -C fjall rev-parse HEAD\nf745c5462276e33d81d897108d9a34535440df00\n$ git -C lsm-tree rev-parse HEAD\n56d74411bdcdf9fe010373393c69cac96892f85d\nCOMMAND             ELAPSED %CPU\npython3               00:00 76.9\ncode               07:11:25 73.5\ncode               07:11:22 37.8\nrtk                   00:00 22.2\nchrome             01:50:16  6.5\nchrome           1-22:22:28  5.9\ncodex            2-03:38:57  5.2\nchrome           1-07:16:15  3.0\nchrome             03:59:52  2.8\nXorg             2-03:39:48  2.5\ngnome-shell      2-03:39:45  2.2\nterminator       2-03:39:32  1.8\ncode               07:11:22  1.2\nTelegram         1-05:53:56  1.1\nmutter-x11-fram  2-03:39:44  1.0\nchrome           1-23:18:28  0.9\nrust-analyzer      07:11:17  0.8\nMainThread       2-03:40:05  0.8\ncode               07:11:25  0.8\nchrome             03:48:22  0.7\ncode               07:11:25  0.5\nchrome           1-23:18:24  0.5\nkworker/u32:1-f       23:01  0.3\nkworker/u32:6-g       19:56  0.3\nchrome           1-23:18:28  0.2\nkworker/u32:5-c       39:35  0.2\nupdate-manager     12:37:56  0.2\nkworker/u32:3-e       39:35  0.2\nxdg-desktop-por  2-03:39:42  0.1\nkworker/u32:0-c       01:42  0.1\nchrome           1-23:06:46  0.1\ncode               07:11:22  0.1\ncode               07:11:21  0.1\nrcu_preempt      2-03:40:17  0.1\nnapi/phy0-8193   2-03:40:12  0.1\ncode               07:11:02  0.0\ndbus-daemon      2-03:40:05  0.0\nkworker/u33:3-h       07:53  0.0\ncontainerd       2-03:40:05  0.0\nkcompactd0       2-03:40:17  0.0\nblueman-tray     2-03:39:44  0.0\nirq/42-ASUE1A01  2-03:40:16  0.0\nrust-analyzer-p    07:11:16  0.0\nnapi/phy0-8195   2-03:40:12  0.0\ncode               07:11:22  0.0\nkworker/2:1-eve    03:47:25  0.0\ndbus-daemon      2-03:39:45  0.0\nrust-analyzer-p    07:11:16  0.0\nskypeforlinux    2-03:39:44  0.0\nmt76-tx phy0     2-03:40:11  0.0\nibus-daemon      2-03:39:44  0.0\nkswapd0          2-03:40:16  0.0\nNetworkManager   2-03:40:07  0.0\njbd2/nvme0n1p7-  2-03:40:14  0.0\ncode               07:11:23  0.0\nsystemd-oomd     2-03:40:09  0.0\ncodex-code-mode  2-03:38:33  0.0\nchrome           1-22:22:34  0.0\ncode               07:11:25  0.0\ncodex              07:11:21  0.0\nskypeforlinux    2-03:39:41  0.0\nchrome             12:43:06  0.0\nsystemd-resolve  2-03:40:09  0.0\nchrome           1-23:18:28  0.0\nkworker/6:0-pm     01:27:51  0.0\nmigration/0      2-03:40:17  0.0\nchrome             03:48:15  0.0\nwireplumber      2-03:40:05  0.0\ndbus-daemon      2-03:40:07  0.0\nchrome             01:52:57  0.0\nskypeforlinux    2-03:39:41  0.0\ndockerd          2-03:39:52  0.0\nskypeforlinux    2-03:39:41  0.0\nUpdates            07:10:18  0.0\nmigration/8      2-03:40:17  0.0\nmigration/2      2-03:40:17  0.0\nmigration/12     2-03:40:17  0.0\nsnapd            2-03:40:07  0.0\nmigration/6      2-03:40:17  0.0\nmigration/4      2-03:40:17  0.0\npipewire-pulse   2-03:40:05  0.0\npipewire         2-03:40:05  0.0\ncode               07:11:19  0.0\nchrome           1-23:18:24  0.0\nibus-extension-  2-03:39:44  0.0\nkworker/6:1-mm_       19:48  0.0\nksoftirqd/14     2-03:40:17  0.0\ngsd-sharing      2-03:39:44  0.0\nibus-engine-sim  2-03:39:44  0.0\nupowerd          2-03:40:01  0.0\ndnsmasq          2-03:40:05  0.0\nksoftirqd/10     2-03:40:17  0.0\nsystemd          2-03:40:05  0.0\nksoftirqd/15     2-03:40:17  0.0\nksoftirqd/11     2-03:40:17  0.0\nsystemd          2-03:40:17  0.0\nkworker/11:2-ev    09:19:21  0.0\nfwupd            2-03:22:43  0.0\nkworker/14:0-ev    03:42:12  0.0\nkworker/7:1-mm_    01:41:57  0.0\nkworker/12:2-mm    16:48:10  0.0\nkworker/10:2-ev    04:16:41  0.0\nchrome                18:04  0.0\nkworker/0:2-eve    03:41:52  0.0\nksoftirqd/0      2-03:40:17  0.0\navahi-daemon     2-03:40:07  0.0\nat-spi2-registr  2-03:39:44  0.0\nnapi/phy0-8194   2-03:40:12  0.0\ngvfs-afc-volume  2-03:39:44  0.0\ncode               07:10:41  0.0\nksoftirqd/12     2-03:40:17  0.0\nkworker/8:2-eve    04:48:46  0.0\nkworker/4:2-eve    03:18:02  0.0\ngvfs-udisks2-vo  2-03:39:44  0.0\nksoftirqd/6      2-03:40:17  0.0\nwpa_supplicant   2-03:40:07  0.0\nkworker/15:1-cg    06:15:59  0.0\npolkitd          2-03:40:07  0.0\nksoftirqd/2      2-03:40:17  0.0\nxdg-desktop-por  2-03:39:42  0.0\ngsd-housekeepin  2-03:39:44  0.0\nupdate-notifier  2-03:38:44  0.0\nkworker/5:1-eve    03:16:46  0.0\nmigration/14     2-03:40:17  0.0\nmigration/10     2-03:40:17  0.0\nkworker/3:0-mm_    12:42:37  0.0\nkworker/13:0-mm  1-11:33:31  0.0\naccounts-daemon  2-03:40:07  0.0\npet                07:11:18  0.0\nsystemd-journal  2-03:40:13  0.0\nksoftirqd/8      2-03:40:17  0.0\nksoftirqd/7      2-03:40:17  0.0\nmigration/1      2-03:40:17  0.0\nkworker/9:2-eve  1-03:33:51  0.0\nkworker/1:0-mld  1-05:57:06  0.0\nmigration/5      2-03:40:17  0.0\nksoftirqd/4      2-03:40:17  0.0\nksoftirqd/13     2-03:40:17  0.0\nmigration/9      2-03:40:17  0.0\nmigration/7      2-03:40:17  0.0\nkworker/12:1H-k  2-03:40:16  0.0\nmigration/3      2-03:40:17  0.0\ngsd-color        2-03:39:44  0.0\nkworker/10:1H-k  2-03:40:16  0.0\nkworker/14:1H-k  2-03:40:16  0.0\nzsh                07:11:08  0.0\nkworker/8:1H-kb  2-03:40:16  0.0\nrtkit-daemon     2-03:40:05  0.0\nzsh                07:11:11  0.0\nmigration/13     2-03:40:17  0.0\nkworker/6:1H-kb  2-03:40:16  0.0\ngoa-identity-se  2-03:39:44  0.0\nchrome           1-23:18:28  0.0\ntracker-miner-f  2-03:39:44  0.0\nkworker/0:1H-kb  2-03:40:17  0.0\nkworker/2:1H-kb  2-03:40:16  0.0\nksoftirqd/1      2-03:40:17  0.0\nkworker/4:1H-kb  2-03:40:16  0.0\nsnapd-desktop-i  2-03:39:39  0.0\nksoftirqd/3      2-03:40:17  0.0\nblueman-applet   2-03:39:44  0.0\nsystemd-logind   2-03:40:07  0.0\nmigration/11     2-03:40:17  0.0\nsystemd-udevd    2-03:40:13  0.0\nmigration/15     2-03:40:17  0.0\nkworker/10:1-ev       24:50  0.0\nksoftirqd/9      2-03:40:17  0.0\nkworker/15:2-ev    03:41:53  0.0\nkworker/15:1H-k  2-03:40:16  0.0\nsystemd-machine  2-03:40:07  0.0\nkworker/11:1H-k  2-03:40:16  0.0\nksoftirqd/5      2-03:40:17  0.0\nkworker/7:1H-kb  2-03:40:16  0.0\ngsd-media-keys   2-03:39:44  0.0\ngsd-power        2-03:39:44  0.0\nudisksd          2-03:40:07  0.0\nkworker/13:1H-k  2-03:40:16  0.0\nsystemd-timesyn  2-03:40:09  0.0\nrsyslogd         2-03:40:07  0.0\nkworker/9:1H-kb  2-03:40:16  0.0\ngnome-session-b  2-03:39:45  0.0\nkworker/3:1H-kb  2-03:40:16  0.0\nkworker/5:1H-kb  2-03:40:16  0.0\nevolution-alarm  2-03:39:44  0.0\nkworker/1:1H-kb  2-03:40:16  0.0\ngnome-keyring-d  2-03:39:48  0.0\nnv_queue         2-03:40:08  0.0\ncron             2-03:40:07  0.0\nevolution-calen  2-03:39:44  0.0\nkhungtaskd       2-03:40:17  0.0\ngdm-session-wor  2-03:39:56  0.0\ngjs              2-03:39:44  0.0\ngnome-shell-cal  2-03:39:44  0.0\nzsh              2-00:48:24  0.0\ngvfsd-trash      2-03:39:43  0.0\ngsd-xsettings    2-03:39:44  0.0\nzsh              2-03:39:32  0.0\nxdg-desktop-por  2-03:39:42  0.0\nevolution-addre  2-03:39:44  0.0\nxdg-document-po  2-03:40:05  0.0\ndconf-service    2-03:39:44  0.0\ngsd-wacom        2-03:39:44  0.0\nevolution-sourc  2-03:39:44  0.0\nkerneloops       2-03:39:52  0.0\nkerneloops       2-03:39:52  0.0\nibus-portal      2-03:39:44  0.0\ngsd-keyboard     2-03:39:44  0.0\nModemManager     2-03:40:06  0.0\ngoa-daemon       2-03:39:44  0.0\ngvfsd            2-03:39:45  0.0\ncode               07:11:25  0.0\nThunar           2-03:39:43  0.0\ncolord           2-03:40:01  0.0\ngsd-disk-utilit  2-03:39:44  0.0\nuser-session-he  2-03:39:40  0.0\ngjs              2-03:39:44  0.0\ngdm3             2-03:40:05  0.0\nibus-x11         2-03:39:44  0.0\ngvfs-mtp-volume  2-03:39:44  0.0\ngvfs-gphoto2-vo  2-03:39:44  0.0\ngsd-printer      2-03:39:44  0.0\npower-profiles-  2-03:40:07  0.0\nbluetoothd       2-03:40:07  0.0\nkthreadd         2-03:40:17  0.0\ngvfs-goa-volume  2-03:39:44  0.0\nvirtlogd         2-03:40:07  0.0\nchrome_crashpad  1-23:18:28  0.0\ncode               07:11:25  0.0\ngvfsd-metadata   2-03:39:42  0.0\ngsd-smartcard    2-03:39:44  0.0\ngsd-print-notif  2-03:39:44  0.0\ngsd-rfkill       2-03:39:44  0.0\nunattended-upgr  2-03:40:05  0.0\nswitcheroo-cont  2-03:40:07  0.0\ngsd-sound        2-03:39:44  0.0\ngsd-datetime     2-03:39:44  0.0\ngnome-remote-de  2-03:40:07  0.0\nirq/9-acpi       2-03:40:17  0.0\nchrome_crashpad  2-03:39:41  0.0\ngsd-screensaver  2-03:39:44  0.0\ngsd-a11y-settin  2-03:39:44  0.0\nat-spi-bus-laun  2-03:39:45  0.0\ngnome-session-b  2-03:39:45  0.0\nxdg-permission-  2-03:40:05  0.0\nchrome           1-23:18:28  0.0\nchrome           1-23:18:28  0.0\nssh-agent        2-00:48:15  0.0\nskypeforlinux    2-03:39:43  0.0\nvirtlockd        2-03:40:07  0.0\nskypeforlinux    2-03:39:42  0.0\nobexd            2-03:39:44  0.0\nibus-dconf       2-03:39:44  0.0\npipewire         2-03:40:05  0.0\nkauditd          2-03:40:17  0.0\npool_workqueue_  2-03:40:17  0.0\nkworker/R-rcu_g  2-03:40:17  0.0\nkworker/R-rcu_p  2-03:40:17  0.0\nkworker/R-slub_  2-03:40:17  0.0\nkworker/R-netns  2-03:40:17  0.0\nkworker/0:0H-ev  2-03:40:17  0.0\nkworker/R-mm_pe  2-03:40:17  0.0\nrcu_tasks_kthre  2-03:40:17  0.0\nrcu_tasks_rude_  2-03:40:17  0.0\nrcu_tasks_trace  2-03:40:17  0.0\nidle_inject/0    2-03:40:17  0.0\ncpuhp/0          2-03:40:17  0.0\ncpuhp/2          2-03:40:17  0.0\nidle_inject/2    2-03:40:17  0.0\nkworker/2:0H-ev  2-03:40:17  0.0\ncpuhp/4          2-03:40:17  0.0\nidle_inject/4    2-03:40:17  0.0\nkworker/4:0H-ev  2-03:40:17  0.0\ncpuhp/6          2-03:40:17  0.0\nidle_inject/6    2-03:40:17  0.0\nkworker/6:0H-ev  2-03:40:17  0.0\ncpuhp/8          2-03:40:17  0.0\nidle_inject/8    2-03:40:17  0.0\nkworker/8:0H-ev  2-03:40:17  0.0\ncpuhp/10         2-03:40:17  0.0\nidle_inject/10   2-03:40:17  0.0\nkworker/10:0H-e  2-03:40:17  0.0\ncpuhp/12         2-03:40:17  0.0\nidle_inject/12   2-03:40:17  0.0\nkworker/12:0H-e  2-03:40:17  0.0\ncpuhp/14         2-03:40:17  0.0\nidle_inject/14   2-03:40:17  0.0\nkworker/14:0H-e  2-03:40:17  0.0\ncpuhp/1          2-03:40:17  0.0\nidle_inject/1    2-03:40:17  0.0\nkworker/1:0H-ev  2-03:40:17  0.0\ncpuhp/3          2-03:40:17  0.0\nidle_inject/3    2-03:40:17  0.0\nkworker/3:0H-ev  2-03:40:17  0.0\ncpuhp/5          2-03:40:17  0.0\nidle_inject/5    2-03:40:17  0.0\nkworker/5:0H-ev  2-03:40:17  0.0\ncpuhp/7          2-03:40:17  0.0\nidle_inject/7    2-03:40:17  0.0\nkworker/7:0H-ev  2-03:40:17  0.0\ncpuhp/9          2-03:40:17  0.0\nidle_inject/9    2-03:40:17  0.0\nkworker/9:0H-ev  2-03:40:17  0.0\ncpuhp/11         2-03:40:17  0.0\nidle_inject/11   2-03:40:17  0.0\nkworker/11:0H-e  2-03:40:17  0.0\ncpuhp/13         2-03:40:17  0.0\nidle_inject/13   2-03:40:17  0.0\nkworker/13:0H-e  2-03:40:17  0.0\ncpuhp/15         2-03:40:17  0.0\nidle_inject/15   2-03:40:17  0.0\nkworker/15:0H-e  2-03:40:17  0.0\nkdevtmpfs        2-03:40:17  0.0\nkworker/R-inet_  2-03:40:17  0.0\noom_reaper       2-03:40:17  0.0\nkworker/R-write  2-03:40:17  0.0\nksmd             2-03:40:17  0.0\nkhugepaged       2-03:40:17  0.0\nkworker/R-kinte  2-03:40:17  0.0\nkworker/R-kbloc  2-03:40:17  0.0\nkworker/R-blkcg  2-03:40:17  0.0\nkworker/R-tpm_d  2-03:40:17  0.0\nkworker/R-ata_s  2-03:40:17  0.0\nkworker/R-md     2-03:40:17  0.0\nkworker/R-md_bi  2-03:40:17  0.0\nkworker/R-edac-  2-03:40:17  0.0\nkworker/R-devfr  2-03:40:17  0.0\nwatchdogd        2-03:40:17  0.0\nkworker/R-quota  2-03:40:17  0.0\nirq/25-AMD-Vi0-  2-03:40:17  0.0\nirq/26-AMD-Vi0-  2-03:40:17  0.0\nirq/27-AMD-Vi0-  2-03:40:17  0.0\necryptfs-kthrea  2-03:40:16  0.0\nkworker/R-kthro  2-03:40:16  0.0\nirq/36-pciehp    2-03:40:16  0.0\nirq/37-pciehp    2-03:40:16  0.0\nkworker/R-acpi_  2-03:40:16  0.0\nkworker/R-mld    2-03:40:16  0.0\nkworker/R-ipv6_  2-03:40:16  0.0\nkworker/R-kstrp  2-03:40:16  0.0\nkworker/R-charg  2-03:40:16  0.0\nirq/28-ACPI:Eve  2-03:40:16  0.0\nirq/29-ACPI:Eve  2-03:40:16  0.0\nirq/30-ACPI:Eve  2-03:40:16  0.0\nirq/31-ACPI:Eve  2-03:40:16  0.0\nirq/32-ACPI:Eve  2-03:40:16  0.0\nirq/33-ACPI:Eve  2-03:40:16  0.0\nirq/34-ACPI:Eve  2-03:40:16  0.0\nirq/35-ACPI:Eve  2-03:40:16  0.0\nirq/41-ASUS2020  2-03:40:16  0.0\nscsi_eh_0        2-03:40:16  0.0\nkworker/R-scsi_  2-03:40:16  0.0\nscsi_eh_1        2-03:40:16  0.0\nkworker/R-scsi_  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-nvme-  2-03:40:16  0.0\nkworker/R-ext4-  2-03:40:14  0.0\npsimon           2-03:40:13  0.0\nkworker/R-cfg80  2-03:40:12  0.0\nkworker/R-crypt  2-03:40:12  0.0\nkworker/R-led_w  2-03:40:12  0.0\nkworker/R-amdgp  2-03:40:09  0.0\nnv_queue         2-03:40:09  0.0\nnv_queue         2-03:40:09  0.0\nkworker/R-ttm    2-03:40:09  0.0\nnv_open_q        2-03:40:09  0.0\nnvidia-modeset/  2-03:40:08  0.0\nnvidia-modeset/  2-03:40:08  0.0\nirq/93-nvidia    2-03:40:08  0.0\nkworker/R-amdgp  2-03:40:08  0.0\nkworker/R-amdgp  2-03:40:08  0.0\nkworker/R-dm_vb  2-03:40:08  0.0\ncard1-crtc0      2-03:40:08  0.0\ncard1-crtc1      2-03:40:08  0.0\ncard1-crtc2      2-03:40:08  0.0\ncard1-crtc3      2-03:40:08  0.0\nlpd              2-03:40:07  0.0\navahi-daemon     2-03:40:07  0.0\nUVM global queu  2-03:40:06  0.0\nUVM deferred re  2-03:40:06  0.0\nUVM Tools Event  2-03:40:06  0.0\nnvidia-persiste  2-03:40:06  0.0\n(sd-pam)         2-03:40:05  0.0\ndnsmasq          2-03:40:05  0.0\nfusermount3      2-03:40:05  0.0\nkrfcommd         2-03:40:04  0.0\ngdm-x-session    2-03:39:48  0.0\nnvidia-drm/time  2-03:39:47  0.0\ngcr-ssh-agent    2-03:39:45  0.0\ngnome-session-c  2-03:39:45  0.0\ngvfsd-fuse       2-03:39:45  0.0\nskypeforlinux    2-03:39:42  0.0\ncat              1-23:18:28  0.0\ncat              1-23:18:28  0.0\nchrome_crashpad  1-23:18:28  0.0\nchrome           1-22:22:28  0.0\nnvidia             12:43:12  0.0\nkworker/R-xfsal    12:41:20  0.0\nkworker/R-xfs_m    12:41:20  0.0\njfsIO              12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsCommit          12:41:20  0.0\njfsSync            12:41:20  0.0\npsimon             09:03:11  0.0\ncode               07:11:25  0.0\nchrome_crashpad    07:11:25  0.0\ndconf              07:11:22  0.0\nkworker/1:1        01:49:56  0.0\nkworker/3:1        01:35:40  0.0\nkworker/8:0-cgr    01:28:41  0.0\nkworker/9:1-eve    01:19:01  0.0\nkworker/4:1-rcu    01:19:01  0.0\nkworker/14:1-ev    01:14:32  0.0\nkworker/5:0-rcu    01:05:42  0.0\nkworker/7:2-cgr       53:51  0.0\nkworker/13:2          35:56  0.0\nkworker/2:0-eve       26:57  0.0\nkworker/11:0-mm       26:39  0.0\nkworker/0:1-eve       12:52  0.0\nkworker/u33:1         12:50  0.0\nkworker/12:1-mm       12:29  0.0\nkworker/8:1-cgr       03:23  0.0\nps                    00:00  0.0\n",
+        "preexisting_tracked_differences": [
+          "crates/araphor-data/src/analysis/read/tests.rs",
+          "crates/araphor-data/src/graph/contract.rs",
+          "crates/araphor-data/src/graph/contract/tests.rs",
+          "crates/araphor-data/src/graph/mod.rs",
+          "crates/araphor-data/tests/native_store.rs",
+          "docs/guides/araphor-native-storage-review.md",
+          "docs/plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-6-python-execution.md",
+          "docs/research/araphor-fjall-integration.md",
+          "docs/research/generated/gabriela-roulin-interview-guide.md"
+        ],
+        "preexisting_diff_sha256": "6fe9bc8d4fcfd98f3c8787efdf5280a74fd719efed11cd1a5c966b55336e8d84",
+        "matched_builds": {
+          "profile": "release",
+          "feature": "test-fixtures",
+          "scan_mode": "pages",
+          "native_store_baseline_source_unchanged": "957475fbe..9bd0c6704",
+          "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+          "performance_scope": "validated Data acceptance plus benchmark result/reference/progress; no notification timing",
+          "baseline_origin": "frozen raw_owner_stream from read investigation; archived driver hashes exactly match9bd0c6704",
+          "driver_matches": {
+            "crates/araphor-data/examples/raw_owner_bench.rs": "b222841da80267264f4e000e6fb145a2f400d3a8a348641611c9a546eff8f143",
+            "crates/araphor-data/src/analysis/native/benchmark.rs": "25a569728b2309542d4cec6d16ec7ef0d51ad091e601f53529d67c810c076659",
+            "crates/araphor-data/src/analysis/native/benchmark/candidate.rs": "7761cc764e2b97259947edba075cb884e6247949270b05723682c30770915640"
+          }
+        },
+        "replacement_source_sha256": {
+          "crates/araphor-analysis-types/src/source.rs": "7d9017af644cd98172afc30da5bb399d4c872d859d7022ac7a2cb51030172bda",
+          "crates/araphor-data/examples/raw_owner_bench.rs": "b46a7b281dd4b978b9d2d4060a4eec4272a5c4f46f83734543415e9f535bc0d8",
+          "crates/araphor-data/src/analysis/extraction.rs": "7711c445632483ce01247956602a682be58d1f82f784b5ab9f5107f74031a49c",
+          "crates/araphor-data/src/analysis/extraction/append.rs": "4d5cb1b67df5021e2e0765470af81d6424141d9ade3bfac8241e16b68aee119d",
+          "crates/araphor-data/src/analysis/extraction/raw.rs": "bb36f542dbc2634ff5d09b31e8107962dabf87cdd67cb9d1036749af0ebed5bb",
+          "crates/araphor-data/src/analysis/inputs/interest.rs": "87f5bb28c308164d25e7a0abafb3835aa546602f69c987c6b406a982038d21a2",
+          "crates/araphor-data/src/analysis/inputs/mod.rs": "f966546bdffaf030a95687c3d2fb1c03ed3a0b0686aac86adbf50868ed3e32ec",
+          "crates/araphor-data/src/analysis/mod.rs": "ccbea1945ec3c682243b6b7005b2a02de666da52233d0d9ab79db34dc91d67ef",
+          "crates/araphor-data/src/analysis/native/backup/files.rs": "60ea9f1908c2305a6f308ef45d7ff03c8041ff0c2b2155c944522c845a34c122",
+          "crates/araphor-data/src/analysis/native/backup/mod.rs": "8188b90d073f121d5bb0f14fc95f23d9dba10e4105a5d3624ed6ec67c12122ed",
+          "crates/araphor-data/src/analysis/native/benchmark.rs": "6119ebeac42b6d892b2afec62ede8b14f34dad618a25ee949134f97e5f8b281b",
+          "crates/araphor-data/src/analysis/native/events/intake.rs": "4904b7aa1195708e59ab5928adee6667f21d6770ae55b731c414c80a4a8d98b3",
+          "crates/araphor-data/src/analysis/native/events/mod.rs": "23717bbb6bd6c8d199de2977d801a8d313fde14dc0ebf07953be0d9b1ab1a1c9",
+          "crates/araphor-data/src/analysis/native/events/read.rs": "346ee4bfcc9542fa37be17bb7f2098c0944981cff904f5c43ba393c6f19dd185",
+          "crates/araphor-data/src/analysis/native/events/recovery.rs": "540b7a401df12e39dda03043edb0f0de1eddb5ad4257bf4aabcf5f555070bf83",
+          "crates/araphor-data/src/analysis/native/events/retention.rs": "dd7ca87315889df403c7ec0ecafce279659189ee3bb6e550708d1aa042129723",
+          "crates/araphor-data/src/analysis/native/extraction/mod.rs": "790574f67769355c9e7d81529a8a96c32b837252caffebe6a71368c608a6b6cc",
+          "crates/araphor-data/src/analysis/native/extraction/removals.rs": "d8ff3e8e9180eafbcefbd261c953b36876ec9f3f8bd032c4158b0e50c4230fc9",
+          "crates/araphor-data/src/analysis/native/extraction/source.rs": "a493d8050e0e24fc05ee2ef058441995b3a172f3ad2a0e355ca532fb6cb7bdf2",
+          "crates/araphor-data/src/analysis/native/extraction/tests.rs": "b22e9a9aee1d4ca51ef98d79797a6246a4213c27265cf9b6bb00100d10c8bce9",
+          "crates/araphor-data/src/analysis/native/extraction/tests/bounds.rs": "53249b295a0d841189773b9ea877bda95ef145c4e581a3b13c3bf87970e4463b",
+          "crates/araphor-data/src/analysis/native/extraction/tests/lifecycle.rs": "2881eb31329a20aa5cac8787662733236c3773517870c4b64dec65d068428a89",
+          "crates/araphor-data/src/analysis/native/extraction/tests/positions.rs": "fb119dde3f75c27cb05494673050d516994cb50368deac198cabbdca742fae4b",
+          "crates/araphor-data/src/analysis/native/extraction/tests/selection.rs": "f7a675e62aecbc5244fa5763e18bc16c34e68ad8d185ed0e03ddf91e2a5b98d6",
+          "crates/araphor-data/src/analysis/native/fixtures.rs": "5b3f751cd36fd238224f0008a51b7e7a2ab28b6caf464a1d3dd244816121e94c",
+          "crates/araphor-data/src/analysis/native/history.rs": "f4cff81effcc234b977922951896f7778b1844f0ade36453c45821e8a2ccb4bb",
+          "crates/araphor-data/src/analysis/native/inputs/records.rs": "67aa07e27b9f63e97e0fc4b796e442ed9326a0148c5f5ec55edffd8d8f866cf3",
+          "crates/araphor-data/src/analysis/native/managed/attempts.rs": "02f443a199689abb3c7dd82d3135e0fdcabf2ac9e0a8f174d532bd66cbb1301c",
+          "crates/araphor-data/src/analysis/native/managed/mod.rs": "b84bd367b589d9f19b1a77d910a10771c19c3630ddc385136c346c0772292432",
+          "crates/araphor-data/src/analysis/native/managed/references.rs": "07477ca73f692c3d13dfe57343daf80e700bf6326370c4a151a6d820fabc6dcc",
+          "crates/araphor-data/src/analysis/native/managed/references/pins.rs": "a890489d0749b92866a311f31e56cfa2bd16f0d961c4f2db49aca3c45a164c8a",
+          "crates/araphor-data/src/analysis/native/managed/references/read.rs": "93035107641a342ed4ca4ee20522ae145646226226a4279ecb20070b554fa700",
+          "crates/araphor-data/src/analysis/native/mod.rs": "e35236d032304a87a95c600aced62a384e2acecea15b138655756b8b17aa19c1",
+          "crates/araphor-data/src/analysis/native/progress/coverage.rs": "1d28d9b675a1320092cf1e12184eacbdb0ce61e595b75834641eab77515ec5fc",
+          "crates/araphor-data/src/analysis/native/progress/health.rs": "5f47763f11391b679a6e045822ae965073a8351a8cb658cffdfe157ad12dd224",
+          "crates/araphor-data/src/analysis/native/progress/mod.rs": "89b0425da16307577f1cee80275b8147ca8d7ea4d8616cc5338e67b0787a6216",
+          "crates/araphor-data/src/analysis/native/progress/recovery.rs": "f62f3f52f99b79e3d2ed27fd38c678f929907f8d6f8010a1387bb5533e042ee3",
+          "crates/araphor-data/src/analysis/native/recovery.rs": "5927fc675ed91d488b22e05c30ecaa6ea123520a7c90d039013de85f3c82292f",
+          "crates/araphor-data/src/analysis/native/retention/expiry.rs": "a8ca633685ec61ffa03ed96960c2bfba5380224491c00dda83b82485ec90db21",
+          "crates/araphor-data/src/analysis/native/retention/mod.rs": "75fc15a0ae36ffc8a0504f47916357bef05a0a246d4174920f4290608648e1de",
+          "crates/araphor-data/src/analysis/native/retention/selection.rs": "45e4aaba12fbf601357cb8cde08e936466d85389194e69563f9be634e1a2ed62",
+          "crates/araphor-data/src/analysis/native/retention/write.rs": "b226f5831eb964a0ad32e3adb0df5b90e7f9eef992e547a7b99039e3a3f8e3a8",
+          "crates/araphor-data/src/analysis/native/source/coverage.rs": "af1f1bfcb87f56596b1fd4ab5cd73dfbcebf12b3a055e914bbb7d89a7cac52cc",
+          "crates/araphor-data/src/analysis/native/source/mod.rs": "e81a64c48aec290c1412138562b98a6acef31967928999d22af908e502721eb5",
+          "crates/araphor-data/src/analysis/native/source/raw.rs": "3872b53279b24e3e92e37f77177f5c3431fc6a58fb6d870dc092ec57620b8952",
+          "crates/araphor-data/src/analysis/native/source/recovery.rs": "a3813647a34eb54f3e0ad0549c5be303448f0865db86058167cfbc348f57f238",
+          "crates/araphor-data/src/analysis/native/witnesses.rs": "0af5b39ab950b3f0ba1353d4aa746c5f83de3bcf23cae8745735d060b94db69c",
+          "crates/araphor-data/src/analysis/quota.rs": "405511f94f840922ce34c1345d4a6ceb4ceb6a13309d994284e10b1b541afa60",
+          "crates/araphor-data/src/analysis/raw.rs": "2f10340bb52f785a7d1999d3469d8bea882ee14627f7896e913ca304c89285ec",
+          "crates/araphor-data/src/analysis/raw_segments.rs": "b9c6c683f6866ffe90b12b8856038c4040deeed77596046d5f9e1ff76a3a80c7",
+          "crates/araphor-data/src/analysis/segments.rs": "b9f69b10c6d021fc570325c4fbd303808ee440e30dfdaacf1174ae31e801044b",
+          "crates/araphor-data/tests/native_backup.rs": "c794f8727a4224b3d843a0e4f2191a798a52aaceedebb58555e982c7fb064363",
+          "crates/araphor-data/tests/native_backup/bundle.rs": "6d5ad94798893be2031950ccb38ba5947ceb751a17d6bd5845fac147bebd800b",
+          "crates/araphor-data/tests/native_backup/trace.rs": "9e79d26ab40c28ffa3baa4e3403b85bb78731259251bbf404f440987561abda7",
+          "crates/araphor-data/tests/native_events.rs": "45b90155c823644d5c1271e1ac504369673991eb9cf9d0842c442a7f8c2bfff2",
+          "crates/araphor-data/tests/native_inputs.rs": "ea45295ca14e44abe2660b5fd96d311901d652465e35cb80cea7ad82a95bbb27",
+          "crates/araphor-data/tests/native_managed/domain/findings.rs": "20962b8a4c46ad029aabe8379862c8add540421d06cf611cf8d3a584f040aa24",
+          "crates/araphor-data/tests/native_managed/domain/notifications.rs": "052417d83645a2e0264a336ed757a9a1e255577902a9ccd1853fb2e90694ed29",
+          "crates/araphor-data/tests/native_managed/progress/pins.rs": "dd9ff4cf03aa894d1420b57e4bfbc089a1b4feac697fd2e93f60948d04d98be2",
+          "crates/araphor-data/tests/native_managed/publication.rs": "6f232d90c6aa2568e75234f5b763bd79256deccbe74564f15d4eba560f55d361",
+          "crates/araphor-data/tests/native_managed/storage/guards.rs": "226fc78daa7cdfdca4ae876ce6dbda9a5f553a8aa9a20fffe8ceb4859648d9cf",
+          "crates/araphor-data/tests/native_managed/storage/guards/current.rs": "cc63f00295f92c9a3fc38a174e0fb6d620cf6d19659dbf855f8163f293d0d649",
+          "crates/araphor-data/tests/native_managed/storage/retention.rs": "b2de2b61ae388af154bee2487e12d04f60c248970035168d41bf516725415c15",
+          "crates/araphor-data/tests/native_managed/storage/source/retention.rs": "d48dd5bfb8f9b54cee43a202c38b0d3757f757834b7f7e9e0c29ad2aefc25644",
+          "crates/araphor-data/tests/native_raw.rs": "4431d1941ca2b21b89ac07a97eaae53039907819e647ad416128e2ce62e8f535",
+          "crates/araphor-data/tests/native_raw/freshness.rs": "d269c222825e20fb4bf25e9bb82a9e36a611b47ac793ae0d91a8135ce89f4d79",
+          "crates/araphor-data/tests/native_raw/segments.rs": "9f6ed1c1e7b176f314baf262c5755903f11e105ce21884ce47065db2b9256380",
+          "crates/araphor-data/tests/native_raw/store.rs": "95fcc998f083340d5ce0a1f5e97f4deaf6cc0921fff6994600a8701c04eae31f",
+          "crates/araphor-data/tests/native_raw/trace.rs": "c8bd9d9158a2451496bfd883b8fcf278d5e50deb743f9972be09301c579132e9",
+          "crates/araphor-data/tests/raw_index.rs": "9023af1f0184e60927f466377504b5dfd2674840c57680164cd098356d80ca16",
+          "crates/mithril-control/src/evidence.rs": "cf3e11f679ce3ac4b3eacb22d4d0ffdf4850ae4d1cf54c169e2d01cc7f514957",
+          "crates/mithril-control/tests/native_evidence.rs": "3730084c0825baf05a5012db49fe1cb05551b55da5197c63ee81154f455bf512",
+          "scripts/benchmark_raw_reads.py": "255d166f782beb9e0ac62dc5115a78287a8de52c5483ff3e5c92e515f7fa89d2",
+          "scripts/benchmark_raw_storage.py": "2397d79d1428a248169a865943e2472bbf688f9d3d907183927d1322ed227522"
+        }
+      }
+    }
+  },
+  "summary": [
+    {
+      "records": 16384,
+      "variant": "before",
+      "backend": "hybrid",
+      "input_bytes": 2301638,
+      "write_events_s": 137319.14364128013,
+      "accept_ns": {
+        "count": 256,
+        "median_ms": 1.17216,
+        "p95_ms": 1.259248,
+        "p99_ms": 1.675343,
+        "max_ms": 3.524443
+      },
+      "capture_ns": {
+        "count": 256,
+        "median_ms": 0.004679,
+        "p95_ms": 0.006705,
+        "p99_ms": 0.034361,
+        "max_ms": 0.052029
+      },
+      "progress_ns": {
+        "count": 256,
+        "median_ms": 0.644325,
+        "p95_ms": 0.926121,
+        "p99_ms": 1.309811,
+        "max_ms": 1.906996
+      },
+      "total_ns": {
+        "count": 256,
+        "median_ms": 1.825704,
+        "p95_ms": 2.032355,
+        "p99_ms": 2.881374,
+        "max_ms": 4.170443
+      },
+      "warm_scan": {
+        "events_s": 5792706.644086989,
+        "page": {
+          "count": 256,
+          "median_ms": 0.032894,
+          "p95_ms": 0.049655,
+          "p99_ms": 0.060759,
+          "max_ms": 0.081362
+        }
+      },
+      "after_maintenance_scan": {
+        "events_s": 5905370.4461236,
+        "page": {
+          "count": 256,
+          "median_ms": 0.033313,
+          "p95_ms": 0.055591,
+          "p99_ms": 0.070047,
+          "max_ms": 0.085831
+        }
+      },
+      "reopened_scan": {
+        "events_s": 5413959.439009023,
+        "page": {
+          "count": 256,
+          "median_ms": 0.037154,
+          "p95_ms": 0.049725,
+          "p99_ms": 0.057686,
+          "max_ms": 0.084923
+        }
+      },
+      "reopen_s": 0.005901936,
+      "replay_s": 0.000768322,
+      "resume_s": 0.0008362745000000001,
+      "continue_s": 4.15185e-05,
+      "user_cpu_s": 0.025,
+      "system_cpu_s": 0.025,
+      "maintenance": {
+        "checkpoint_s": 0.0067355215,
+        "flush_s": 9.120849999999999e-05,
+        "major_compact_s": 0.0054345105
+      },
+      "background_compactions": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "maintained_allocated_mib": 2.41015625,
+      "peak_rss_mib": 17.625
+    },
+    {
+      "records": 16384,
+      "variant": "after",
+      "backend": "production",
+      "input_bytes": 2301638,
+      "write_events_s": 223302.5385012615,
+      "accept_ns": {
+        "count": 256,
+        "median_ms": 0.682736,
+        "p95_ms": 0.74992,
+        "p99_ms": 0.87046,
+        "max_ms": 2.393766
+      },
+      "capture_ns": {
+        "count": 256,
+        "median_ms": 0.003422,
+        "p95_ms": 0.005168,
+        "p99_ms": 0.01327,
+        "max_ms": 0.013898
+      },
+      "progress_ns": {
+        "count": 256,
+        "median_ms": 0.331382,
+        "p95_ms": 0.640763,
+        "p99_ms": 0.701801,
+        "max_ms": 0.743495
+      },
+      "total_ns": {
+        "count": 256,
+        "median_ms": 1.043589,
+        "p95_ms": 1.370919,
+        "p99_ms": 1.556898,
+        "max_ms": 3.095567
+      },
+      "warm_scan": {
+        "events_s": 7333184.689849336,
+        "page": {
+          "count": 256,
+          "median_ms": 0.02563,
+          "p95_ms": 0.04309,
+          "p99_ms": 0.05203,
+          "max_ms": 0.061108
+        }
+      },
+      "after_maintenance_scan": {
+        "events_s": 7162272.874264978,
+        "page": {
+          "count": 256,
+          "median_ms": 0.025211,
+          "p95_ms": 0.037294,
+          "p99_ms": 0.06055,
+          "max_ms": 0.064879
+        }
+      },
+      "reopened_scan": {
+        "events_s": 5814012.128861368,
+        "page": {
+          "count": 256,
+          "median_ms": 0.034081,
+          "p95_ms": 0.043579,
+          "p99_ms": 0.063203,
+          "max_ms": 0.066346
+        }
+      },
+      "reopen_s": 0.006832667000000001,
+      "replay_s": 0.0010388745000000001,
+      "resume_s": 0.000966278,
+      "continue_s": 7.98595e-05,
+      "user_cpu_s": 0.03,
+      "system_cpu_s": 0.02,
+      "maintenance": {
+        "checkpoint_s": 0.0109034865,
+        "flush_s": 9.473500000000001e-05,
+        "major_compact_s": 0.0096344955
+      },
+      "background_compactions": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "maintained_allocated_mib": 3.4140625,
+      "peak_rss_mib": 18.9375
+    },
+    {
+      "records": 262144,
+      "variant": "before",
+      "backend": "hybrid",
+      "input_bytes": 37445318,
+      "write_events_s": 137792.50448506605,
+      "accept_ns": {
+        "count": 4096,
+        "median_ms": 1.177818,
+        "p95_ms": 1.246748,
+        "p99_ms": 1.363167,
+        "max_ms": 6.603672
+      },
+      "capture_ns": {
+        "count": 4096,
+        "median_ms": 0.004749,
+        "p95_ms": 0.006635,
+        "p99_ms": 0.007682,
+        "max_ms": 0.045045
+      },
+      "progress_ns": {
+        "count": 4096,
+        "median_ms": 0.637621,
+        "p95_ms": 0.706411,
+        "p99_ms": 0.740841,
+        "max_ms": 2.62961
+      },
+      "total_ns": {
+        "count": 4096,
+        "median_ms": 1.832339,
+        "p95_ms": 1.9401,
+        "p99_ms": 2.508022,
+        "max_ms": 7.31113
+      },
+      "warm_scan": {
+        "events_s": 5239981.774709392,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.03855,
+          "p95_ms": 0.055382,
+          "p99_ms": 0.065158,
+          "max_ms": 0.107271
+        }
+      },
+      "after_maintenance_scan": {
+        "events_s": 5214943.8185645845,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.038551,
+          "p95_ms": 0.050563,
+          "p99_ms": 0.060829,
+          "max_ms": 0.110553
+        }
+      },
+      "reopened_scan": {
+        "events_s": 4681985.235572345,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.043788,
+          "p95_ms": 0.0558,
+          "p99_ms": 0.065438,
+          "max_ms": 0.085203
+        }
+      },
+      "reopen_s": 0.07036685649999999,
+      "replay_s": 0.0161941415,
+      "resume_s": 0.0159059525,
+      "continue_s": 5.0039499999999994e-05,
+      "user_cpu_s": 0.505,
+      "system_cpu_s": 0.33,
+      "maintenance": {
+        "checkpoint_s": 0.014278585,
+        "flush_s": 0.000102173,
+        "major_compact_s": 0.0094422015
+      },
+      "background_compactions": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "maintained_allocated_mib": 37.9375,
+      "peak_rss_mib": 112.5625
+    },
+    {
+      "records": 262144,
+      "variant": "after",
+      "backend": "production",
+      "input_bytes": 37445318,
+      "write_events_s": 211824.91380423508,
+      "accept_ns": {
+        "count": 4096,
+        "median_ms": 0.706831,
+        "p95_ms": 0.78477,
+        "p99_ms": 0.840361,
+        "max_ms": 5.83741
+      },
+      "capture_ns": {
+        "count": 4096,
+        "median_ms": 0.003841,
+        "p95_ms": 0.005238,
+        "p99_ms": 0.009498,
+        "max_ms": 0.023465
+      },
+      "progress_ns": {
+        "count": 4096,
+        "median_ms": 0.5777,
+        "p95_ms": 0.67254,
+        "p99_ms": 0.712907,
+        "max_ms": 2.878514
+      },
+      "total_ns": {
+        "count": 4096,
+        "median_ms": 1.259738,
+        "p95_ms": 1.447322,
+        "p99_ms": 1.545584,
+        "max_ms": 6.476358
+      },
+      "warm_scan": {
+        "events_s": 6115404.690713769,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.031707,
+          "p95_ms": 0.046303,
+          "p99_ms": 0.055591,
+          "max_ms": 0.091977
+        }
+      },
+      "after_maintenance_scan": {
+        "events_s": 6310007.9694149755,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.03045,
+          "p95_ms": 0.039109,
+          "p99_ms": 0.046093,
+          "max_ms": 0.098611
+        }
+      },
+      "reopened_scan": {
+        "events_s": 4515967.186373256,
+        "page": {
+          "count": 4096,
+          "median_ms": 0.041484,
+          "p95_ms": 0.062994,
+          "p99_ms": 0.075705,
+          "max_ms": 0.138139
+        }
+      },
+      "reopen_s": 0.090103688,
+      "replay_s": 0.0204117955,
+      "resume_s": 0.018986615499999998,
+      "continue_s": 6.85455e-05,
+      "user_cpu_s": 0.66,
+      "system_cpu_s": 0.27,
+      "maintenance": {
+        "checkpoint_s": 0.08912010449999999,
+        "flush_s": 9.585299999999999e-05,
+        "major_compact_s": 0.0579896665
+      },
+      "background_compactions": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "maintained_allocated_mib": 54.421875,
+      "peak_rss_mib": 136.11328125
+    }
+  ],
+  "paired_speedups": [
+    {
+      "records": 16384,
+      "pair": 1,
+      "warm_scan": 0.7506699837048012,
+      "after_maintenance_scan": 1.2135160446788136,
+      "reopened_scan": 1.098295335673439
+    },
+    {
+      "records": 16384,
+      "pair": 2,
+      "warm_scan": 1.414633154672669,
+      "after_maintenance_scan": 1.5191111954299943,
+      "reopened_scan": 1.0202312683920622
+    },
+    {
+      "records": 16384,
+      "pair": 3,
+      "warm_scan": 1.3675070516259817,
+      "after_maintenance_scan": 1.1698119146376436,
+      "reopened_scan": 1.0241625906393732
+    },
+    {
+      "records": 16384,
+      "pair": 4,
+      "warm_scan": 1.1832298465524607,
+      "after_maintenance_scan": 1.1555688904514803,
+      "reopened_scan": 1.150863992518406
+    },
+    {
+      "records": 262144,
+      "pair": 1,
+      "warm_scan": 1.181736507588552,
+      "after_maintenance_scan": 1.233277942258651,
+      "reopened_scan": 0.9716136771795226
+    },
+    {
+      "records": 262144,
+      "pair": 2,
+      "warm_scan": 1.1983817359808568,
+      "after_maintenance_scan": 1.20989472372251,
+      "reopened_scan": 0.9583868490133794
+    },
+    {
+      "records": 262144,
+      "pair": 3,
+      "warm_scan": 0.9579441064948861,
+      "after_maintenance_scan": 1.2100763275910273,
+      "reopened_scan": 0.9623197989393916
+    },
+    {
+      "records": 262144,
+      "pair": 4,
+      "warm_scan": 1.286004875862082,
+      "after_maintenance_scan": 1.1811595847707161,
+      "reopened_scan": 0.9463504857193124
+    }
+  ],
+  "qualification": {
+    "data_tests_passed": 293,
+    "native_query_tests_passed": 14,
+    "public_control_intake_tests_passed": 2,
+    "owner_example_tests_passed": 1,
+    "default_feature_check": "passed",
+    "changed_rust_formatting": "passed",
+    "data_library_tests": "blocked by80old compileerrors",
+    "control_library_tests": "blocked by36old compileerrors",
+    "shared_final_ci": "stops at formatting in123files outside change"
+  },
+  "sample_artifact": {
+    "path": "araphor-kernel-evidence-2026-11-12.samples.json.gz",
+    "sha256": "b23c942fa48584364729b5d29e0bff50a50a801e1b8d38f9d0a6810a3686cbcc",
+    "matched_runs": 16,
+    "superseded_runs": 16
+  }
+}

@@ -201,16 +201,23 @@ The [implementation review](../guides/araphor-kernel-evidence-storage-review.md)
 gives the source route. The focused release run passes 293 Data integration
 tests, 14 native Query tests, and two public Control intake tests. The existing
 owner example passes its partial history test and its native production smoke
-run. The paired production comparison is pending.
+run. The [matched production comparison](../research/results/araphor-kernel-evidence-2026-11-12.md)
+passes all 16 runs. The large workload increases cycle throughput from 137,793
+to 211,825 events/s. Its cycle p50/p95 changes from 1.832/1.940 ms to
+1.260/1.447 ms. Warm reads improve. Large reopened reads are 3.55% slower.
+Retained allocation changes from 37.94 to 54.42 MiB after forced maintenance.
+The report states startup, compaction, memory, and replay costs. It records
+storage timings; it does not prove notification latency or a 100-fold gain.
 
 The Data library target reports 80 compile errors in old DuckDB and
 `graph_rows` tests. The Control library target reports 36 compile errors in old
 Graph and activation tests. The final shared CI procedure stops at formatting
 in 123 files outside this change. Changed Rust files pass formatting.
 
-Result: **Done** for the collector storage replacement and focused owner
-qualification. **Not done** for the paired production comparison and the
-repository-wide qualification blockers above.
+Result: **Done** for the collector storage replacement, focused owner
+qualification, and matched production comparison. **Not done** for the
+repository-wide qualification blockers above. Table abstraction and collector
+registration remain unapproved.
 
 ### Event flow before replacement
 
