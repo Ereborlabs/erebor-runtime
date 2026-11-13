@@ -5,8 +5,9 @@ a common table layer in Data and a native DataFusion reader. Fjall remains the
 storage engine. This document does not change its branch or history design.
 It supports item 2 of the [storage investigation](../plans/araphor-data-storage-and-collectors.md).
 
-Status: **Proposed. Implementation is not approved or started.** The implementer
-and reviewer agree on the direction below. Performance is not measured.
+Status: **Proposed for production.** The user approves a benchmark of this
+layout after the worked storage example. The implementer and reviewer agree
+on the comparison below. Production implementation is not approved or started.
 
 ## Intended end state
 
@@ -266,6 +267,34 @@ and full cycle. Separately propose narrow-column, CPU-filter, and mixed-schema
 read cases. Report keys, encoded bytes, actual read bytes, decoded columns,
 write/cycle throughput, and median/p95/maximum latency with matched builds.
 New benchmark cases require user approval before development or execution.
+
+### Approved benchmark comparison, 2026-11-13
+
+The user requests this benchmark explicitly. Compare packed Arrow IPC with
+separate column IPC on the same schema, headers, keys, native input cursors,
+and two SyncAll transactions per processing cycle. A third condition uses the
+existing RawCommit payload codec. It is a representation reference, not the
+layout-only control or the complete production owner.
+
+Reuse 16,384 and 262,144 original fixture records and 256-record batches. Assign
+successive batches to four CPUs identically in all conditions. Original framed
+bytes remain unchanged. Run all six condition orders at each size: 36 fresh
+processes. Each process has a finite record count. Runtime is recorded; no
+latency threshold or timeout change is introduced.
+
+Ingestion includes frame decoding, Arrow construction, encoding, and durable
+commit where each condition needs them. Packed IPC uses Arrow's native reader
+projection. Measure full, original-record, projected, CPU-filter, residual,
+and filtered-original-record SQL reads. Reuse saved native plans. Record
+planning separately. Queries run in that fixed order before maintenance,
+after forced maintenance, and after owner reopen. Reopen is not cold disk I/O.
+
+Correctness requires exact bytes and SQL rows, a second schema, SQL null and
+string predicates, mixed-CPU batches, atomic abort, held snapshot reads,
+persisted input-cursor progress, exact original-journal replay, and continued
+publication. Timings are report-only. Count requested KV values, value bytes,
+IPC columns materialized, and protobuf records decoded. These counters do not
+measure physical block or device I/O. Full CI remains excluded by user request.
 
 The [latest measured natural-schema PoC](../research/results/araphor-natural-batch-storage-2026-11-13.md)
 measures metadata simplification, not this column layout. Its results do not

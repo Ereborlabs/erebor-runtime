@@ -49,6 +49,8 @@ zerocopy.workspace = true
 prost-build.workspace = true
 
 [dev-dependencies]
+async-trait = "0.1"
+datafusion = { version = "=55.0.0", default-features = false, features = ["sql", "nested_expressions", "unicode_expressions", "recursive_protection"] }
 flatbuffers = "=25.12.19"
 tempfile = "3.23.0"
 
@@ -58,6 +60,10 @@ required-features = ["test-fixtures"]
 
 [[example]]
 name = "raw_owner_bench"
+required-features = ["test-fixtures"]
+
+[[example]]
+name = "table_storage_bench"
 required-features = ["test-fixtures"]
 
 [lints]

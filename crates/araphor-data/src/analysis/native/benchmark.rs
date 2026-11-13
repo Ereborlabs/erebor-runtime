@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod candidate;
+pub mod columnar;
 mod natural;
 mod tables;
 use candidate::Candidate;

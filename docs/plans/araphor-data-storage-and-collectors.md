@@ -24,7 +24,7 @@ and the versioned Fjall fork. A storage choice requires matched results.
 | Item | Request | Current state |
 | --- | --- | --- |
 | 1 | Compare raw log segments with Fjall | Raw-only pilot and production transaction comparison complete: 16 measured process runs each. Production replacement and sustained compaction remain unqualified. |
-| 2 | Define the abstraction for tables on Fjall | Design requested. The [general table proposal](../designs/araphor-table-storage.md) defines schemas, batch headers, column chunks, optional indexes, and native DataFusion reads. Implementation and new benchmarks are not approved. |
+| 2 | Define the abstraction for tables on Fjall | The [general table proposal](../designs/araphor-table-storage.md) defines schemas, batch headers, column chunks, optional indexes, and native DataFusion reads. The user approves its matched benchmark. Production implementation remains unapproved. |
 | 3 | Define how to add collectors | Deferred. Inventory collectors before confirming whether only BPF intake exists. |
 
 ## Item 1: raw segments against Fjall
