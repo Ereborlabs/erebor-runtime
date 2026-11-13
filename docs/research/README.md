@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Native compression and consumed journals](results/araphor-compression-storage-2026-11-13.md)
+  records 32 matched runs with default and experimental compression policies.
+  It measures allocated blocks across safe journal collection at the same
+  retained event count. Both builds pass the focused checks. The engine
+  checkout is restored; production still uses batch payloads.
 - [Compact source keys](results/araphor-compact-storage-2026-11-13.md)
   records 32 matched batch/record runs with 81-byte and 16-byte event keys.
   Compact keys reduce record storage space. Per-record intake and bulk reads

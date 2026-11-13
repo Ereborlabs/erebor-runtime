@@ -356,9 +356,27 @@ event cuts, resume the saved cursor, and verify one further appended batch.
 These extra batches form a separate untimed GC scenario. The timed core input
 and its measurement boundary do not change.
 
-Result: **Not done**. The implementer and reviewer agree on this experiment
-before code changes. The test does not qualify production table history,
-multiple durable consumers, power-loss recovery, or notification latency.
+The [measured result and source review](../research/results/araphor-compression-storage-2026-11-13.md)
+records all 32 passing runs at source `40f476504`. Both binaries pass all
+three focused tests. The original engine file hash is restored and the
+checkout is clean. No engine API or production default is changed.
+
+At the same 262,656 retained events, default batch allocation changes from
+16.324 to 8.070 MiB across collection. Default record changes from 62.500 to
+12.355 MiB. The combined policy changes batch allocation from 16.168 to
+7.996 MiB and record allocation from 44.141 to 12.102 MiB. Each run removes
+one old journal. The total reduction equals removed journal blocks plus
+4,096 bytes. Earlier allocation decreases occur before explicit GC and are
+not attributed to this collection phase.
+
+Large combined-policy intake medians are 337,281 events/s for batch and
+242,241 events/s for record. Post-GC point medians are 26.470 and 4.330
+microseconds. Three late runs have higher latency; all samples remain in
+the record. The cause of that latency is unmeasured.
+
+Result: **Done** for this benchmark experiment. Production continues to use
+batch payloads. Full CI is not run. Production table history, multiple durable
+consumers, power-loss recovery, and notification latency remain unqualified.
 
 ### Event flow before replacement
 
