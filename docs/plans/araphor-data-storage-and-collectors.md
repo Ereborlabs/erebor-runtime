@@ -6,7 +6,8 @@ authorizes item 1. The user then explicitly required benchmark development
 and execution. The user now approves replacement of kernel-evidence segments
 with the existing Fjall database. The approved scope is below. Earlier
 benchmark sections record the approval boundary at their publication time.
-Items 2 and 3 remain unapproved.
+The user now requests the design for item 2. Its implementation remains
+unapproved. Item 3 remains deferred.
 
 The latest user decision removes tenant identity from the simpler-storage
 target. The [current design decision](#current-simpler-storage-decision-remove-tenant-identity)
@@ -23,7 +24,7 @@ and the versioned Fjall fork. A storage choice requires matched results.
 | Item | Request | Current state |
 | --- | --- | --- |
 | 1 | Compare raw log segments with Fjall | Raw-only pilot and production transaction comparison complete: 16 measured process runs each. Production replacement and sustained compaction remain unqualified. |
-| 2 | Define the abstraction for tables on Fjall | Deferred. No API or implementation proposed. |
+| 2 | Define the abstraction for tables on Fjall | Design requested. The [general table proposal](../designs/araphor-table-storage.md) defines schemas, batch headers, column chunks, optional indexes, and native DataFusion reads. Implementation and new benchmarks are not approved. |
 | 3 | Define how to add collectors | Deferred. Inventory collectors before confirming whether only BPF intake exists. |
 
 ## Item 1: raw segments against Fjall

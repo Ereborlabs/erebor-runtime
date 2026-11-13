@@ -29,8 +29,9 @@ master plan invented for them.
   replacement passes focused Data, Query, and public Control intake checks.
   The matched production comparison passes 16 runs and records write/read
   gains, retained-space growth, and slower large reopened reads. The review
-  records the old library-test and repository formatting blockers. Table abstraction and
-  collector registration remain unapproved.
+  records the old library-test and repository formatting blockers. The user now
+  requests the [general table design](../designs/araphor-table-storage.md).
+  Its implementation and collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL
   owners and dependencies with one connected native owner. The matched
