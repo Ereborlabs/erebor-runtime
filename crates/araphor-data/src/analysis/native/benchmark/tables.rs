@@ -4,10 +4,14 @@ use fjall::{Readable, SingleWriterTxKeyspace};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{Cut, Progress, Result};
+use crate::analysis::raw::{RawCommit, RawKind, RawSpan};
 use crate::{
     AnalysisRecordV1, AnalysisSourceReceiptV1, EvidenceIntakeIdentityV1, StorePositionV1,
     ValidatedEvidenceBatchV1,
 };
+
+mod metadata;
+use metadata::{Receipt, State};
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 struct Header {
@@ -37,16 +41,15 @@ pub(super) struct Tables {
     root: PathBuf,
     records: bool,
     compact: bool,
+    metadata: bool,
+    framed: bool,
 }
 
 impl Tables {
-    pub fn open(
-        root: &Path,
-        source: EvidenceIntakeIdentityV1,
-        records: bool,
-        compact: bool,
-        compressed: bool,
-    ) -> Result<Self> {
+    pub fn open(root: &Path, source: EvidenceIntakeIdentityV1, backend: &str) -> Result<Self> {
+        let records = backend.ends_with("-record");
+        let compact = backend.starts_with("compact-");
+        let compressed = backend.contains("-lz4-");
         std::fs::create_dir_all(root)?;
         let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
             .journal_cdc()
@@ -101,6 +104,8 @@ impl Tables {
             root: root.to_path_buf(),
             records,
             compact,
+            metadata: backend.contains("-meta-") || backend.contains("-frame-"),
+            framed: backend.contains("-frame-"),
         })
     }
 
@@ -146,11 +151,12 @@ impl Tables {
 
     pub fn cut(&self) -> Result<Cut> {
         let snapshot = self.database.read_tx();
-        let revision = Self::number(snapshot.get(&self.state, b"head")?)?;
-        let receipt = snapshot
-            .get(&self.receipts, self.source.key())?
-            .map(|bytes| rmp_serde::from_slice::<AnalysisSourceReceiptV1>(&bytes))
-            .transpose()?;
+        let revision = if self.metadata {
+            self.state(&snapshot)?.head
+        } else {
+            Self::number(snapshot.get(&self.state, b"head")?)?
+        };
+        let receipt = self.receipt(&snapshot)?;
         let cursor = self.database.inner().journal_head()?;
         Ok(Cut {
             revision,
@@ -166,10 +172,12 @@ impl Tables {
             return Err("table intake time".into());
         }
         let mut tx = self.database.write_tx();
-        let receipt = tx
-            .get(&self.receipts, self.source.key())?
-            .map(|bytes| rmp_serde::from_slice::<AnalysisSourceReceiptV1>(&bytes))
-            .transpose()?;
+        let receipt = self.receipt(&tx)?;
+        let mut state = if self.metadata {
+            self.state(&tx)?
+        } else {
+            State::default()
+        };
         if receipt.as_ref().is_some_and(|receipt| {
             receipt.identity != self.source || receipt.cpu_id != batch.cpu_id
         }) || batch.first_cursor
@@ -197,9 +205,13 @@ impl Tables {
             {
                 return Err("unbound compact source metadata".into());
             }
-            let id = match tx.get(&self.state, b"next_source")? {
-                Some(value) => Self::number(Some(value))?,
-                None => 1,
+            let id = if self.metadata {
+                state.next_source
+            } else {
+                match tx.get(&self.state, b"next_source")? {
+                    Some(value) => Self::number(Some(value))?,
+                    None => 1,
+                }
             };
             if id == 0 || tx.get(&self.sources, id.to_be_bytes())?.is_some() {
                 return Err("compact source allocator conflict".into());
@@ -211,10 +223,18 @@ impl Tables {
                 id.to_be_bytes(),
                 rmp_serde::to_vec(&self.source)?,
             );
-            tx.insert(&self.state, b"next_source", next.to_be_bytes());
+            if self.metadata {
+                state.next_source = next;
+            } else {
+                tx.insert(&self.state, b"next_source", next.to_be_bytes());
+            }
             id.to_be_bytes().to_vec()
         };
-        let revision = Self::number(tx.get(&self.state, b"head")?)? + 1;
+        let revision = (if self.metadata {
+            state.head
+        } else {
+            Self::number(tx.get(&self.state, b"head")?)?
+        }) + 1;
         let header = Header {
             revision,
             ordinal: 0,
@@ -244,33 +264,66 @@ impl Tables {
                 .iter()
                 .map(|end| u32::try_from(*end))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            let value = (
-                header,
-                &ends,
-                serde_bytes::Bytes::new(&batch.framed_records),
-            );
+            let value = if self.framed {
+                RawCommit {
+                    revision,
+                    kind: Some(RawKind::Evidence(batch.cpu_id)),
+                    intake: batch.intake_utc_ns,
+                    spans: vec![RawSpan {
+                        first: batch.first_cursor,
+                        last: batch.last_cursor,
+                        start: 0,
+                        ordinal: 0,
+                        ends,
+                    }],
+                    body: batch.framed_records.clone(),
+                }
+                .frame(&self.root)?
+            } else {
+                Self::encode(&(
+                    header,
+                    &ends,
+                    serde_bytes::Bytes::new(&batch.framed_records),
+                ))?
+            };
+            tx.insert(&self.events, Self::key(&prefix, batch.first_cursor), value);
+        }
+        if self.metadata {
             tx.insert(
-                &self.events,
-                Self::key(&prefix, batch.first_cursor),
-                Self::encode(&value)?,
+                &self.receipts,
+                &prefix,
+                rmp_serde::to_vec(&Receipt {
+                    cpu_id: batch.cpu_id,
+                    contiguous_cursor: batch.last_cursor,
+                    coverage_revision: 0,
+                    retained_floor: 0,
+                })?,
             );
-        }
-        tx.insert(
-            &self.receipts,
-            self.source.key(),
-            rmp_serde::to_vec(&AnalysisSourceReceiptV1 {
-                identity: self.source.clone(),
-                cpu_id: batch.cpu_id,
-                contiguous_cursor: batch.last_cursor,
-                coverage_revision: 0,
-                retained_floor: 0,
-            })?,
-        );
-        for key in [b"head".as_slice(), b"events", b"source_receipts"] {
-            tx.insert(&self.state, key, revision.to_be_bytes());
-        }
-        if receipt.is_none() {
-            tx.insert(&self.state, b"source_bindings", revision.to_be_bytes());
+            state.head = revision;
+            state.events = revision;
+            state.receipts = revision;
+            if receipt.is_none() {
+                state.bindings = revision;
+            }
+            tx.insert(&self.state, b"head", rmp_serde::to_vec(&state)?);
+        } else {
+            tx.insert(
+                &self.receipts,
+                self.source.key(),
+                rmp_serde::to_vec(&AnalysisSourceReceiptV1 {
+                    identity: self.source.clone(),
+                    cpu_id: batch.cpu_id,
+                    contiguous_cursor: batch.last_cursor,
+                    coverage_revision: 0,
+                    retained_floor: 0,
+                })?,
+            );
+            for key in [b"head".as_slice(), b"events", b"source_receipts"] {
+                tx.insert(&self.state, key, revision.to_be_bytes());
+            }
+            if receipt.is_none() {
+                tx.insert(&self.state, b"source_bindings", revision.to_be_bytes());
+            }
         }
         tx.commit_receipt()?.ok_or("missing table input commit")?;
         self.prefix = Some(prefix);
@@ -285,6 +338,32 @@ impl Tables {
         mut visit: impl FnMut(AnalysisRecordV1) -> Result<bool>,
     ) -> Result<bool> {
         let first = self.cursor(key)?;
+        if self.framed {
+            let commit = RawCommit::from_frame(bytes, &self.root)?;
+            if !matches!(commit.kind, Some(RawKind::Evidence(_)))
+                || commit.intake == 0
+                || commit.spans.len() != 1
+                || commit.spans[0].first != first
+            {
+                return Err("table frame source or span mismatch".into());
+            }
+            for (ordinal, (cursor, bytes)) in commit.records().enumerate() {
+                if cursor < minimum {
+                    continue;
+                }
+                if !visit(AnalysisRecordV1 {
+                    cursor,
+                    framed_record: bytes.to_vec(),
+                    position: StorePositionV1 {
+                        commit_revision: commit.revision,
+                        ordinal: u32::try_from(ordinal)?,
+                    },
+                })? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         if self.records {
             let Record(header, body) = Self::decode(bytes)?;
             if header.revision == 0 || header.intake == 0 || body.is_empty() {
@@ -447,7 +526,17 @@ impl Tables {
 
     pub fn consume(&self, progress: &Progress) -> Result<()> {
         let mut tx = self.database.write_tx();
-        if Self::number(tx.get(&self.state, b"consumed")?)? != progress.first - 1 {
+        let mut state = if self.metadata {
+            self.state(&tx)?
+        } else {
+            State::default()
+        };
+        let consumed = if self.metadata {
+            state.consumed
+        } else {
+            Self::number(tx.get(&self.state, b"consumed")?)?
+        };
+        if consumed != progress.first - 1 {
             return Err("table consumed cursor conflict".into());
         }
         tx.insert(
@@ -455,16 +544,22 @@ impl Tables {
             progress.cut.accepted.to_be_bytes(),
             rmp_serde::to_vec(progress)?,
         );
-        tx.insert(
-            &self.state,
-            b"consumed",
-            progress.cut.accepted.to_be_bytes(),
-        );
-        tx.insert(
-            &self.state,
-            b"head",
-            (progress.cut.revision + 1).to_be_bytes(),
-        );
+        if self.metadata {
+            state.consumed = progress.cut.accepted;
+            state.head = progress.cut.revision + 1;
+            tx.insert(&self.state, b"head", rmp_serde::to_vec(&state)?);
+        } else {
+            tx.insert(
+                &self.state,
+                b"consumed",
+                progress.cut.accepted.to_be_bytes(),
+            );
+            tx.insert(
+                &self.state,
+                b"head",
+                (progress.cut.revision + 1).to_be_bytes(),
+            );
+        }
         tx.commit_receipt()?.ok_or("missing table result commit")?;
         Ok(())
     }
@@ -473,6 +568,7 @@ impl Tables {
         let snapshot = self.database.read_tx();
         let last = match last {
             Some(last) => last,
+            None if self.metadata => self.state(&snapshot)?.consumed,
             None => Self::number(snapshot.get(&self.state, b"consumed")?)?,
         };
         let bytes = snapshot
@@ -512,7 +608,13 @@ impl Tables {
                     item.keyspace == self.state.inner().id() && item.key.as_ref() == b"head"
                 })
                 .and_then(|item| item.value.as_deref())
-                .map(|bytes| bytes.try_into().map(u64::from_be_bytes))
+                .map(|bytes| -> Result<u64> {
+                    if self.metadata {
+                        Ok(rmp_serde::from_slice::<State>(bytes)?.head)
+                    } else {
+                        Ok(u64::from_be_bytes(bytes.try_into()?))
+                    }
+                })
                 .transpose()?;
             for item in batch.items {
                 if item.keyspace != self.events.inner().id() || !item.key.starts_with(prefix) {
@@ -571,6 +673,32 @@ impl Tables {
                 counts[2] += value.len() as u64;
             }
             output.insert(name.into(), counts);
+        }
+        Ok(output)
+    }
+
+    pub fn journal_statistics(&self) -> Result<std::collections::BTreeMap<String, [u64; 3]>> {
+        let mut output = std::collections::BTreeMap::<String, [u64; 3]>::new();
+        let mut feed = self.database.inner().journal_feed(None)?;
+        while let Some(batch) = feed.next_batch()? {
+            for item in batch.items {
+                let name = [
+                    ("events", &self.events),
+                    ("source_receipts", &self.receipts),
+                    ("source_epochs", &self.epochs),
+                    ("source_ids", &self.source_ids),
+                    ("sources", &self.sources),
+                    ("benchmark_state", &self.state),
+                    ("benchmark_results", &self.results),
+                ]
+                .into_iter()
+                .find(|(_, table)| table.inner().id() == item.keyspace)
+                .map_or("engine", |(name, _)| name);
+                let counts = output.entry(name.into()).or_default();
+                counts[0] += 1;
+                counts[1] += item.key.len() as u64;
+                counts[2] += item.value.as_ref().map_or(0, |value| value.len() as u64);
+            }
         }
         Ok(output)
     }

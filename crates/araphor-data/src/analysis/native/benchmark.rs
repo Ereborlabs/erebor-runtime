@@ -87,14 +87,17 @@ impl Store {
         let backend = match backend {
             "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
-            "table-batch" | "table-record" | "compact-batch" | "compact-record"
-            | "compact-lz4-batch" | "compact-lz4-record" => Backend::Tables(Tables::open(
-                root,
-                source.clone(),
-                backend.ends_with("-record"),
-                backend.starts_with("compact-"),
-                backend.contains("-lz4-"),
-            )?),
+            "table-batch"
+            | "table-record"
+            | "compact-batch"
+            | "compact-record"
+            | "compact-lz4-batch"
+            | "compact-lz4-record"
+            | "compact-meta-batch"
+            | "compact-frame-batch"
+            | "compact-lz4-frame-batch" => {
+                Backend::Tables(Tables::open(root, source.clone(), backend)?)
+            }
             _ => return Err("unknown benchmark backend".into()),
         };
         Ok(Self { backend, source })
@@ -195,9 +198,15 @@ impl Store {
             }
             Backend::Fjall(_) => return Err("statistics require production or table PoC".into()),
         };
-        Ok(serde_json::json!({"logical_counts":counts,
+        let journal_counts = match &self.backend {
+            Backend::Tables(store) => Some(store.journal_statistics()?),
+            _ => None,
+        };
+        Ok(
+            serde_json::json!({"logical_counts":counts,"journal_logical_counts":journal_counts,
             "count_fields":["entries","key_bytes","value_bytes"],
-            "journal_bytes":self.database().inner().journal_disk_space()?}))
+            "journal_bytes":self.database().inner().journal_disk_space()?}),
+        )
     }
 
     pub fn scan(

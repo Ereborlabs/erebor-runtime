@@ -16,9 +16,12 @@ def main():
     parser.add_argument("--binary", type=Path, default=Path("target/release/examples/raw_owner_bench"))
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--compression", action="store_true")
+    parser.add_argument("--batch-layout", action="store_true")
     parser.add_argument("--experimental-binary", type=Path)
     parser.add_argument("--build-manifest", type=Path)
     args = parser.parse_args()
+    if args.batch_layout and (args.compact or args.compression):
+        parser.error("--batch-layout is a separate batch-only comparison")
     if args.compression and (not args.experimental_binary or not args.build_manifest):
         parser.error("--compression requires --experimental-binary and --build-manifest")
     binary = args.binary.resolve()
@@ -36,7 +39,11 @@ def main():
         backends = ["compact-batch", "compact-record", "compact-lz4-batch", "compact-lz4-record"]
         orders = [[backends[index] for index in order] for order in
                   [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
-    binaries = {name: (args.experimental_binary.resolve() if "-lz4-" in name else binary) for name in backends}
+    if args.batch_layout:
+        backends = ["compact-batch", "compact-meta-batch", "compact-frame-batch", "compact-lz4-frame-batch"]
+        orders = [[backends[index] for index in order] for order in
+                  [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
+    binaries = {name: (args.experimental_binary.resolve() if args.compression and "-lz4-" in name else binary) for name in backends}
     sources = [Path("crates/araphor-data/examples/raw_owner_bench.rs"),
                Path("crates/araphor-data/examples/raw_storage/common.rs"),
                Path("crates/araphor-analysis-types/src/source.rs"),
@@ -72,8 +79,11 @@ def main():
         assert hashlib.sha256(args.experimental_binary.read_bytes()).hexdigest() == manifest["experimental"]["binary_sha256"]
         provenance["build_manifest"] = manifest
         provenance["scope"] = "compact batch/record; default versus combined all-level SST/index LZ4 and WAL threshold1; post-consumption journal collection"
+    if args.batch_layout:
+        provenance["scope"] = "batch-only compact baseline versus packed metadata, production frame codec, and native SST/index compression; default WAL settings; same post-consumption collection"
+        assert not any(provenance["engine_status"].values()), "engine forks must remain clean"
     provenance["binaries"] = {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in binaries.items()}
-    if args.compact or args.compression:
+    if args.compact or args.compression or args.batch_layout:
         provenance["limits"] = [item for item in provenance["limits"] if not item.startswith("production")]
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
@@ -86,7 +96,7 @@ def main():
                 started = time.perf_counter()
                 with (output / f"{stem}.log").open("w") as log:
                     subprocess.run(["/usr/bin/time", "-v", "-o", str(output / f"{stem}.time"),
-                                    str(binaries[backend]), backend, str(count), str(report), *( ["pages", "gc"] if args.compression else [])],
+                                    str(binaries[backend]), backend, str(count), str(report), *( ["pages", "gc"] if args.compression or args.batch_layout else [])],
                                    stdout=log, stderr=subprocess.STDOUT, check=True)
                 run = json.loads(report.read_text())
                 assert run["backend"] == backend and run["records"] == count
@@ -100,12 +110,16 @@ def main():
                     mappings = 1 if backend.startswith("compact-") else 0
                     assert counts["sources"][0] == counts["source_ids"][0] == mappings
                     assert counts["source_receipts"][0] == counts["source_epochs"][0] == 1
+                    if args.batch_layout:
+                        simplified = backend != "compact-batch"
+                        assert counts["source_receipts"][1] == (8 if simplified else 73)
+                        assert counts["benchmark_state"][0] == (1 if simplified else 6)
                     assert all(len(run[phase]["samples_ns"]) == count // 256
                                for phase in ["warm_points", "after_maintenance_points", "reopened_points"])
                 else:
                     assert counts["payload"][0] == counts["span"][0] == counts["position"][0] == count // 256
                     assert run["reopened_points"] is None
-                if args.compression:
+                if args.compression or args.batch_layout:
                     gc = run["post_gc"]
                     assert all(gc["checks"].values()) and gc["records"] == count + 512
                     assert gc["journals_after"][0] < gc["journals_before"][0]
@@ -128,6 +142,7 @@ def main():
             selected = [run for run in peers if run["backend"] == backend]
             assert len(selected) == 4
             row = {"records": count, "backend": backend,
+                   "intake_events_s": statistics.median(count / (sum(sample["accept_ns"] for sample in run["append_samples"]) / 1e9) for run in selected),
                    "cycle_events_s": statistics.median(run["write_records_s"] for run in selected),
                    "allocated_mib": statistics.median(run["maintained_bytes"][1] / 1048576 for run in selected),
                    "logical_file_mib": statistics.median(run["maintained_bytes"][0] / 1048576 for run in selected),
@@ -145,7 +160,7 @@ def main():
                 row[phase] = statistics.median(run[phase] for run in selected)
             row["maintenance"] = {field: statistics.median(run["maintenance"][field] for run in selected)
                                   for field in selected[0]["maintenance"]}
-            if args.compression:
+            if args.compression or args.batch_layout:
                 row["post_gc"] = {
                     "records": count + 512,
                     "allocated_mib": statistics.median(run["post_gc"]["after_bytes"][1] / 1048576 for run in selected),
@@ -160,11 +175,26 @@ def main():
             row["logical_groups"] = {name: [statistics.median(run["statistics"]["logical_counts"][name][index]
                                                               for run in selected) for index in range(3)]
                                      for name in selected[0]["statistics"]["logical_counts"]}
+            if args.batch_layout:
+                row["journal_logical_groups"] = {
+                    name: [statistics.median(run["statistics"]["journal_logical_counts"][name][index]
+                                             for run in selected) for index in range(3)]
+                    for name in selected[0]["statistics"]["journal_logical_counts"]}
             summary.append(row)
     pairs = []
     for count in provenance["dataset_records"]:
         for pair in range(1, 5):
             selected = {run["backend"]: run for run in runs if run["records"] == count and run["pair"] == pair}
+            if args.batch_layout:
+                for before, after in zip(backends, backends[1:]):
+                    a, b = selected[before], selected[after]
+                    intake = lambda run: count / (sum(sample["accept_ns"] for sample in run["append_samples"]) / 1e9)
+                    pairs.append({"records": count, "pair": pair, "before": before, "after": after,
+                                  "intake_rate_ratio": intake(b) / intake(a),
+                                  "cycle_rate_ratio": b["write_records_s"] / a["write_records_s"],
+                                  "post_gc_space_ratio": b["post_gc"]["after_bytes"][1] / a["post_gc"]["after_bytes"][1],
+                                  "reopened_read_ratio": a["reopened_scan"]["elapsed_s"] / b["reopened_scan"]["elapsed_s"]})
+                continue
             batch, record = (selected["compact-batch"], selected["compact-record"]) if args.compression else (selected["table-batch"], selected["table-record"])
             pairs.append({"records": count, "pair": pair,
                           "record_cycle_rate_over_batch": record["write_records_s"] / batch["write_records_s"],

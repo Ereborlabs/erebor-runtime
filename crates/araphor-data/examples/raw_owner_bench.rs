@@ -278,11 +278,16 @@ fn main() -> Result<()> {
             "compact-batch":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit",
             "compact-record":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit",
             "compact-lz4-batch":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest",
-            "compact-lz4-record":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest"},
+            "compact-lz4-record":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest",
+            "compact-meta-batch":"same two SyncAll boundaries; compact receipt and packed state; unchanged batch codec",
+            "compact-frame-batch":"same two SyncAll boundaries; compact metadata; existing RawCommit frame codec",
+            "compact-lz4-frame-batch":"same compact frame layout; native all-level SST/index LZ4; unchanged default WAL settings"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
         "candidate_layout":match args[0].as_str() {
             "compact-record" | "compact-lz4-record" => "real keyspaces; durable source ID8+cursor8 record key; original position/intake/CPU in value; no span or global position index",
             "compact-batch" | "compact-lz4-batch" => "real keyspaces; durable source ID8+first_cursor8 batch key; original position/intake/CPU in value; no span or global position index",
+            "compact-meta-batch" => "existing compact batch layout; receipt keyed by source ID; all head/relation/progress/allocator fields in one state row",
+            "compact-frame-batch" | "compact-lz4-frame-batch" => "same compact metadata and real keyspaces; existing production RawCommit frame; original position/intake/CPU preserved",
             "table-record" => "real keyspaces; source+cursor record key; original position/intake/CPU in value; no span or global position index",
             "table-batch" => "real keyspaces; source+first_cursor batch key; original position/intake/CPU in value; no span or global position index",
             _ => "source+first_cursor batch key; source/cursor result reference; production retains its current indexes",
@@ -329,6 +334,9 @@ fn stream_partial_history() -> Result<()> {
         "compact-record",
         "compact-lz4-batch",
         "compact-lz4-record",
+        "compact-meta-batch",
+        "compact-frame-batch",
+        "compact-lz4-frame-batch",
     ] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
@@ -417,6 +425,9 @@ fn compact_sources_reopen() -> Result<()> {
         "compact-record",
         "compact-lz4-batch",
         "compact-lz4-record",
+        "compact-meta-batch",
+        "compact-frame-batch",
+        "compact-lz4-frame-batch",
     ] {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join("store");
@@ -489,6 +500,9 @@ fn consumed_journals_reopen() -> Result<()> {
         "compact-record",
         "compact-lz4-batch",
         "compact-lz4-record",
+        "compact-meta-batch",
+        "compact-frame-batch",
+        "compact-lz4-frame-batch",
     ] {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join("store");
@@ -536,6 +550,45 @@ fn consumed_journals_reopen() -> Result<()> {
         assert_eq!(expected, 1025);
         store.consume(769, &store.cut()?)?;
         assert_eq!(store.saved(None)?.accepted, 1024);
+    }
+    Ok(())
+}
+
+#[test]
+fn packed_metadata_reopen() -> Result<()> {
+    for backend in [
+        "compact-meta-batch",
+        "compact-frame-batch",
+        "compact-lz4-frame-batch",
+    ] {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("store");
+        let (batches, _) = inputs(256)?;
+        let mut store = Store::open(&root, backend, source())?;
+        store.append(batches[0].clone())?;
+        let cut = store.cut()?;
+        store.consume(1, &cut)?;
+        assert!(store.consume(1, &cut).is_err());
+        drop(store);
+        let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
+            .journal_cdc()
+            .open()?;
+        let state = database.keyspace("benchmark_state", fjall::KeyspaceCreateOptions::default)?;
+        let receipts =
+            database.keyspace("source_receipts", fjall::KeyspaceCreateOptions::default)?;
+        let snapshot = database.read_tx();
+        use fjall::Readable;
+        let bytes = snapshot
+            .get(&state, b"head")?
+            .ok_or("missing packed state")?;
+        let fields: (u64, u64, u64, u64, u64, u64) = rmp_serde::from_slice(&bytes)?;
+        assert_eq!(fields, (2, 1, 1, 1, 256, 2));
+        assert_eq!(snapshot.iter(&state).count(), 1);
+        let bytes = snapshot
+            .get(&receipts, 1_u64.to_be_bytes())?
+            .ok_or("missing compact receipt")?;
+        let fields: (u32, u64, u64, u64) = rmp_serde::from_slice(&bytes)?;
+        assert_eq!(fields, (0, 256, 0, 0));
     }
     Ok(())
 }

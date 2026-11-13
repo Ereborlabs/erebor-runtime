@@ -420,6 +420,42 @@ include the later Data result/reference/progress transaction. Production and
 both engine forks remain unchanged. Full CI is not run. Production recovery,
 retention, and sustained-compaction parity remain unqualified.
 
+### Batch keyspace simplification comparison, 2026-11-13
+
+The user requests benchmark-only work on the current Fjall batch layout,
+keys, and keyspaces. Report measured suggestions before a production change.
+The implementer and reviewer agree on four table PoC conditions before code
+changes. The baseline is the existing compact-batch PoC, not production.
+
+Compare the compact baseline, compact receipts with one state row, that
+metadata with the existing RawCommit codec, and that layout with native
+all-level SST/index LZ4. Keep all seven real keyspaces. A source ID and first
+cursor form each 16-byte event key. Keep source identity and epoch bindings.
+Keep intake ACK, consumed progress, relation revisions, and the source-ID
+allocator. Do not remove production indexes or change its branch or format.
+
+The benchmark accepts a prepared batch
+  -> Data validates the same source, CPU, epoch, and contiguous input.
+  -> The selected layout commits payload, receipt, and state in one SyncAll.
+  -> The benchmark captures the committed input cut.
+  -> The benchmark reads the input and commits result, reference, and progress.
+  -> CDC walks the original committed journal from the saved cursor.
+  -> CDC checks each input revision against the head in that same commit.
+
+Use the existing 16,384 and 262,144 events and 256-record transactions. Run
+four balanced orders at each count, for 32 fresh processes. Keep all prior
+assertions and the separate equal-count journal collection scenario. Report
+intake, complete cycles, reads, logical bytes, allocated blocks, maintenance,
+and all samples. Timing has no pass/fail limit. This is one finite matrix.
+
+Use one release binary and unchanged engine source and WAL defaults. The
+codec comparison retains CRC and canonical validation. The native compression
+condition changes only public keyspace creation options. Do not attribute a
+speed difference to a removed validation check. Full CI is outside iteration.
+
+Result: **Not done**. These PoCs do not qualify production retry, gap, expiry,
+witness, native historical table updates, or full collector transactions.
+
 ### Event flow before replacement
 
 ```text
