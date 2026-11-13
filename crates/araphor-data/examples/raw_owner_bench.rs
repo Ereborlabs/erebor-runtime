@@ -107,8 +107,8 @@ fn main() -> Result<()> {
     }
     let gc_scope = match args.get(4).map(String::as_str) {
         None => false,
-        Some("gc") if args[0].starts_with("compact-") => true,
-        _ => return Err("gc comparison requires compact table storage".into()),
+        Some("gc") if args[0].starts_with("compact-") || args[0] == "natural-batch" => true,
+        _ => return Err("gc comparison requires table storage".into()),
     };
     let total: u64 = args[1].parse()?;
     if total < 512 || total % 512 != 0 {
@@ -154,7 +154,9 @@ fn main() -> Result<()> {
     assert_eq!(store.saved(None)?.accepted, total);
     let written = size(&root)?;
     let warm_scan = scan(&store, &frames, total, mode)?;
-    let point_scope = args[0].starts_with("table-") || args[0].starts_with("compact-");
+    let point_scope = args[0].starts_with("table-")
+        || args[0].starts_with("compact-")
+        || args[0] == "natural-batch";
     let warm_points = point_scope
         .then(|| points(&store, &frames, total))
         .transpose()?;
@@ -281,13 +283,15 @@ fn main() -> Result<()> {
             "compact-lz4-record":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest",
             "compact-meta-batch":"same two SyncAll boundaries; compact receipt and packed state; unchanged batch codec",
             "compact-frame-batch":"same two SyncAll boundaries; compact metadata; existing RawCommit frame codec",
-            "compact-lz4-frame-batch":"same compact frame layout; native all-level SST/index LZ4; unchanged default WAL settings"},
+            "compact-lz4-frame-batch":"same compact frame layout; native all-level SST/index LZ4; unchanged default WAL settings",
+            "natural-batch":"same two SyncAll boundaries; one source row, natural epoch/cursor keys, latest result owns consumed progress"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
         "candidate_layout":match args[0].as_str() {
             "compact-record" | "compact-lz4-record" => "real keyspaces; durable source ID8+cursor8 record key; original position/intake/CPU in value; no span or global position index",
             "compact-batch" | "compact-lz4-batch" => "real keyspaces; durable source ID8+first_cursor8 batch key; original position/intake/CPU in value; no span or global position index",
             "compact-meta-batch" => "existing compact batch layout; receipt keyed by source ID; all head/relation/progress/allocator fields in one state row",
             "compact-frame-batch" | "compact-lz4-frame-batch" => "same compact metadata and real keyspaces; existing production RawCommit frame; original position/intake/CPU preserved",
+            "natural-batch" => "events and sources domain keyspaces; results and state benchmark keyspaces; natural source-epoch+cursor keys; no numeric IDs, mapping indexes, separate epoch table or duplicated consumed cursor",
             "table-record" => "real keyspaces; source+cursor record key; original position/intake/CPU in value; no span or global position index",
             "table-batch" => "real keyspaces; source+first_cursor batch key; original position/intake/CPU in value; no span or global position index",
             _ => "source+first_cursor batch key; source/cursor result reference; production retains its current indexes",
@@ -337,6 +341,7 @@ fn stream_partial_history() -> Result<()> {
         "compact-meta-batch",
         "compact-frame-batch",
         "compact-lz4-frame-batch",
+        "natural-batch",
     ] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
@@ -365,7 +370,10 @@ fn stream_partial_history() -> Result<()> {
                 drop(store);
                 store = Store::open(&root, backend, source())?;
             }
-            if backend.starts_with("table-") || backend.starts_with("compact-") {
+            if backend.starts_with("table-")
+                || backend.starts_with("compact-")
+                || backend == "natural-batch"
+            {
                 for cursor in [1, 17, 18, 128, 256] {
                     let rows = store.point(cursor)?;
                     assert_eq!(rows.len(), 1);
@@ -389,8 +397,13 @@ fn stream_partial_history() -> Result<()> {
                     stats["logical_counts"]["events"][0],
                     if backend.ends_with("-record") { 256 } else { 2 }
                 );
-                assert_eq!(stats["logical_counts"]["source_receipts"][0], 1);
-                assert_eq!(stats["logical_counts"]["source_epochs"][0], 1);
+                if backend == "natural-batch" {
+                    assert_eq!(stats["logical_counts"]["sources"][0], 1);
+                    assert_eq!(stats["logical_counts"].as_object().unwrap().len(), 4);
+                } else {
+                    assert_eq!(stats["logical_counts"]["source_receipts"][0], 1);
+                    assert_eq!(stats["logical_counts"]["source_epochs"][0], 1);
+                }
             }
             for (at, total) in [(None, 256), (Some(&cut), 17)] {
                 let mut count = 0;
@@ -428,6 +441,7 @@ fn compact_sources_reopen() -> Result<()> {
         "compact-meta-batch",
         "compact-frame-batch",
         "compact-lz4-frame-batch",
+        "natural-batch",
     ] {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join("store");
@@ -485,9 +499,14 @@ fn compact_sources_reopen() -> Result<()> {
             let stats = store.statistics()?;
             let count = if backend.ends_with("-record") { 512 } else { 2 };
             assert_eq!(stats["logical_counts"]["events"][0], count);
-            assert_eq!(stats["logical_counts"]["events"][1], count * 16);
+            assert_eq!(
+                stats["logical_counts"]["events"][1],
+                count * if backend == "natural-batch" { 56 } else { 16 }
+            );
             assert_eq!(stats["logical_counts"]["sources"][0], 2);
-            assert_eq!(stats["logical_counts"]["source_ids"][0], 2);
+            if backend != "natural-batch" {
+                assert_eq!(stats["logical_counts"]["source_ids"][0], 2);
+            }
         }
     }
     Ok(())
@@ -503,6 +522,7 @@ fn consumed_journals_reopen() -> Result<()> {
         "compact-meta-batch",
         "compact-frame-batch",
         "compact-lz4-frame-batch",
+        "natural-batch",
     ] {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join("store");
@@ -589,6 +609,54 @@ fn packed_metadata_reopen() -> Result<()> {
             .ok_or("missing compact receipt")?;
         let fields: (u32, u64, u64, u64) = rmp_serde::from_slice(&bytes)?;
         assert_eq!(fields, (0, 256, 0, 0));
+    }
+    Ok(())
+}
+
+#[test]
+fn natural_sources_progress() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("store");
+    let (batches, frames) = inputs(512)?;
+    let first = source();
+    let mut second = first.clone();
+    second.source_id = [9; 16];
+    for identity in [&first, &second] {
+        let mut store = Store::open(&root, "natural-batch", identity.clone())?;
+        store.append(batches[0].clone())?;
+        let cut = store.cut()?;
+        store.consume(1, &cut)?;
+        assert!(store.consume(1, &cut).is_err());
+    }
+    for (identity, revision) in [(&first, 1), (&second, 3)] {
+        let store = Store::open(&root, "natural-batch", identity.clone())?;
+        let cut = store.saved(None)?;
+        assert_eq!(cut.accepted, 256);
+        assert_eq!(cut.revision, revision);
+        assert_eq!(store.saved(Some(256))?, cut);
+        let rows = store.read(1, None)?;
+        assert_eq!(rows.len(), 256);
+        for row in rows {
+            assert_eq!(row.framed_record, frames[row.cursor as usize - 1]);
+            assert_eq!(row.position.commit_revision, revision);
+        }
+    }
+    let mut store = Store::open(&root, "natural-batch", first.clone())?;
+    store.append(batches[1].clone())?;
+    store.consume(257, &store.cut()?)?;
+    assert_eq!(store.saved(None)?.accepted, 512);
+    drop(store);
+    let store = Store::open(&root, "natural-batch", second)?;
+    assert_eq!(store.saved(None)?.accepted, 256);
+    drop(store);
+    for changed in [0, 1] {
+        let mut identity = first.clone();
+        if changed == 0 {
+            identity.node_boot_id = [8; 16];
+        } else {
+            identity.label_epoch += 1;
+        }
+        assert!(Store::open(&root, "natural-batch", identity).is_err());
     }
     Ok(())
 }

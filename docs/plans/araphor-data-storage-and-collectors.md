@@ -473,6 +473,47 @@ Production and both engine forks remain unchanged. Full CI is not run.
 These PoCs do not qualify production retry, gap, expiry, witness, native
 historical table updates, or full collector transactions.
 
+### Natural source keys and one source row, 2026-11-13
+
+The user clarifies that the required result is simpler stored metadata and
+keys. The implementer and reviewer agree before code changes. Test a separate
+benchmark owner with two domain keyspaces, events and sources, plus the
+benchmark result and global state keyspaces. Keep production unchanged.
+
+Use the existing source epoch key: tenant, node, source, and source epoch.
+The encoded width is 42 bytes plus the node-name byte length. Append the
+eight-byte first cursor for each event key. The fixture uses 56-byte keys.
+One source row contains the full identity, CPU, ACK, coverage, and retained
+floor. That row also supplies the immutable epoch binding. Remove numeric
+source IDs, both ID maps, the separate epoch table, and the ID allocator.
+
+The benchmark accepts a prepared batch
+  -> The owner checks the full source identity against its source row.
+  -> The owner checks the same CPU and contiguous input rules.
+  -> One transaction commits the RawCommit payload, source row, and state.
+  -> The owner reads the latest source-prefixed result inside its write transaction.
+  -> The result's saved cut supplies the consumed-cursor comparison.
+  -> Another transaction commits the new result and global state together.
+  -> CDC resumes the original journal and checks the same-commit head.
+
+The latest result is the sole consumed frontier. Do not add a duplicate
+consumed row or source field. Keep head, events, receipt, and binding revision
+fields in one state row. Use the existing RawCommit codec and native reads.
+An owner opened with the same epoch but a changed boot or label identity
+must fail before it can expose data. Bind identity at open and admission;
+do not add a source lookup to every page.
+
+Compare the existing compact-batch and compact-frame PoCs with the natural
+schema. Use all six condition orders at each existing event count, for 36
+fresh processes. Keep 256-record batches, both SyncAll boundaries, all byte,
+position, history, reopen, and collection checks. Add source-isolation and
+per-source progress checks. Record speed, bytes, tables, and physical space.
+Timing has no pass/fail limit. Run one finite matrix without full CI.
+
+Result: **Not done**. This experiment has append-only results and one consumer
+per source. It does not qualify result deletion, repeated publication at the
+same frontier, production retry/expiry, or complete collector transactions.
+
 ### Event flow before replacement
 
 ```text

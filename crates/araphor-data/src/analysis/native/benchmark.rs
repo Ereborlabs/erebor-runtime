@@ -10,8 +10,10 @@ use crate::{
 };
 
 mod candidate;
+mod natural;
 mod tables;
 use candidate::Candidate;
+use natural::Natural;
 use tables::Tables;
 
 const PROGRESS: &[u8] = b"benchmark/consumed";
@@ -75,6 +77,7 @@ enum Backend {
     Production(Box<NativeStore>),
     Fjall(Candidate),
     Tables(Tables),
+    Natural(Natural),
 }
 
 pub struct Store {
@@ -87,6 +90,7 @@ impl Store {
         let backend = match backend {
             "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
+            "natural-batch" => Backend::Natural(Natural::open(root, source.clone())?),
             "table-batch"
             | "table-record"
             | "compact-batch"
@@ -108,6 +112,7 @@ impl Store {
             Backend::Production(store) => store.database(),
             Backend::Fjall(store) => &store.database,
             Backend::Tables(store) => &store.database,
+            Backend::Natural(store) => &store.database,
         }
     }
 
@@ -123,6 +128,7 @@ impl Store {
             }
             Backend::Fjall(store) => store.append(batch),
             Backend::Tables(store) => store.append(batch),
+            Backend::Natural(store) => store.append(batch),
         }
     }
 
@@ -137,6 +143,7 @@ impl Store {
             }
             Backend::Fjall(store) => store.cut()?,
             Backend::Tables(store) => return store.cut(),
+            Backend::Natural(store) => return store.cut(),
         };
         Ok(Cut {
             revision,
@@ -161,12 +168,14 @@ impl Store {
             }
             Backend::Fjall(store) => store.read(first, cut),
             Backend::Tables(store) => store.read(first, cut),
+            Backend::Natural(store) => store.read(first, cut),
         }
     }
 
     pub fn point(&self, cursor: u64) -> Result<Vec<AnalysisRecordV1>> {
         match &self.backend {
             Backend::Tables(store) => store.point(cursor),
+            Backend::Natural(store) => store.point(cursor),
             _ => Err("point comparison requires the table PoC".into()),
         }
     }
@@ -174,6 +183,7 @@ impl Store {
     pub fn statistics(&self) -> Result<serde_json::Value> {
         let counts = match &self.backend {
             Backend::Tables(store) => store.statistics()?,
+            Backend::Natural(store) => return store.statistics(),
             Backend::Production(store) => {
                 let mut counts = std::collections::BTreeMap::<String, [u64; 3]>::new();
                 for row in store.view()?.snapshot().iter() {
@@ -236,6 +246,7 @@ impl Store {
             }
             Backend::Fjall(store) => store.scan(cut, visit),
             Backend::Tables(store) => store.scan(cut, visit),
+            Backend::Natural(store) => store.scan(cut, visit),
         }
     }
 
@@ -265,6 +276,7 @@ impl Store {
                 tx.commit()?.ok_or("missing native progress commit")?;
             }
             Backend::Tables(store) => store.consume(&progress)?,
+            Backend::Natural(store) => store.consume(&progress)?,
         }
         Ok(())
     }
@@ -274,6 +286,7 @@ impl Store {
             Backend::Production(store) => store.branch().snapshot()?,
             Backend::Fjall(store) => store.branch.snapshot()?,
             Backend::Tables(store) => return store.saved(last),
+            Backend::Natural(store) => return store.saved(last),
         };
         let last = match last {
             Some(last) => last,
@@ -395,6 +408,7 @@ impl Store {
                 }
             }
             Backend::Tables(store) => return store.replay(cut, visit),
+            Backend::Natural(store) => return store.replay(cut, visit),
         }
         Ok(count)
     }
@@ -421,10 +435,27 @@ impl Store {
     }
 
     pub fn journal_usage(&self) -> Result<[u64; 3]> {
-        match &self.backend {
-            Backend::Tables(store) => store.journal_usage(),
-            _ => Err("journal measurement requires the table PoC".into()),
+        use std::os::unix::fs::MetadataExt as _;
+        let root = match &self.backend {
+            Backend::Tables(store) => &store.root,
+            Backend::Natural(store) => &store.root,
+            _ => return Err("journal measurement requires the table PoC".into()),
+        };
+        let mut usage = [0; 3];
+        for entry in std::fs::read_dir(root.join("fjall"))? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jnl")
+            {
+                let metadata = entry.metadata()?;
+                usage[0] += 1;
+                usage[1] += metadata.len();
+                usage[2] += metadata.blocks() * 512;
+            }
         }
+        Ok(usage)
     }
 
     pub fn maintain(&self) -> Result<serde_json::Value> {

@@ -38,7 +38,7 @@ pub(super) struct Tables {
     source_ids: SingleWriterTxKeyspace,
     sources: SingleWriterTxKeyspace,
     prefix: Option<Vec<u8>>,
-    root: PathBuf,
+    pub(super) root: PathBuf,
     records: bool,
     compact: bool,
     metadata: bool,
@@ -632,25 +632,6 @@ impl Tables {
             }
         }
         Ok(count)
-    }
-
-    pub fn journal_usage(&self) -> Result<[u64; 3]> {
-        use std::os::unix::fs::MetadataExt as _;
-        let mut usage = [0; 3];
-        for entry in std::fs::read_dir(self.root.join("fjall"))? {
-            let entry = entry?;
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "jnl")
-            {
-                let metadata = entry.metadata()?;
-                usage[0] += 1;
-                usage[1] += metadata.len();
-                usage[2] += metadata.blocks() * 512;
-            }
-        }
-        Ok(usage)
     }
 
     pub fn statistics(&self) -> Result<std::collections::BTreeMap<String, [u64; 3]>> {

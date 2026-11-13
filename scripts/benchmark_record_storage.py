@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import statistics
@@ -17,11 +18,14 @@ def main():
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--compression", action="store_true")
     parser.add_argument("--batch-layout", action="store_true")
+    parser.add_argument("--natural", action="store_true")
     parser.add_argument("--experimental-binary", type=Path)
     parser.add_argument("--build-manifest", type=Path)
     args = parser.parse_args()
     if args.batch_layout and (args.compact or args.compression):
         parser.error("--batch-layout is a separate batch-only comparison")
+    if args.natural and (args.compact or args.compression or args.batch_layout):
+        parser.error("--natural is a separate source-schema comparison")
     if args.compression and (not args.experimental_binary or not args.build_manifest):
         parser.error("--compression requires --experimental-binary and --build-manifest")
     binary = args.binary.resolve()
@@ -43,6 +47,9 @@ def main():
         backends = ["compact-batch", "compact-meta-batch", "compact-frame-batch", "compact-lz4-frame-batch"]
         orders = [[backends[index] for index in order] for order in
                   [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
+    if args.natural:
+        backends = ["compact-batch", "compact-frame-batch", "natural-batch"]
+        orders = list(itertools.permutations(backends))
     binaries = {name: (args.experimental_binary.resolve() if args.compression and "-lz4-" in name else binary) for name in backends}
     sources = [Path("crates/araphor-data/examples/raw_owner_bench.rs"),
                Path("crates/araphor-data/examples/raw_storage/common.rs"),
@@ -82,8 +89,11 @@ def main():
     if args.batch_layout:
         provenance["scope"] = "batch-only compact baseline versus packed metadata, production frame codec, and native SST/index compression; default WAL settings; same post-consumption collection"
         assert not any(provenance["engine_status"].values()), "engine forks must remain clean"
+    if args.natural:
+        provenance["scope"] = "compact-ID batch PoCs versus four-keyspace natural source/epoch batch schema; latest result owns consumed progress; default engine settings and same collection scenario"
+        assert not any(provenance["engine_status"].values()), "engine forks must remain clean"
     provenance["binaries"] = {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in binaries.items()}
-    if args.compact or args.compression or args.batch_layout:
+    if args.compact or args.compression or args.batch_layout or args.natural:
         provenance["limits"] = [item for item in provenance["limits"] if not item.startswith("production")]
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
@@ -96,14 +106,19 @@ def main():
                 started = time.perf_counter()
                 with (output / f"{stem}.log").open("w") as log:
                     subprocess.run(["/usr/bin/time", "-v", "-o", str(output / f"{stem}.time"),
-                                    str(binaries[backend]), backend, str(count), str(report), *( ["pages", "gc"] if args.compression or args.batch_layout else [])],
+                                    str(binaries[backend]), backend, str(count), str(report), *( ["pages", "gc"] if args.compression or args.batch_layout or args.natural else [])],
                                    stdout=log, stderr=subprocess.STDOUT, check=True)
                 run = json.loads(report.read_text())
                 assert run["backend"] == backend and run["records"] == count
                 assert all(run["checks"].values())
                 assert run["batch_records"] == 256 and run["scan_mode"] == "pages"
                 counts = run["statistics"]["logical_counts"]
-                if backend != "production":
+                if backend == "natural-batch":
+                    assert set(counts) == {"events", "sources", "benchmark_results", "benchmark_state"}
+                    assert counts["events"][0] == counts["benchmark_results"][0] == count // 256
+                    assert counts["events"][1] == counts["benchmark_results"][1] == 56 * (count // 256)
+                    assert counts["sources"][0] == counts["benchmark_state"][0] == 1
+                elif backend != "production":
                     assert counts["events"][0] == (count if backend.endswith("-record") else count // 256)
                     width = 16 if backend.startswith("compact-") else 81
                     assert counts["events"][1] == width * counts["events"][0]
@@ -119,7 +134,7 @@ def main():
                 else:
                     assert counts["payload"][0] == counts["span"][0] == counts["position"][0] == count // 256
                     assert run["reopened_points"] is None
-                if args.compression or args.batch_layout:
+                if args.compression or args.batch_layout or args.natural:
                     gc = run["post_gc"]
                     assert all(gc["checks"].values()) and gc["records"] == count + 512
                     assert gc["journals_after"][0] < gc["journals_before"][0]
@@ -140,7 +155,7 @@ def main():
                             if run["backend"].endswith(granularity)}) == 1
         for backend in backends:
             selected = [run for run in peers if run["backend"] == backend]
-            assert len(selected) == 4
+            assert len(selected) == len(orders)
             row = {"records": count, "backend": backend,
                    "intake_events_s": statistics.median(count / (sum(sample["accept_ns"] for sample in run["append_samples"]) / 1e9) for run in selected),
                    "cycle_events_s": statistics.median(run["write_records_s"] for run in selected),
@@ -160,7 +175,7 @@ def main():
                 row[phase] = statistics.median(run[phase] for run in selected)
             row["maintenance"] = {field: statistics.median(run["maintenance"][field] for run in selected)
                                   for field in selected[0]["maintenance"]}
-            if args.compression or args.batch_layout:
+            if args.compression or args.batch_layout or args.natural:
                 row["post_gc"] = {
                     "records": count + 512,
                     "allocated_mib": statistics.median(run["post_gc"]["after_bytes"][1] / 1048576 for run in selected),
@@ -175,7 +190,7 @@ def main():
             row["logical_groups"] = {name: [statistics.median(run["statistics"]["logical_counts"][name][index]
                                                               for run in selected) for index in range(3)]
                                      for name in selected[0]["statistics"]["logical_counts"]}
-            if args.batch_layout:
+            if args.batch_layout or args.natural:
                 row["journal_logical_groups"] = {
                     name: [statistics.median(run["statistics"]["journal_logical_counts"][name][index]
                                              for run in selected) for index in range(3)]
@@ -183,9 +198,9 @@ def main():
             summary.append(row)
     pairs = []
     for count in provenance["dataset_records"]:
-        for pair in range(1, 5):
+        for pair in range(1, len(orders) + 1):
             selected = {run["backend"]: run for run in runs if run["records"] == count and run["pair"] == pair}
-            if args.batch_layout:
+            if args.batch_layout or args.natural:
                 for before, after in zip(backends, backends[1:]):
                     a, b = selected[before], selected[after]
                     intake = lambda run: count / (sum(sample["accept_ns"] for sample in run["append_samples"]) / 1e9)
