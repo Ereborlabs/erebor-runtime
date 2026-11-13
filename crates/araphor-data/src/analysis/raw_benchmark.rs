@@ -3,6 +3,9 @@ use std::{collections::BTreeMap, path::Path, time::Instant};
 use super::raw::{RawCommit, RawEntry, RawIdentity, RawJournal, RawLocation, RawMeta, RawReceipt};
 use super::{AnalysisRecordV1, EvidenceIntakeIdentityV1, ValidatedEvidenceBatchV1};
 
+mod segments;
+use segments::Segments;
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone)]
@@ -53,6 +56,7 @@ pub struct Store {
     journal: RawJournal,
     identity: RawIdentity,
     native: Option<Native>,
+    segments: Option<Segments>,
 }
 
 impl Store {
@@ -61,15 +65,15 @@ impl Store {
         let mut journal = RawJournal::open(root, &BTreeMap::new())?;
         let identity = RawIdentity::Evidence(identity);
         let native = match backend {
-            "segments" => None,
+            "segments" | "segments-file" => None,
             "fjall" => {
                 let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
                     .versioned()
                     .open()?;
-                let branch = match database.branch("raw-benchmark")? {
+                let branch = match database.branch("main")? {
                     Some(branch) => branch,
                     None => {
-                        let branch = database.create_branch("raw-benchmark")?;
+                        let branch = database.create_branch("main")?;
                         branch.retain_history(branch.info()?.head..)?;
                         branch
                     }
@@ -97,6 +101,7 @@ impl Store {
             journal,
             identity,
             native,
+            segments: (backend == "segments-file").then(Segments::default),
         })
     }
 
@@ -162,6 +167,8 @@ impl Store {
             );
             transaction.commit()?.ok_or("missing native commit")?;
             self.journal.index = index;
+        } else if let Some(segments) = &mut self.segments {
+            segments.append(&mut self.journal, &self.identity, append)?;
         } else {
             self.journal.append(&self.identity, append)?;
         }

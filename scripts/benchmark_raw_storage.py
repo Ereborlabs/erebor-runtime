@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import itertools
 import json
 from pathlib import Path
+import platform
 import statistics
 import subprocess
 import time
@@ -14,10 +16,16 @@ def main():
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--owner", action="store_true")
     parser.add_argument("--owner-backend", choices=["production", "hybrid"], default="production")
+    parser.add_argument("--segments-file", action="store_true")
     args = parser.parse_args()
+    if args.segments_file and args.owner:
+        parser.error("--segments-file applies only to the raw storage PoC")
     example = "raw_owner_bench" if args.owner else "raw_storage_bench"
     binary = (args.binary or Path("target/release/examples") / example).resolve()
     baseline = args.owner_backend if args.owner else "segments"
+    backends = [baseline, "segments-file", "fjall"] if args.segments_file else [baseline, "fjall"]
+    orders = list(itertools.permutations(backends)) if args.segments_file else [
+        backends, backends[::-1], backends, backends[::-1]]
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     provenance = {
@@ -29,6 +37,11 @@ def main():
             for path in [Path("crates/araphor-data/src/analysis/raw_benchmark.rs"),
                          Path("crates/araphor-data/examples/raw_storage_bench.rs"),
                          Path("crates/araphor-data/examples/raw_storage/common.rs"),
+                         Path("crates/araphor-data/src/analysis/raw_benchmark/segments.rs"),
+                         Path("crates/araphor-data/src/analysis/raw.rs"),
+                         Path("crates/araphor-data/src/analysis/raw/index.rs"),
+                         Path("crates/araphor-data/src/analysis/raw_segments.rs"),
+                         Path("crates/araphor-data/src/analysis/segment_file.rs"),
                          *([Path("crates/araphor-data/examples/raw_owner_bench.rs"),
                             Path("crates/araphor-data/src/analysis/native/benchmark.rs"),
                             Path("crates/araphor-data/src/analysis/native/benchmark/candidate.rs"),
@@ -43,13 +56,24 @@ def main():
             name: subprocess.check_output(["git", "-C", name, "rev-parse", "HEAD"], text=True).strip()
             for name in ["fjall", "lsm-tree"]
         },
+        "engine_status": {
+            name: subprocess.check_output(["git", "-C", name, "status", "--porcelain"], text=True)
+            for name in ["fjall", "lsm-tree"]
+        },
+        "host": platform.uname()._asdict(),
+        "cpu": subprocess.check_output(["lscpu"], text=True),
+        "compiler": subprocess.check_output(["rustc", "-Vv"], text=True),
+        "filesystem": subprocess.check_output(["df", "-h", "."], text=True),
+        "mount": subprocess.check_output(["findmnt", "-T", ".", "-o", "SOURCE,FSTYPE,OPTIONS"], text=True),
         "cache": "OS page cache retained; fresh store and process per run; setup filesystem sync outside append timing",
         "maintenance": "explicit flush and major compaction; not a steady natural compaction test",
         "dataset_records": [16384, 262144], "batch_records": 256,
-        "orders_per_dataset": [[baseline, "fjall"], ["fjall", baseline],
-                               [baseline, "fjall"], ["fjall", baseline]],
-        "comparison": f"{baseline} owner versus all-Fjall candidate" if args.owner else "raw segment versus Fjall pilot",
+        "orders_per_dataset": orders,
+        "comparison": f"{baseline} owner versus all-Fjall candidate" if args.owner else
+                      "original and file-synced raw segments versus Fjall" if args.segments_file else
+                      "raw segment versus Fjall pilot",
     }
+    assert not any(provenance["engine_status"].values()), "engine checkout must be clean"
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
     for count in provenance["dataset_records"]:
@@ -79,7 +103,7 @@ def main():
     for count in provenance["dataset_records"]:
         peers = [run for run in runs if run["records"] == count]
         assert len({run["input_bytes"] for run in peers}) == 1
-        for backend in [baseline, "fjall"]:
+        for backend in backends:
             selected = [run for run in peers if run["backend"] == backend]
             totals = [sample["total_ns"] for run in selected for sample in run["append_samples"]]
             commit_key = "progress_ns" if args.owner else "commit_ns"
@@ -105,15 +129,16 @@ def main():
             summary.append(row)
     ratios = []
     for count in provenance["dataset_records"]:
-        for pair in range(1, 5):
+        for pair in range(1, len(orders) + 1):
             selected = {run["backend"]: run for run in runs if run["records"] == count and run["pair"] == pair}
-            segment, fjall = selected[baseline], selected["fjall"]
-            ratios.append({"records": count, "pair": pair,
-                           f"fjall_write_rate_over_{baseline}": fjall["write_records_s"] / segment["write_records_s"],
-                           f"{baseline}_append_p95_over_fjall": segment["append"]["p95_ms"] / fjall["append"]["p95_ms"],
-                           f"{baseline}_reopen_over_fjall": segment["reopen_s"] / fjall["reopen_s"]})
+            for reference in backends[:-1]:
+                segment, fjall = selected[reference], selected["fjall"]
+                ratios.append({"records": count, "pair": pair,
+                               f"fjall_write_rate_over_{reference}": fjall["write_records_s"] / segment["write_records_s"],
+                               f"{reference}_append_p95_over_fjall": segment["append"]["p95_ms"] / fjall["append"]["p95_ms"],
+                               f"{reference}_reopen_over_fjall": segment["reopen_s"] / fjall["reopen_s"]})
     (output / "summary.json").write_text(json.dumps({"summary": summary, "paired_ratios": ratios}, indent=2) + "\n")
-    lines = ["# Raw storage benchmark", "", "All 16 process runs passed byte, position, retained-cut, reopen, and log-resume checks.", "",
+    lines = ["# Raw storage benchmark", "", f"All {len(runs)} process runs passed byte, position, retained-cut, reopen, and log-resume checks.", "",
              "| Records | Backend | Write records/s | Cycle median ms | Cycle p95 ms | Cycle p99 ms | Cycle max ms | Reopened read records/s | Reopen ms | Allocated MiB |",
              "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for row in summary:
@@ -122,7 +147,7 @@ def main():
                      f"{latency['median_ms']:.3f} | {latency['p95_ms']:.3f} | {latency['p99_ms']:.3f} | {latency['max_ms']:.3f} | "
                      f"{row['reopened_read_records_s_median']:,.0f} | "
                      f"{row['reopen_ms_median']:.3f} | {row['allocated_mib_median']:.2f} |")
-    lines.extend(["", "Cycle latency is per durable 256-record batch. Percentiles pool samples by dataset/backend; throughput is the median of four process rates.",
+    lines.extend(["", f"Cycle latency is per durable 256-record batch. Percentiles pool samples by dataset/backend; throughput is the median of {len(orders)} process rates.",
                   "Read throughput includes exact-byte verification.",
                   "OS page cache was not dropped. Reopen uses a new engine cache in the same process.",
                   "Maintenance is forced flush/major compaction.",
@@ -146,6 +171,11 @@ def main():
         lines.extend(["Native history and original journals remain retained for the probes.",
                       "Segments validate all retained payloads at open; the Fjall candidate restores index metadata and validates payloads on reads.",
                       "The Fjall candidate prepares an unused segment identity header; prepare and commit samples are recorded separately.", ""])
+        if args.segments_file:
+            lines.extend(["The segments-file condition retains its active SegmentFile and syncs that file after each batch.",
+                          "Creation, rotation, and sealing also sync the segment directory.",
+                          "The same raw codec, indexes, validation, usage accounting, and read path remain in use.",
+                          "This compares the combined writer changes. It does not isolate each I/O cost.", ""])
     (output / "README.md").write_text("\n".join(lines))
     print(output / "README.md", flush=True)
 

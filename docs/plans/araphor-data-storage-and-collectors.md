@@ -378,6 +378,36 @@ Result: **Done** for this benchmark experiment. Production continues to use
 batch payloads. Full CI is not run. Production table history, multiple durable
 consumers, power-loss recovery, and notification latency remain unqualified.
 
+### Simpler segment writer comparison, 2026-11-13
+
+The user approves a benchmark-only comparison of a simpler segment writer.
+The implementer and reviewer agree before code changes. Keep production
+storage and both engine forks unchanged.
+
+Compare the existing segment writer, a writer with a retained open file and
+file-level sync, and the existing Fjall candidate. Use `main` for the fresh
+Fjall benchmark branch. Keep the same prepared 16,384 and 262,144 events,
+256-record batches, codec, raw indexes, byte checks, retained cuts, reopen,
+and original-log continuation. The new writer must sync each batch before
+publication and sync the directory when it creates or renames a segment.
+
+The benchmark submits a prepared batch
+  -> The selected writer uses the existing RawCommit frame and raw index.
+  -> The new segment condition reuses its active file descriptor.
+  -> The new segment condition syncs that file before it publishes the index.
+  -> Creation or rotation also syncs the segment directory.
+  -> The benchmark runs the existing read, history, reopen, and replay checks.
+
+Use all six permutations of the three conditions at each event count. This
+gives 36 fresh processes and balances each condition's position and adjacent
+conditions. Build before measurement. Record all samples, maintenance,
+resources, source identities, and environment. Timing has no pass/fail limit.
+This is one finite matrix. It measures the combined simpler writer; it does
+not isolate each I/O change. Full CI remains outside this iteration.
+
+Result: **Not done**. Do not infer production recovery, retention, or
+sustained-compaction parity from this experiment.
+
 ### Event flow before replacement
 
 ```text

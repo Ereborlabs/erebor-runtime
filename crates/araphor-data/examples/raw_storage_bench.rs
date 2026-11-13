@@ -76,7 +76,9 @@ fn main() -> Result<()> {
     }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() != 3 {
-        return Err("usage: raw_storage_bench segments|fjall RECORDS REPORT.json".into());
+        return Err(
+            "usage: raw_storage_bench segments|segments-file|fjall RECORDS REPORT.json".into(),
+        );
     }
     let total: u64 = args[1].parse()?;
     if total < 512 || total % 512 != 0 {
@@ -151,8 +153,10 @@ fn main() -> Result<()> {
         .collect::<Vec<_>>();
     let report = json!({"backend":args[0],"records":total,"batch_records":256,
         "input_bytes":frames.iter().take(total as usize).map(|frame|frame.len() as u64).sum::<u64>(),
-        "scope":"RawJournal versus versioned Fjall, identical RawCommit codec, common in-memory range index; single source; disjoint appends",
-        "durability":{"segments":"positional write then filesystem syncfs","fjall":"versioned branch SyncAll journal commit; receipt and entry index atomic"},
+        "scope":"Original and persistent-file RawJournal writers versus versioned Fjall; identical RawCommit codec and common in-memory range index; single source; disjoint appends; persistent-file changes measured together",
+        "durability":{"segments":"positional write then filesystem syncfs",
+            "segments-file":"retained SegmentFile, positional write then file sync_all; directory sync on creation, rotation and sealing",
+            "fjall":"versioned main branch SyncAll journal commit; receipt and entry index atomic"},
         "cache":"OS page cache is not dropped; reopened engine caches are new; syncfs drains setup writes before timed append",
         "preparation_note":"Fjall candidate calls existing prepare_append without active segment state; it prepares an unused segment identity header per batch. Do not attribute prepare differences to Fjall commit cost.",
         "history_policy":"all native history and original journals retained for historical/resume probes",
@@ -176,4 +180,52 @@ fn main() -> Result<()> {
         reopen_s * 1000.0
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_reopen_and_seal() -> Result<()> {
+        let (batches, frames) = inputs(768)?;
+        for backend in ["segments", "segments-file", "fjall"] {
+            let directory = tempfile::tempdir()?;
+            let mut store = Store::open(directory.path(), backend, source())?;
+            store.append(batches[0].clone())?;
+            let cut = Cut::decode(&store.cut()?.encode()?)?;
+            drop(store);
+            let mut store = Store::open(directory.path(), backend, source())?;
+            assert_eq!(store.accepted(), 256);
+            replay(&store, &cut, &frames, 257, 256)?;
+            store.append(batches[1].clone())?;
+            replay(&store, &cut, &frames, 257, 512)?;
+            store.maintain()?;
+            store.append(batches[2].clone())?;
+            drop(store);
+            let store = Store::open(directory.path(), backend, source())?;
+            assert_eq!(store.accepted(), 768);
+            replay(&store, &cut, &frames, 257, 768)?;
+            let page = store.read(129, 256, None)?;
+            assert_eq!(page.len(), 256);
+            verify(&page, &frames, 129);
+            let historical = store.read(129, 256, Some(&cut))?;
+            assert_eq!(historical.len(), 128);
+            verify(&historical, &frames, 129);
+            assert!(store.read(257, 1, Some(&cut))?.is_empty());
+            if backend != "fjall" {
+                let names = fs::read_dir(directory.path().join("segments"))?
+                    .map(|entry| entry.map(|entry| entry.file_name()))
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                assert_eq!(names.len(), 2);
+                assert!(names
+                    .iter()
+                    .any(|name| name.to_string_lossy().ends_with(".seg")));
+                assert!(names
+                    .iter()
+                    .any(|name| name.to_string_lossy().ends_with(".open")));
+            }
+        }
+        Ok(())
+    }
 }
