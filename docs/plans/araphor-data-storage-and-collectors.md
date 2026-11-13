@@ -453,8 +453,25 @@ codec comparison retains CRC and canonical validation. The native compression
 condition changes only public keyspace creation options. Do not attribute a
 speed difference to a removed validation check. Full CI is outside iteration.
 
-Result: **Not done**. These PoCs do not qualify production retry, gap, expiry,
-witness, native historical table updates, or full collector transactions.
+The [measured results and suggestions](../research/results/araphor-batch-layout-2026-11-13.md)
+record all 32 passing runs at source `b9776e57d`. Four focused tests and four
+CLI smoke runs pass. At 262,144 events, median intake rates for baseline,
+metadata, frame, and native compression are 330,866, 335,454, 351,441, and
+344,829 events/s. Metadata gains are small and inconsistent across pairs.
+The frame codec improves intake but reduces reopened scan rates. Production
+already uses this codec.
+
+Packed metadata reduces decoded journal items from 8,197 to 5,123 and live
+state entries from six to one. Its space saving after collection is 12 KiB.
+Native compression reduces the frame layout's initial allocated sample from
+52.648 to 23.646 MiB. Its extra saving after collection is 72 KiB. It does
+not improve median throughput. Keep batch storage and the production codec.
+Do not change the production metadata format only for these results.
+
+Result: **Done** for this benchmark-only investigation and suggestions.
+Production and both engine forks remain unchanged. Full CI is not run.
+These PoCs do not qualify production retry, gap, expiry, witness, native
+historical table updates, or full collector transactions.
 
 ### Event flow before replacement
 

@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Batch keyspaces, metadata, and native codecs](results/araphor-batch-layout-2026-11-13.md)
+  records 32 matched batch-only runs and source-grounded suggestions. Packed
+  metadata reduces logical writes, but speed gains are small and mixed. Native
+  compression reduces the initial allocated sample. Savings after collection
+  are smaller. Production and both engine forks remain unchanged.
 - [Persistent segment files and file-level sync](results/araphor-segment-file-2026-11-13.md)
   records 36 matched raw-storage runs. The simpler segment writer reaches
   1.74 times the original rate and is slightly faster than Fjall in this
