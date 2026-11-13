@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Compact source keys](results/araphor-compact-storage-2026-11-13.md)
+  records 32 matched batch/record runs with 81-byte and 16-byte event keys.
+  Compact keys reduce record storage space. Per-record intake and bulk reads
+  still cost more than compact batches in the reported medians. Both late
+  slow runs remain in the report. Production storage is unchanged.
 - [Per-record and batch event storage](results/araphor-record-storage-2026-11-13.md)
   records 24 matched runs with real Fjall keyspaces. Per-record values improve
   point reads and cost more throughput, bulk-read time, and allocated space.

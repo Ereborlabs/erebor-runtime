@@ -311,8 +311,24 @@ Check distinct IDs and source-scoped reads and CDC across two sequential
 source admissions and reopen before measuring the original one-source workload.
 Retain the existing append-only history and production-integration limits.
 
-Result: **Not done**. The implementer and reviewer agree on this scope before
-code changes. No production or engine migration is part of this comparison.
+The [measured result and source review](../research/results/araphor-compact-storage-2026-11-13.md)
+records all 32 passing process runs at source `b9dbb2632`. With 262,144 events,
+compact batch and record median durable intake rates are 334,037 and 229,944
+events/s. Their complete intake/read/progress cycle rates are 192,874 and
+135,182 events/s. Compact record allocation is 107.12 MiB, versus 128.48 MiB
+for long record and 53.28 MiB for compact batch. Record key bytes decrease
+from 20.25 to 4.00 MiB. Event value bytes remain equal across key widths.
+
+The last compact-batch and long-record processes have much higher latency.
+Their cause is unmeasured. All runs and samples remain in the report.
+Compact record has lower intake and cycle throughput than compact batch in
+the first three pairs. The fourth compact batch process is slower. Do not
+infer a general insertion-speed gain from the pooled p95 difference.
+
+Result: **Done** for this compact-key comparison. Both focused tests,
+the release build, changed-file formatting, the runner, and the independent
+measurement review pass. Full CI is not run. Production storage and both
+engine forks remain unchanged.
 
 ### Event flow before replacement
 
