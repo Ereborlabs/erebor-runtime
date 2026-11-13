@@ -224,13 +224,18 @@ impl Natural {
                 std::ops::Bound::Excluded(key.to_vec())
             });
         let mut output = Vec::new();
-        for row in predecessor.into_iter().map(Ok).chain(
+        let remaining = std::iter::once_with(|| {
             tx.range(
                 &self.events,
                 (lower, std::ops::Bound::Included(self.key(u64::MAX))),
             )
-            .map(|row| row.into_inner()),
-        ) {
+        })
+        .flatten();
+        for row in predecessor
+            .into_iter()
+            .map(Ok)
+            .chain(remaining.map(|row| row.into_inner()))
+        {
             let (key, bytes) = row?;
             if !self.rows(&key, &bytes, first, cut, |record| {
                 output.push(record);
@@ -321,7 +326,7 @@ impl Natural {
             return Err("natural consumed cursor conflict".into());
         }
         let mut state = self.state(&tx)?;
-        state.head = progress.cut.revision + 1;
+        state.head = state.head.checked_add(1).ok_or("natural head exhausted")?;
         tx.insert(
             &self.results,
             self.key(progress.cut.accepted),

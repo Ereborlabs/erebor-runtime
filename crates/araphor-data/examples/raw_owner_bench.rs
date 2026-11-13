@@ -660,3 +660,50 @@ fn natural_sources_progress() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn natural_pending_cut() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("store");
+    let (batches, frames) = inputs(512)?;
+    let first = source();
+    let mut second = first.clone();
+    second.source_id = [9; 16];
+    let mut store = Store::open(&root, "natural-batch", first.clone())?;
+    store.append(batches[0].clone())?;
+    let pending = store.cut()?;
+    assert_eq!(pending.revision, 1);
+    drop(store);
+    let mut store = Store::open(&root, "natural-batch", second.clone())?;
+    store.append(batches[0].clone())?;
+    assert_eq!(store.cut()?.revision, 2);
+    store.consume(1, &store.cut()?)?;
+    assert_eq!(store.cut()?.revision, 3);
+    drop(store);
+    let mut store = Store::open(&root, "natural-batch", first)?;
+    store.consume(1, &pending)?;
+    assert_eq!(store.cut()?.revision, 4);
+    assert_eq!(store.saved(None)?, pending);
+    store.append(batches[1].clone())?;
+    assert_eq!(store.cut()?.revision, 5);
+    let mut expected = 257;
+    assert_eq!(
+        store.replay(&pending, |cursor, bytes, position| {
+            assert_eq!(cursor, expected);
+            assert_eq!(bytes, frames[cursor as usize - 1]);
+            assert_eq!(position.commit_revision, 5);
+            assert_eq!(position.ordinal, (cursor - 257) as u32);
+            expected += 1;
+            Ok(())
+        })?,
+        256
+    );
+    assert_eq!(expected, 513);
+    store.consume(257, &store.cut()?)?;
+    assert_eq!(store.cut()?.revision, 6);
+    drop(store);
+    let store = Store::open(&root, "natural-batch", second)?;
+    assert_eq!(store.saved(None)?.revision, 2);
+    assert_eq!(store.cut()?.revision, 6);
+    Ok(())
+}
