@@ -510,9 +510,27 @@ position, history, reopen, and collection checks. Add source-isolation and
 per-source progress checks. Record speed, bytes, tables, and physical space.
 Timing has no pass/fail limit. Run one finite matrix without full CI.
 
-Result: **Not done**. This experiment has append-only results and one consumer
-per source. It does not qualify result deletion, repeated publication at the
-same frontier, production retry/expiry, or complete collector transactions.
+The [corrected measurements and schema review](../research/results/araphor-natural-batch-storage-2026-11-13.md)
+record 36 final passing process runs at source `dbd4a8fb3`. Six focused tests
+and three corrected CLI smoke runs pass. A failure-first test reproduces a
+global head rewind when another source commits before an older cut is consumed.
+The corrected owner advances the current head and preserves the original cut.
+The first matrix remains pre-fix evidence and does not support the result.
+
+The natural schema reduces seven keyspaces to four and four source metadata
+rows to one. It has no application ID maps, allocator, separate epoch table,
+or duplicate consumed frontier. Fixture event/result keys are 56 bytes.
+At 262,144 events, median intake is 343,099 events/s and complete-cycle rate
+is 195,163 events/s. After collection at 262,656 events, allocation is
+7.949 MiB versus 7.957 MiB for compact IDs with the same RawCommit codec.
+Performance and space are similar. Two late comparator runs have high latency;
+all samples remain, and the cause is unmeasured. Do not claim a tail-latency gain.
+
+Result: **Done** for this simpler benchmark schema and comparison. Production
+and both engine forks remain unchanged. Full CI is not run. This experiment
+has append-only results and one consumer per source. It does not qualify
+result deletion, repeated publication at the same frontier, production
+retry/expiry, or complete collector transactions.
 
 ### Event flow before replacement
 

@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Natural source keys and one source metadata row](results/araphor-natural-batch-storage-2026-11-13.md)
+  records a simpler four-keyspace schema and 36 corrected matched runs.
+  One source row replaces receipt, epoch, and ID-map metadata. The latest
+  source result supplies consumed progress. Performance and space remain
+  similar. The report retains pre-fix evidence and states the retention limits.
 - [Batch keyspaces, metadata, and native codecs](results/araphor-batch-layout-2026-11-13.md)
   records 32 matched batch-only runs and source-grounded suggestions. Packed
   metadata reduces logical writes, but speed gains are small and mixed. Native
