@@ -359,7 +359,7 @@ fn observability_receipt_cursor() -> std::result::Result<(), Box<dyn std::error:
 }
 
 #[test]
-fn raw_acceptance_defers_catalogue() -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn evidence_acceptance_commits_catalogue() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");
     let store = AnalysisStore::open(&root)?;
@@ -401,14 +401,27 @@ fn raw_acceptance_defers_catalogue() -> std::result::Result<(), Box<dyn std::err
             cursor as usize
         );
         let current = store.view()?;
-        assert_eq!(current.snapshot().revision(), before.snapshot().revision());
-        assert_eq!(store.database().inner().journal_head()?, journal);
-        assert_eq!(inventory(&store)?, records);
+        assert!(current.snapshot().revision() > before.snapshot().revision());
+        assert_ne!(store.database().inner().journal_head()?, journal);
+        let committed = inventory(&store)?;
+        for (key, value) in &records {
+            if key != b"\0data/head" {
+                assert_eq!(committed.get(key), Some(value));
+            }
+        }
+        for prefix in [
+            b"\0data/evidence/payload/".as_slice(),
+            b"\0data/evidence/position/",
+            b"\0data/evidence/span/",
+        ] {
+            assert_eq!(current.snapshot().prefix(prefix).count(), cursor as usize);
+        }
+        assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
         let head = current
             .snapshot()
             .get(b"\0data/head")?
             .ok_or("native head")?;
-        assert_eq!(u64::from_be_bytes(head.as_ref().try_into()?), 0);
+        assert_eq!(u64::from_be_bytes(head.as_ref().try_into()?), cursor);
     }
     drop(before);
     drop(store);

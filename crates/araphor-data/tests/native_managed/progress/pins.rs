@@ -3,8 +3,8 @@ use araphor_data::{
     AnalysisStreamIdentityV1, AnalysisWitnessV1, EvidenceRecord, ValidatedEvidenceBatchV1,
 };
 
-const RAW: &[u8] = b"\0data/ref/raw/";
-const SEGMENT: &[u8] = b"\0data/ref/segment/";
+const RAW: &[u8] = b"\0data/ref/evidence/";
+const SEGMENT: &[u8] = b"\0data/ref/batch/";
 
 struct PinsFixture {
     request: AnalysisResultCommitV1,
@@ -16,25 +16,31 @@ impl PinsFixture {
         let scope = scope();
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         let mut sizes = BTreeMap::new();
-        for cursor in 1..=9 {
-            if cursor == 6 {
+        for (first, last) in [(1, 5), (6, 9)] {
+            if first == 6 {
                 store.checkpoint()?;
             }
-            let frame = Vec::<u8>::try_from(&EvidenceRecord {
-                task_cookie: cursor,
-                observed_boottime_ns: cursor,
-                ..Default::default()
-            })?;
-            sizes.insert(cursor, frame.len() as u64);
+            let mut frames = Vec::new();
+            let mut ends = Vec::new();
+            for cursor in first..=last {
+                let frame = Vec::<u8>::try_from(&EvidenceRecord {
+                    task_cookie: cursor,
+                    observed_boottime_ns: cursor,
+                    ..Default::default()
+                })?;
+                sizes.insert(cursor, frame.len() as u64);
+                frames.extend(frame);
+                ends.push(frames.len());
+            }
             store.accept_validated_batch(
                 scope.identity.clone(),
                 ValidatedEvidenceBatchV1 {
                     cpu_id: 0,
-                    first_cursor: cursor,
-                    last_cursor: cursor,
+                    first_cursor: first,
+                    last_cursor: last,
                     intake_utc_ns: 100,
-                    frame_ends: vec![frame.len()],
-                    framed_records: frame.into(),
+                    frame_ends: ends,
+                    framed_records: frames.into(),
                 },
             )?;
         }
@@ -92,6 +98,8 @@ impl PinsFixture {
             .map(|value| value.0)
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(segments.len(), 2);
+        assert_eq!(view.snapshot().prefix(b"\0data/ref/raw/").count(), 0);
+        assert_eq!(view.snapshot().prefix(b"\0data/ref/segment/").count(), 0);
         let mut actual = actual
             .into_iter()
             .map(|(_, expires, ranges)| (expires, ranges))
@@ -135,7 +143,7 @@ impl PinsFixture {
                 cursors.iter().map(|cursor| self.sizes[cursor]).sum::<u64>()
             );
             assert_eq!(
-                usage.segment_bytes - usage.extra_segment_bytes,
+                usage.evidence_bytes - usage.extra_evidence_bytes,
                 usage.referenced_bytes
             );
         }
@@ -256,7 +264,10 @@ fn old_pin_format_rejects() -> TestResult {
     tx.native().insert(b"\0data/format", 10u64.to_be_bytes());
     assert!(matches!(
         tx.commit([]),
-        Err(Error::NativeState { field: "format version", .. })
+        Err(Error::NativeState {
+            field: "format version",
+            ..
+        })
     ));
     drop(store);
     assert!(matches!(

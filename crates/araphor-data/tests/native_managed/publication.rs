@@ -658,7 +658,11 @@ fn attributed_raw_events_and_contexts_keep_exact_references_after_reopen() -> Te
     };
     let receipt = store.commit_managed(store.prepare_managed(&input)?, || Ok(()))?;
     assert_eq!(
-        store.view()?.snapshot().prefix(b"\0data/ref/raw/").count(),
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/ref/evidence/")
+            .count(),
         2
     );
     assert_eq!(
@@ -672,7 +676,7 @@ fn attributed_raw_events_and_contexts_keep_exact_references_after_reopen() -> Te
     let raw = store
         .view()?
         .snapshot()
-        .prefix(b"\0data/ref/raw/")
+        .prefix(b"\0data/ref/evidence/")
         .next()
         .ok_or("raw reference")??
         .0;
@@ -691,7 +695,11 @@ fn attributed_raw_events_and_contexts_keep_exact_references_after_reopen() -> Te
         Some(&receipt)
     );
     assert_eq!(
-        store.view()?.snapshot().prefix(b"\0data/ref/raw/").count(),
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/ref/evidence/")
+            .count(),
         2
     );
     assert_eq!(

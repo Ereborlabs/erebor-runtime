@@ -23,7 +23,6 @@ pub use model::*;
 
 pub const EVIDENCE_BATCH_BYTES: usize = 3 * 1_024 * 1_024;
 pub const EVIDENCE_COMMIT_BYTES: usize = 4 * 1_024 * 1_024;
-pub use araphor_data::EVIDENCE_SEGMENT_BYTES;
 
 #[derive(Clone)]
 /// Owns source validation and acknowledges committed evidence.
@@ -389,7 +388,7 @@ impl EvidenceIntakeOwner {
                     .is_some_and(|next| next != input.first_cursor)
             {
                 return Err(Status::invalid_argument(
-                    "an evidence commit group crossed its stream, cursor, or segment bound",
+                    "an evidence commit group crossed its stream, CPU, or cursor",
                 ));
             }
             let byte_offset = framed_records.len();
@@ -1267,6 +1266,15 @@ mod tests {
         assert_eq!(intake.contiguous_cursor(&identity())?, 20);
         assert_eq!(
             std::fs::read_dir(directory.path().join("analysis/segments"))?.count(),
+            0
+        );
+        assert_eq!(
+            intake
+                .analysis_store()
+                .view()?
+                .snapshot()
+                .prefix(b"\0data/evidence/payload/")
+                .count(),
             1
         );
         drop(intake);

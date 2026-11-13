@@ -64,7 +64,7 @@ impl NativeStore {
             &mut RevisionCounts::default(),
             Some(&prior.raw),
         )?;
-        Self::restore_backlog(&mut raw, &prior.snapshot, self.retention)?;
+        prior.validate_events(&self.root)?;
         for (&revision, entry) in prior.raw.entries.iter() {
             let saved = raw.index.entries.get(&revision).ok_or_else(|| {
                 NativeStateSnafu {

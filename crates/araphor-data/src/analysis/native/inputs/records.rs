@@ -1,7 +1,10 @@
 use snafu::ResultExt as _;
 
 use super::{Coordinator, InputRecord, Scan};
-use crate :: analysis :: { inputs :: InputChange , native :: { DataView , NativeStore } } ;
+use crate::analysis::{
+    inputs::InputChange,
+    native::{DataView, NativeStore},
+};
 use crate::{NativeStorageSnafu, Result, StorePositionV1};
 
 impl Coordinator {
@@ -43,6 +46,66 @@ impl Coordinator {
                 if let Some(value) = &head.value {
                     scan.last_real = scan.last_real.max(NativeStore::number(value)?);
                 }
+            }
+        }
+        let evidence = items()
+            .filter(|item| {
+                item.key.starts_with(super::super::events::Events::PAYLOAD) && item.value.is_some()
+            })
+            .collect::<Vec<_>>();
+        if !evidence.is_empty() {
+            let head = items()
+                .find(|item| item.key.as_ref() == super::super::HEAD)
+                .and_then(|item| item.value.as_deref())
+                .ok_or_else(|| {
+                    crate::NativeStateSnafu {
+                        field: "evidence input Data head",
+                    }
+                    .build()
+                })?;
+            let revision = NativeStore::number(head)?;
+            if revision > bound.metadata_revision {
+                return crate::NativeStateSnafu {
+                    field: "evidence input Data cut",
+                }
+                .fail();
+            }
+            let position = super::super::events::Events::position(
+                super::super::events::Events::POSITION,
+                revision,
+            );
+            let header = items()
+                .find(|item| item.key.as_ref() == position.as_slice())
+                .and_then(|item| item.value.as_deref())
+                .and_then(|value| value.strip_prefix(&[0]))
+                .ok_or_else(|| {
+                    crate::NativeStateSnafu {
+                        field: "evidence input batch header",
+                    }
+                    .build()
+                })?;
+            let header: super::super::events::EventBatch =
+                super::super::records::Records::decode(header)?;
+            header.check(revision)?;
+            for item in evidence {
+                if item.key.as_ref()
+                    != super::super::events::Events::key(
+                        super::super::events::Events::PAYLOAD,
+                        &header.source,
+                        header.first,
+                    )
+                    || item
+                        .value
+                        .as_ref()
+                        .is_none_or(|bytes| bytes.len() != header.bytes)
+                {
+                    return crate::NativeStateSnafu {
+                        field: "evidence input payload identity",
+                    }
+                    .fail();
+                }
+                self.readers
+                    .raw_batch(&header.source.clone().into(), &header.meta);
             }
         }
         let mut candidates = batch

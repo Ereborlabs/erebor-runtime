@@ -2,49 +2,95 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-use super::AnalysisRecordV1;
+use super::{native::events::EventRead, raw::RawRead, AnalysisRecordV1, StorePositionV1};
 use crate::Result;
 
 #[derive(Clone)]
-pub(super) struct SegmentRange {
-    pub(super) segment_id: u64,
-    pub(super) byte_start: u64,
-    pub(super) byte_end: u64,
-    pub(super) first_cursor: u64,
-    pub(super) reader: super::raw::RawRead,
-    pub(super) scan_bytes: usize,
-    pub(super) intake: u64,
+enum Reader {
+    Diagnostic {
+        read: RawRead,
+        first: u64,
+        last: u64,
+    },
+    Evidence(EventRead),
 }
 
-impl SegmentRange {
-    pub(super) fn window(
-        &self,
-        after: Option<super::StorePositionV1>,
-        limit: usize,
-    ) -> Option<Self> {
-        let mut next = self.clone();
-        next.reader = self.reader.window(after, limit)?;
-        next.first_cursor = next.reader.first();
-        Some(next)
+#[derive(Clone)]
+pub(super) struct InputRange {
+    pub(super) first_cursor: u64,
+    pub(super) scan_bytes: usize,
+    pub(super) intake: u64,
+    reader: Reader,
+}
+
+impl InputRange {
+    pub(super) fn diagnostic(
+        read: RawRead,
+        first: u64,
+        last: u64,
+        bytes: usize,
+        intake: u64,
+    ) -> Self {
+        Self {
+            first_cursor: read.first(),
+            scan_bytes: bytes,
+            intake,
+            reader: Reader::Diagnostic { read, first, last },
+        }
     }
 
-    pub(super) fn end(&self) -> super::StorePositionV1 {
-        self.reader.end()
+    pub(super) fn native(read: EventRead) -> Self {
+        Self {
+            first_cursor: read.first(),
+            scan_bytes: read.bytes(),
+            intake: read.intake(),
+            reader: Reader::Evidence(read),
+        }
+    }
+
+    pub(super) fn window(&self, after: Option<StorePositionV1>, limit: usize) -> Option<Self> {
+        match &self.reader {
+            Reader::Diagnostic { read, first, last } => Some(Self::diagnostic(
+                read.window(after, limit)?,
+                *first,
+                *last,
+                self.scan_bytes,
+                self.intake,
+            )),
+            Reader::Evidence(read) => Some(Self::native(read.window(after, limit)?)),
+        }
+    }
+
+    pub(super) fn end(&self) -> StorePositionV1 {
+        match &self.reader {
+            Reader::Diagnostic { read, .. } => read.end(),
+            Reader::Evidence(read) => read.end(),
+        }
     }
 
     pub(super) fn metadata_bytes(&self) -> usize {
-        self.reader.metadata_bytes()
+        match &self.reader {
+            Reader::Diagnostic { read, .. } => read.metadata_bytes(),
+            Reader::Evidence(read) => read.metadata_bytes(),
+        }
     }
 
     pub(super) fn read(&self, root: &Path) -> Result<(Vec<AnalysisRecordV1>, usize, usize)> {
-        if self
-            .byte_end
-            .checked_sub(self.byte_start)
-            .is_none_or(|bytes| bytes == 0 || bytes > self.scan_bytes as u64)
-        {
-            return crate::Error::reject_path(root, "the selected raw byte range is invalid");
+        match &self.reader {
+            Reader::Evidence(read) => read.read(root),
+            Reader::Diagnostic { read, first, last } => {
+                if last
+                    .checked_sub(*first)
+                    .is_none_or(|bytes| bytes == 0 || bytes > self.scan_bytes as u64)
+                {
+                    return crate::Error::reject_path(
+                        root,
+                        "the selected raw byte range is invalid",
+                    );
+                }
+                read.read(root)
+            }
         }
-        self.reader.read(root)
     }
 
     #[cfg(test)]

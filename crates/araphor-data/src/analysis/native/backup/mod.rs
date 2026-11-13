@@ -104,6 +104,7 @@ impl NativeStore {
         })?;
         self.seal_raw()?;
         let view = self.view()?;
+        view.validate_events(&self.root)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         Self::crash_path(&self.root, "backup.sealed");
         let raw = self.raw.lock().map_err(|_| {

@@ -51,6 +51,17 @@ impl NativeStore {
         }) {
             bound = bound.min(entry.commit.revision);
         }
+        let events = super::events::Events::new(view);
+        for row in events.batches(0) {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read retained evidence history",
+            })?;
+            let batch = events.decode_batch(&key, &value)?;
+            if events.expiry(batch.meta.revision)?.is_none() {
+                bound = bound.min(batch.meta.revision.saturating_sub(1));
+                break;
+            }
+        }
         for prefix in [b"\0data/Z".as_slice(), b"\0data/D"] {
             for row in view.snapshot.prefix(prefix) {
                 let (key, _) = row.context(NativeStorageSnafu {

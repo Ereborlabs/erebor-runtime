@@ -37,7 +37,7 @@ mod retirement;
 mod segment_file;
 mod segments;
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use native::RawIndexFixture;
+pub use native::EventIndexFixture;
 mod trace;
 
 pub use backup::{

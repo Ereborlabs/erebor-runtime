@@ -181,15 +181,10 @@ fn analysis_extract_selection() -> TestResult {
     assert!(page.exhausted);
     assert_eq!(
         page.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .filter(|entry| entry.identity == identity && entry.commit.intake == 20)
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .filter(|entry| entry.source == identity && entry.meta.intake == 20)
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![3]);

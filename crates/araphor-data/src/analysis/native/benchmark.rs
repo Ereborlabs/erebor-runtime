@@ -1,4 +1,4 @@
-use std::{ops::Bound::Excluded, path::Path, time::Instant};
+use std::{path::Path, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +70,7 @@ impl Progress {
 }
 
 enum Backend {
-    Hybrid(Box<NativeStore>),
+    Production(Box<NativeStore>),
     Fjall(Candidate),
 }
 
@@ -82,30 +82,30 @@ pub struct Store {
 impl Store {
     pub fn open(root: &Path, backend: &str, source: EvidenceIntakeIdentityV1) -> Result<Self> {
         let backend = match backend {
-            "hybrid" => Backend::Hybrid(Box::new(NativeStore::open(root)?)),
+            "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
-            _ => return Err("expected hybrid or fjall".into()),
+            _ => return Err("expected production or fjall".into()),
         };
         Ok(Self { backend, source })
     }
 
     fn branch(&self) -> &fjall::Branch {
         match &self.backend {
-            Backend::Hybrid(store) => store.branch(),
+            Backend::Production(store) => store.branch(),
             Backend::Fjall(store) => &store.branch,
         }
     }
 
     fn database(&self) -> &fjall::SingleWriterTxDatabase {
         match &self.backend {
-            Backend::Hybrid(store) => store.database(),
+            Backend::Production(store) => store.database(),
             Backend::Fjall(store) => &store.database,
         }
     }
 
     pub fn append(&mut self, batch: ValidatedEvidenceBatchV1) -> Result<()> {
         match &mut self.backend {
-            Backend::Hybrid(store) => {
+            Backend::Production(store) => {
                 if store.accept_validated_batch(self.source.clone(), batch)?
                     != EvidenceStoreOutcomeV1::Accepted
                 {
@@ -119,7 +119,7 @@ impl Store {
 
     pub fn cut(&self) -> Result<Cut> {
         let (revision, accepted, snapshot) = match &self.backend {
-            Backend::Hybrid(store) => {
+            Backend::Production(store) => {
                 let view = store.view()?;
                 let accepted = view
                     .source_receipt(&self.source)?
@@ -140,7 +140,7 @@ impl Store {
 
     pub fn read(&self, first: u64, cut: Option<&Cut>) -> Result<Vec<AnalysisRecordV1>> {
         match &self.backend {
-            Backend::Hybrid(store) => {
+            Backend::Production(store) => {
                 let view = match cut {
                     Some(cut) => store.read_at(cut.revision)?,
                     None => store.view()?.as_ref().clone(),
@@ -159,7 +159,7 @@ impl Store {
         mut visit: impl FnMut(Vec<AnalysisRecordV1>) -> Result<()>,
     ) -> Result<()> {
         match &self.backend {
-            Backend::Hybrid(store) => {
+            Backend::Production(store) => {
                 let view = match cut {
                     Some(cut) => store.read_at(cut.revision)?,
                     None => store.view()?.as_ref().clone(),
@@ -196,10 +196,10 @@ impl Store {
             body: [0x44; 32],
         };
         match &self.backend {
-            Backend::Hybrid(store) => {
+            Backend::Production(store) => {
                 let mut tx = store.write()?;
                 progress.stage(tx.native())?;
-                tx.commit([])?.ok_or("missing hybrid metadata commit")?;
+                tx.commit([])?.ok_or("missing production metadata commit")?;
             }
             Backend::Fjall(store) => {
                 let mut tx = store.branch.write_tx()?;
@@ -263,15 +263,60 @@ impl Store {
             Ok(())
         };
         match &self.backend {
-            Backend::Hybrid(store) => {
-                let view = store.view()?;
-                let raw = store.raw.lock().map_err(|_| "raw benchmark lock")?;
-                for (_, entry) in view
-                    .raw
-                    .entries
-                    .range((Excluded(cut.revision), std::ops::Bound::Unbounded))
-                {
-                    consume(raw.read_entry(entry)?)?;
+            Backend::Production(store) => {
+                let mut feed = store.database.inner().journal_feed(cut.journal())?;
+                while let Some(batch) = feed.next_batch()? {
+                    for item in &batch.items {
+                        if item.branch != Some(store.branch.id())
+                            || !item.key.starts_with(super::events::Events::PAYLOAD)
+                        {
+                            continue;
+                        }
+                        let Some(bytes) = &item.value else {
+                            continue;
+                        };
+                        let head = batch
+                            .items
+                            .iter()
+                            .find(|item| {
+                                item.branch == Some(store.branch.id())
+                                    && item.key.as_ref() == super::HEAD
+                            })
+                            .and_then(|item| item.value.as_deref())
+                            .ok_or("benchmark payload Data head")?;
+                        let revision = NativeStore::number(head)?;
+                        let key = super::events::Events::position(
+                            super::events::Events::POSITION,
+                            revision,
+                        );
+                        let header = batch
+                            .items
+                            .iter()
+                            .find(|item| {
+                                item.branch == Some(store.branch.id())
+                                    && item.key.as_ref() == key.as_slice()
+                            })
+                            .and_then(|item| item.value.as_deref())
+                            .and_then(|value| value.strip_prefix(&[0]))
+                            .ok_or("benchmark payload position")?;
+                        let header: super::events::EventBatch =
+                            super::records::Records::decode(header)?;
+                        header.check(revision)?;
+                        let commit = RawCommit::from_frame(bytes, &store.root)?;
+                        header.check_commit(&commit, bytes.len())?;
+                        if commit.revision != revision
+                            || header.source != self.source
+                            || item.key.as_ref()
+                                != super::events::Events::key(
+                                    super::events::Events::PAYLOAD,
+                                    &header.source,
+                                    header.first,
+                                )
+                        {
+                            return Err("benchmark payload source or position".into());
+                        }
+                        consume(commit)?;
+                    }
                 }
             }
             Backend::Fjall(store) => {
@@ -293,7 +338,7 @@ impl Store {
 
     pub fn maintain(&self) -> Result<serde_json::Value> {
         let started = Instant::now();
-        if let Backend::Hybrid(store) = &self.backend {
+        if let Backend::Production(store) = &self.backend {
             store.checkpoint()?;
         }
         let checkpoint = started.elapsed().as_secs_f64();

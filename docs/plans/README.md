@@ -24,8 +24,12 @@ master plan invented for them.
 - [Data storage and collector investigations](araphor-data-storage-and-collectors.md)
   records the ordered user requests. Item 1 has measured raw-only and production
   transaction comparisons, with 16 process runs each. A separate native read
-  investigation records a modest continuous-scan gain and its limits. Production replacement,
-  table abstraction, and collector registration remain unapproved.
+  investigation records a modest continuous-scan gain and its limits. The user
+  approves kernel-evidence replacement in the existing Fjall database. The
+  replacement passes focused Data, Query, and public Control intake checks.
+  The paired production comparison is pending. The review records the old
+  library-test and repository formatting blockers. Table abstraction and
+  collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL
   owners and dependencies with one connected native owner. The matched

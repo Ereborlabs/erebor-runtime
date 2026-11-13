@@ -4,6 +4,7 @@ use crate::{
     AnalysisGapV1, AnalysisReadControl, NativeStateSnafu, PackageErrorCodeV1 as Code,
     ProcessorClassV1, ProcessorHealthV1, ProcessorScopeV1, ProcessorStateV1, Result,
 };
+use snafu::ResultExt as _;
 
 impl NativeStore {
     pub fn processor_health(&self, scope: &ProcessorScopeV1) -> Result<Option<ProcessorHealthV1>> {
@@ -138,22 +139,20 @@ impl DataView {
         source: &crate::EvidenceIntakeIdentityV1,
         after: u64,
     ) -> Result<Option<AnalysisGapV1>> {
-        let key = source.key();
+        let events = super::super::events::Events::new(self);
         let mut gap: Option<AnalysisGapV1> = None;
-        for (_, &(revision, slot)) in self.raw.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
-            if revision > self.revision {
-                continue;
-            }
-            let entry = &self.raw.entries[&revision];
-            let span = &entry.commit.spans[slot];
+        for row in events.spans(source, after.saturating_add(1), u64::MAX)? {
+            let (key, value) = row.context(crate::NativeStorageSnafu {
+                operation: "read expired processor spans",
+            })?;
+            let (first, index) = super::super::events::Events::decode_span(source, &key, &value)?;
+            let entry = events.batch(index.revision)?;
+            entry.check_span(source, first, &index)?;
+            let span = &entry.meta.spans[index.slot];
             if span.last <= after {
                 continue;
             }
-            let expired = self
-                .raw
-                .expired
-                .get(&entry.reference.id)
-                .filter(|expired| expired.revision <= self.metadata_revision);
+            let expired = events.expiry(index.revision)?;
             if let Some(expired) = expired {
                 if let Some(gap) = &mut gap {
                     if span.first > gap.last_cursor.saturating_add(1) {

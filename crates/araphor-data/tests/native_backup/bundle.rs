@@ -8,6 +8,7 @@ fn bundle_rejects_physical_faults() -> TestResult {
     let root = directory.path().join("data");
     let store = AnalysisStore::open(&root)?;
     store.accept_validated_batch(identity(), batch(1))?;
+    trace::seed(&store)?;
     let backup = root.join("backups/saved");
     let manifest = store.backup(&backup)?;
     let value = serde_json::to_value(&manifest)?;
@@ -169,7 +170,7 @@ fn bundle_rejects_semantic_faults() -> TestResult {
         let mut manifest = store.backup(&backup)?;
         let damage = match fault {
             0 => StorageFault::Receipt(identity(), 2),
-            1 => StorageFault::RawEnd(manifest.segments[0].segment_id),
+            1 => StorageFault::EvidencePayload(identity(), 1),
             _ => StorageFault::Schema(manifest.schema_version + 1),
         };
         AnalysisStore::corrupt_fixture(&backup, &damage)?;

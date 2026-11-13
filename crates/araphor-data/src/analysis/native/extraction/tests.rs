@@ -2,7 +2,6 @@ use super::*;
 use crate::analysis::extraction::*;
 use crate::analysis::native::NativeStore as AnalysisStore;
 use crate::analysis::raw::RawIdentity;
-use crate::analysis::segments::SegmentRange;
 use crate::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReferenceOriginV1, AnalysisReferenceV1,
     AnalysisResultCommitV1, AnalysisTableRequests, ContextSensitivityV1, EvidenceIntakeIdentityV1,
@@ -226,4 +225,20 @@ fn owned_bytes(page: &AnalysisPositionPageV1) -> usize {
                         .sum::<usize>()
             })
             .sum::<usize>()
+}
+
+fn stored_batches(
+    store: &AnalysisStore,
+) -> Result<Vec<crate::analysis::native::events::EventBatch>> {
+    let view = store.view()?;
+    let events = crate::analysis::native::events::Events::new(&view);
+    events
+        .batches(0)
+        .map(|row| {
+            let (key, value) = row.context(crate::NativeStorageSnafu {
+                operation: "read native batch fixture",
+            })?;
+            events.decode_batch(&key, &value)
+        })
+        .collect()
 }

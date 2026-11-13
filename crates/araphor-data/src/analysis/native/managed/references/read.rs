@@ -66,23 +66,11 @@ impl DataView {
                 std::iter::empty::<&AnalysisContextRefV1>(),
             )?,
         )?;
-        let mut expected = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
+        let mut expected = BTreeMap::<(PinTarget, u64), BTreeSet<u64>>::new();
         let mut unresolved = Vec::new();
         for witness in witnesses {
             charge(0)?;
-            let stream = witness.identity.key();
-            let segment = self
-                .raw
-                .ranges
-                .range((stream.clone(), 0)..=(stream, witness.cursor))
-                .next_back()
-                .and_then(|(_, &(revision, slot))| {
-                    let entry = &self.raw.entries[&revision];
-                    (entry.identity == witness.identity
-                        && revision <= self.revision
-                        && entry.commit.spans[slot].last >= witness.cursor)
-                        .then_some(entry.reference.id)
-                });
+            let segment = self.witness_target(witness, self.revision)?;
             if let Some(segment) = segment {
                 expected
                     .entry((segment, witness.expires_utc_ns))
@@ -92,31 +80,34 @@ impl DataView {
                 unresolved.push(witness.expires_utc_ns);
             }
         }
-        let prefix = References::key(References::RAW, &[result]);
-        for entry in self.snapshot.prefix(&prefix) {
-            charge(0)?;
-            let (key, value) = entry.context(crate::NativeStorageSnafu {
-                operation: "read managed witness pins",
-            })?;
-            let pin = RawPin::decode(&key, &value)?;
-            let cursors = expected
-                .get_mut(&(pin.segment, pin.expires))
-                .ok_or_else(|| Code::Invalid.error("managed witness pin value"))?;
-            for (first, last) in &pin.ranges {
-                if cursors.range(*first..=*last).count() as u128 != u128::from(last - first) + 1 {
+        for prefix in [References::RAW, References::EVIDENCE] {
+            let prefix = References::key(prefix, &[result]);
+            for entry in self.snapshot.prefix(&prefix) {
+                charge(0)?;
+                let (key, value) = entry.context(crate::NativeStorageSnafu {
+                    operation: "read managed witness pins",
+                })?;
+                let pin = WitnessPin::decode(&key, &value)?;
+                let cursors = expected
+                    .get_mut(&(pin.target, pin.expires))
+                    .ok_or_else(|| Code::Invalid.error("managed witness pin value"))?;
+                for (first, last) in &pin.ranges {
+                    if cursors.range(*first..=*last).count() as u128 != u128::from(last - first) + 1
+                    {
+                        return Err(Code::Invalid.error("managed witness pin value"));
+                    }
+                    for cursor in *first..=*last {
+                        cursors.remove(&cursor);
+                    }
+                }
+                let reverse = Records::read(&pin.reverse(), &self.snapshot)?;
+                if reverse
+                    .map(|value| NativeStore::number(&value))
+                    .transpose()?
+                    != Some(pin.expires)
+                {
                     return Err(Code::Invalid.error("managed witness pin value"));
                 }
-                for cursor in *first..=*last {
-                    cursors.remove(&cursor);
-                }
-            }
-            let reverse = Records::read(&pin.reverse(), &self.snapshot)?;
-            if reverse
-                .map(|value| NativeStore::number(&value))
-                .transpose()?
-                != Some(pin.expires)
-            {
-                return Err(Code::Invalid.error("managed witness pin value"));
             }
         }
         if expected.values().any(|cursors| !cursors.is_empty()) || !unresolved.is_empty() {

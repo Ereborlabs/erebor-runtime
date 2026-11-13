@@ -5,7 +5,10 @@ use snafu::ResultExt as _;
 use super::super::{DataView, DataWrite, NativeStore};
 use super::{InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Capture, ManagedAttempt};
-use crate :: { AnalysisConflictSnafu , AnalysisReadControl , ManagedCapture , ManagedInstance , ManagedRequest , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
+use crate::{
+    AnalysisConflictSnafu, AnalysisReadControl, ManagedCapture, ManagedInstance, ManagedRequest,
+    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
+};
 
 pub(super) struct Attempts;
 
@@ -248,21 +251,54 @@ impl NativeStore {
         &self,
         witnesses: &[crate::AnalysisWitnessV1],
         revision: u64,
-    ) -> Result<Vec<u64>> {
-        let raw = self.raw.lock().map_err(|_| NativeStateSnafu { field: "raw owner lock" }.build())?;
+    ) -> Result<Vec<super::PinTarget>> {
+        let raw = self.raw.lock().map_err(|_| {
+            NativeStateSnafu {
+                field: "raw owner lock",
+            }
+            .build()
+        })?;
         let mut checked = std::collections::BTreeSet::new();
+        let view = self.view()?;
+        let events = super::super::events::Events::new(&view);
         let mut segments = Vec::with_capacity(witnesses.len());
         for witness in witnesses {
+            if let crate::AnalysisStreamIdentityV1::Evidence(_) = &witness.identity {
+                let target = view
+                    .witness_target(witness, revision)?
+                    .ok_or_else(|| Code::Incomplete.error("result witness is not retained"))?;
+                if events.expiry(target.id())?.is_some() {
+                    return Err(Code::Incomplete.error("result witness is not retained"));
+                }
+                if checked.insert(target) {
+                    let batch = events.batch(target.id())?;
+                    let bytes = events.bytes(&batch)?;
+                    if bytes.len() != batch.bytes {
+                        return Err(Code::Invalid.error("witness native frame"));
+                    }
+                }
+                segments.push(target);
+                continue;
+            }
             let entry = raw.witness_entry(witness, revision)?;
             let id = entry.reference.id;
-            let segment = raw.segments.get(&id).filter(|segment|
-                segment.live.load(std::sync::atomic::Ordering::Acquire) && !raw.index.expired.contains_key(&id))
+            let segment = raw
+                .segments
+                .get(&id)
+                .filter(|segment| {
+                    segment.live.load(std::sync::atomic::Ordering::Acquire)
+                        && !raw.index.expired.contains_key(&id)
+                })
                 .ok_or_else(|| Code::Incomplete.error("result witness is not retained"))?;
-            if entry.reference.offset > segment.end { return Err(Code::Invalid.error("witness committed end")); }
-            if checked.insert(id) && crate::SegmentFile::reader(&segment.path)?.length()? < segment.end {
+            if entry.reference.offset > segment.end {
+                return Err(Code::Invalid.error("witness committed end"));
+            }
+            if checked.insert(super::PinTarget::Segment(id))
+                && crate::SegmentFile::reader(&segment.path)?.length()? < segment.end
+            {
                 return Err(Code::Incomplete.error("witness segment is truncated"));
             }
-            segments.push(id);
+            segments.push(super::PinTarget::Segment(id));
         }
         Ok(segments)
     }
@@ -271,21 +307,46 @@ impl NativeStore {
         &self,
         witnesses: &[crate::AnalysisWitnessV1],
         revision: u64,
-    ) -> Result<Vec<u64>> {
-        let raw = self.raw.lock().map_err(|_| NativeStateSnafu { field: "raw owner lock" }.build())?;
+    ) -> Result<Vec<super::PinTarget>> {
+        let raw = self.raw.lock().map_err(|_| {
+            NativeStateSnafu {
+                field: "raw owner lock",
+            }
+            .build()
+        })?;
+        let view = self.view()?;
+        let events = super::super::events::Events::new(&view);
         let mut segments = Vec::with_capacity(witnesses.len());
         for witness in witnesses {
+            if let crate::AnalysisStreamIdentityV1::Evidence(_) = &witness.identity {
+                let target = view
+                    .witness_target(witness, revision)?
+                    .ok_or_else(|| Code::Invalid.error("recovered witness batch"))?;
+                if events
+                    .expiry(target.id())?
+                    .is_some_and(|expiry| expiry.revision <= revision)
+                {
+                    return Err(Code::Invalid.error("witness expired before admission"));
+                }
+                segments.push(target);
+                continue;
+            }
             let entry = raw.witness_entry(witness, revision)?;
             if let Some(expired) = raw.index.expired.get(&entry.reference.id) {
-                if expired.revision <= revision { return Err(Code::Invalid.error("witness expired before admission")); }
-            } else if raw.segments.get(&entry.reference.id).is_none_or(|segment| entry.reference.offset > segment.end) {
+                if expired.revision <= revision {
+                    return Err(Code::Invalid.error("witness expired before admission"));
+                }
+            } else if raw
+                .segments
+                .get(&entry.reference.id)
+                .is_none_or(|segment| entry.reference.offset > segment.end)
+            {
                 return Err(Code::Invalid.error("recovered witness committed end"));
             }
-            segments.push(entry.reference.id);
+            segments.push(super::PinTarget::Segment(entry.reference.id));
         }
         Ok(segments)
     }
-
 }
 
 impl DataWrite<'_> {

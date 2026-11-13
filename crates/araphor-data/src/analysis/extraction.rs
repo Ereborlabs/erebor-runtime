@@ -1,3 +1,6 @@
+#[cfg(test)]
+use snafu::ResultExt as _;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::ops::Bound;
@@ -5,10 +8,8 @@ use std::ops::Bound;
 use araphor_analysis_sdk as sdk;
 use araphor_analysis_sdk::RecordBatch;
 
-use snafu::ResultExt as _;
-
 use super::raw::{RawIdentity, TracePayload, TraceRecord};
-use super::segments::SegmentRange;
+use super::segments::InputRange;
 use super::{
     AnalysisContextKeyV1, AnalysisGapV1, AnalysisReadControl, AnalysisSourceReceiptV1,
     AnalysisStoreMetaV1, StorePositionV1, MAX_ANALYSIS_PAGE_RECORDS,

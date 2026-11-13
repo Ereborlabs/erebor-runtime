@@ -1,4 +1,7 @@
-use super :: { super :: { records :: Records , source :: Sources , trace :: Traces } , DataWrite , ExpiredSegment } ;
+use super::{
+    super::{records::Records, source::Sources, trace::Traces},
+    DataWrite, ExpiredSegment,
+};
 use crate::analysis::raw::{RawJournal, RawKind, RawReceipt};
 use crate::{NativeStateSnafu, Result, StorePositionV1};
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,9 +122,13 @@ impl DataWrite<'_> {
             );
             self.transaction
                 .remove(Sources::key(Sources::ENDS, &id.to_be_bytes()));
-            self.raw.expired.insert_mut(*id, crate::analysis::raw::RawExpiry {
-                revision: self.revision, identity: record.entries[0].identity.clone(),
-            });
+            self.raw.expired.insert_mut(
+                *id,
+                crate::analysis::raw::RawExpiry {
+                    revision: self.revision,
+                    identity: record.entries[0].identity.clone(),
+                },
+            );
             records.push(record);
         }
         for key in sources {
@@ -147,14 +154,11 @@ impl DataWrite<'_> {
             })?;
             source.receipt.set_floor(source.receipt.floor().max(floor));
             match &source.receipt {
-                RawReceipt::Evidence(receipt) => {
-                    Records::stage(
-                        &mut self.transaction,
-                        Sources::key(Sources::RECEIPTS, &key),
-                        Records::encode(receipt)?,
-                    );
-                    self.note_relation("events", self.revision)?;
-                    self.note_relation("source_receipts", self.revision)?;
+                RawReceipt::Evidence(_) => {
+                    return NativeStateSnafu {
+                        field: "evidence cannot expire as a diagnostic file",
+                    }
+                    .fail();
                 }
                 RawReceipt::Diagnostic(receipt) => {
                     Records::stage(
@@ -168,18 +172,26 @@ impl DataWrite<'_> {
             }
         }
         for (tenant, floor) in floors {
-            let key = [ExpiredSegment::FLOOR, &tenant].concat();
-            let prior: Option<StorePositionV1> =
-                Records::payload(&key, |key| Records::staged(key, &self.transaction))?
-                    .map(|bytes| Records::decode(&bytes))
-                    .transpose()?;
-            if prior.is_none_or(|prior| floor > prior) {
-                Records::stage(&mut self.transaction, key, Records::encode(&floor)?);
-            }
+            self.advance_replay_floor(tenant, floor)?;
         }
         self.note_relation("expired_ranges", self.revision)?;
         self.note_relation("replay_floors", self.revision)?;
         self.dirty = true;
         Ok(records)
+    }
+    pub(in crate::analysis::native) fn advance_replay_floor(
+        &mut self,
+        tenant: [u8; 16],
+        floor: StorePositionV1,
+    ) -> Result<()> {
+        let key = [ExpiredSegment::FLOOR, &tenant].concat();
+        let prior: Option<StorePositionV1> =
+            Records::payload(&key, |key| Records::staged(key, &self.transaction))?
+                .map(|bytes| Records::decode(&bytes))
+                .transpose()?;
+        if prior.is_none_or(|prior| floor > prior) {
+            Records::stage(&mut self.transaction, key, Records::encode(&floor)?);
+        }
+        Ok(())
     }
 }

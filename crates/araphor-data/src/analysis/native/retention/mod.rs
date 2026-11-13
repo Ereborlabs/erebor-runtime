@@ -1,3 +1,4 @@
+use snafu::ResultExt as _;
 use std::sync::atomic::Ordering;
 
 use super::{DataWrite, NativeStore};
@@ -71,7 +72,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         raw.reconcile_all(self.store.retention)?;
         let selection = self.select(&tx, &raw, now, source)?;
         let mut removed = 0u32;
-        if selection.ids.is_empty() {
+        if selection.ids.is_empty() && selection.batches.is_empty() {
             return Ok(RetentionStepV1 {
                 removed_records: 0,
                 more: false,
@@ -82,6 +83,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         raw.seal_all()?;
         tx.raw = raw.index.clone();
         let records = tx.expire_segments(&raw, &selection.ids, now, &mut removed)?;
+        tx.expire_events(&selection.batches, now, &mut removed)?;
         let revision = tx.revision;
         drop(raw);
         #[cfg(any(test, feature = "test-fixtures"))]
@@ -138,6 +140,40 @@ impl<'a> EvidenceRetentionOwner<'a> {
             return crate::Error::reject_path(&self.store.root, "the retention source is invalid");
         }
         let step = self.run(now, Some(source))?;
+        if let crate::analysis::raw::RawIdentity::Evidence(identity) = source {
+            let view = self.store.view()?;
+            let events = super::events::Events::new(&view);
+            let mut bytes = 0_u64;
+            let mut seen = std::collections::BTreeSet::new();
+            for row in events.spans(identity, 0, u64::MAX)? {
+                let (key, value) = row.context(crate::NativeStorageSnafu {
+                    operation: "count retained evidence bytes",
+                })?;
+                let (_, span) = super::events::Events::decode_span(identity, &key, &value)?;
+                if seen.insert(span.revision) && events.expiry(span.revision)?.is_none() {
+                    bytes = bytes
+                        .checked_add(events.batch(span.revision)?.bytes as u64)
+                        .ok_or_else(|| {
+                            NativeStateSnafu {
+                                field: "retained evidence bytes",
+                            }
+                            .build()
+                        })?;
+                }
+            }
+            let receipt = view.source_receipt(identity)?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "retained evidence source",
+                }
+                .build()
+            })?;
+            return Ok(crate::RetentionResultV1 {
+                removed_records: step.removed_records,
+                retained_bytes: bytes,
+                retained_floor: receipt.retained_floor,
+                commit_revision: step.read_revision,
+            });
+        }
         let raw = self.store.raw.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "raw owner lock",

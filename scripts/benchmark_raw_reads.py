@@ -15,9 +15,11 @@ def main():
     parser.add_argument("after", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--scan-modes", nargs=2, choices=["pages", "stream"], default=["pages", "pages"])
+    parser.add_argument("--backends", nargs=2, choices=["hybrid", "production", "fjall"], default=["fjall", "fjall"])
     args = parser.parse_args()
     binaries = {label: getattr(args, label).resolve() for label in ["before", "after"]}
     modes = dict(zip(binaries, args.scan_modes))
+    backends = dict(zip(binaries, args.backends))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     provenance = {
@@ -36,6 +38,7 @@ def main():
         "orders": [["before", "after"], ["after", "before"], ["before", "after"], ["after", "before"]],
         "cache": "fresh store/process per run; OS cache retained; new engine cache on reopen",
         "scan_modes": modes,
+        "backends": backends,
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
@@ -47,12 +50,12 @@ def main():
                 subprocess.run(["sync", "-f", str(output)], check=True)
                 with (output / f"{stem}.log").open("w") as log:
                     command = ["/usr/bin/time", "-v", "-o", str(output / f"{stem}.time"),
-                               str(binaries[label]), "fjall", str(count), str(report)]
+                               str(binaries[label]), backends[label], str(count), str(report)]
                     if modes[label] != "pages": command.append(modes[label])
                     subprocess.run(command,
                                    stdout=log, stderr=subprocess.STDOUT, check=True)
                 run = json.loads(report.read_text())
-                assert run["backend"] == "fjall" and run["records"] == count
+                assert run["backend"] == backends[label] and run["records"] == count
                 assert run.get("scan_mode", "pages") == modes[label]
                 assert all(run["checks"].values())
                 run.update({"variant": label, "pair": pair})

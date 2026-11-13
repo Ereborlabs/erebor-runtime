@@ -387,7 +387,7 @@ async fn original_logs_route_matches_and_resume_after_reopen() -> TestResult {
     let saved = store.view()?;
     let native = saved.snapshot().cursor()?;
     store.accept_validated_batch(source("node-a"), batch(2, 100)?)?;
-    assert_eq!(store.view()?.snapshot().cursor()?, native);
+    assert_ne!(store.view()?.snapshot().cursor()?, native);
     let later_raw = store.view()?.revision();
     let later_context = store.commit_context(&context("watched", 2))?;
     let mut lagging = store.subscribe_inputs_at(

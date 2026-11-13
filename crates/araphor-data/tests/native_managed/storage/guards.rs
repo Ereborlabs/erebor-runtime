@@ -158,7 +158,7 @@ impl GuardCut {
             (b"\0data/a".as_slice(), 8),
             (b"\0data/X".as_slice(), 8),
             (b"\0data/ref/dependency/".as_slice(), 16),
-            (b"\0data/ref/raw/".as_slice(), 24),
+            (b"\0data/ref/evidence/".as_slice(), 24),
             (b"\0data/ref/context/".as_slice(), 16),
         ]
         .into_iter()

@@ -2,7 +2,6 @@ use super::*;
 use crate::TraceIdentityV1;
 
 impl InputInterest {
-    
     pub(in crate::analysis) fn covers_read(
         &self,
         selection: &AnalysisSelectionV1,
@@ -35,13 +34,22 @@ impl InputInterest {
         entry: &crate::analysis::raw::RawEntry,
         span: &crate::analysis::raw::RawRange,
     ) -> Option<StorePositionV1> {
+        self.raw_span(&entry.identity, &entry.commit, span)
+    }
+
+    pub(in crate::analysis) fn raw_span(
+        &self,
+        identity: &AnalysisStreamIdentityV1,
+        meta: &crate::analysis::raw::RawMeta,
+        span: &crate::analysis::raw::RawRange,
+    ) -> Option<StorePositionV1> {
         if !self.matches(&InputChange::Raw {
-            identity: &entry.identity,
-            range: Some((span.first, span.last, entry.commit.intake)),
+            identity,
+            range: Some((span.first, span.last, meta.intake)),
         }) {
             return None;
         }
-        let last = match &entry.identity {
+        let last = match identity {
             AnalysisStreamIdentityV1::Evidence(_)
                 if !self.has(&["coverage", "discovery_state", "graph_state"]) =>
             {
@@ -50,7 +58,7 @@ impl InputInterest {
             _ => span.last,
         };
         Some(StorePositionV1 {
-            commit_revision: entry.commit.revision,
+            commit_revision: meta.revision,
             ordinal: span.ordinal + (last - span.first) as u32,
         })
     }

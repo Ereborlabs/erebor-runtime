@@ -31,6 +31,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Retained execution state review](guides/araphor-retained-execution-review.md)
   gives the current saved-state reuse flow, commit checks, and remaining input
   work.
+- [Kernel evidence storage review](guides/araphor-kernel-evidence-storage-review.md)
+  gives the collector intake, native payload, journal, pin, expiry, and restore
+  reading route. Its verification section states the current limits.
 - [Native Data transaction review](guides/araphor-native-data-review.md) gives
   the qualified native metadata owner, exact cut publication, context storage,
   and package PoC caller. Its qualification precedes the current production draft.

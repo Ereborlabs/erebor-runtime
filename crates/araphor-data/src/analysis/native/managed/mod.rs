@@ -23,7 +23,7 @@ pub(in crate::analysis::native) use graph::PublicationRead;
 mod read;
 mod recovery;
 mod references;
-pub(in crate::analysis::native) use references::{RawPin, References};
+pub(in crate::analysis::native) use references::{PinTarget, References, WitnessPin};
 mod removal;
 mod result_recovery;
 pub(in crate::analysis::native) mod results;

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::*;
 
-
 mod native;
 
 /// Read bounded pages from one native append subscription.
@@ -42,7 +41,7 @@ struct AppendTrace {
 pub(in crate::analysis) struct AppendRange {
     identity: RawIdentity,
     cpu: Option<u32>,
-    range: SegmentRange,
+    range: InputRange,
     after: Option<StorePositionV1>,
 }
 
@@ -57,7 +56,7 @@ impl AppendRange {
     pub(super) fn new(
         identity: RawIdentity,
         cpu: Option<u32>,
-        range: SegmentRange,
+        range: InputRange,
         after: Option<StorePositionV1>,
     ) -> Self {
         Self {
@@ -76,7 +75,7 @@ impl AppendRange {
         &self,
         after: Option<StorePositionV1>,
         limit: usize,
-    ) -> Option<(RawIdentity, Option<u32>, SegmentRange)> {
+    ) -> Option<(RawIdentity, Option<u32>, InputRange)> {
         Some((
             self.identity.clone(),
             self.cpu,
@@ -95,7 +94,7 @@ impl AppendCapture<'_> {
         output: &mut AnalysisExtractionV1,
         decode_events: bool,
         checked_catalog: bool,
-        range: &SegmentRange,
+        range: &InputRange,
         identity: RawIdentity,
         cpu: Option<u32>,
         after: Option<StorePositionV1>,
@@ -124,7 +123,7 @@ impl AppendCapture<'_> {
         output: &mut AnalysisExtractionV1,
         decode_events: bool,
         checked_catalog: bool,
-        range: &SegmentRange,
+        range: &InputRange,
     ) -> Result<()> {
         let input_bytes = output.input_bytes;
         let bytes = output
@@ -229,5 +228,3 @@ impl AppendHeader {
         })
     }
 }
-
-

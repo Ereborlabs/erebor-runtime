@@ -342,8 +342,6 @@ fn trace_revocation_keeps_commit() -> TestResult {
 
 #[test]
 fn raw_fault_keeps_commit() -> TestResult {
-    use std::os::unix::fs::FileExt as _;
-
     let saved = Saved::new()?;
     let captured = saved.capture()?;
     let input = request("raw-pending");
@@ -356,41 +354,42 @@ fn raw_fault_keeps_commit() -> TestResult {
     ];
     let outputs = [saved.fixture.output(8)?, saved.fixture.output(4)?];
     let next = request("raw-new");
+    let payloads = records(saved.store.view()?.as_ref(), b"\0data/evidence/payload/")?;
+    assert_eq!(payloads.len(), 1);
+    let (key, bytes) = payloads.into_iter().next().ok_or("native payload")?;
+    let mut damage = saved.store.write()?;
+    damage.native().remove(&key);
+    damage.commit([])?;
     let before = saved.commit_state()?;
-    let files = std::fs::read_dir(saved._directory.path().join("store").join("segments"))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    assert_eq!(files.len(), 1);
-    let path = files[0].path();
-    let bytes = std::fs::read(&path)?;
-    let file = std::fs::OpenOptions::new().write(true).open(&path)?;
-    file.set_len(0)?;
     let registration = saved
         .store
         .register_managed_attempt(&captured, &next, || Ok(()));
     let publication = saved
         .fixture
         .publish(&saved.store, &attempt, &evaluations, &outputs);
-    file.write_all_at(&bytes, 0)?;
-    file.sync_all()?;
-    assert_eq!(std::fs::read(&path)?, bytes);
     assert!(matches!(
         registration,
-        Err(araphor_data::Error::Package {
-            code: Code::Incomplete,
-            field: "witness segment is truncated",
+        Err(araphor_data::Error::NativeState {
+            field: "native evidence payload",
             ..
         })
     ));
     let failure = publication.err().ok_or("missing raw data published")?;
     assert!(matches!(
         failure.downcast_ref::<araphor_data::Error>(),
-        Some(araphor_data::Error::Package {
-            code: Code::Incomplete,
-            field: "witness segment is truncated",
+        Some(araphor_data::Error::NativeState {
+            field: "native evidence payload",
             ..
         })
     ));
     assert_eq!(saved.commit_state()?, before);
+    let mut repair = saved.store.write()?;
+    repair.native().insert(&key, &bytes);
+    repair.commit([])?;
+    assert_eq!(
+        records(saved.store.view()?.as_ref(), b"\0data/evidence/payload/")?.get(&key),
+        Some(&bytes)
+    );
     let restored = saved
         .store
         .register_managed_attempt(&captured, &next, || Ok(()))?;

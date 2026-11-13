@@ -50,7 +50,7 @@ fn source_history_keeps_headers() -> TestResult {
     assert_eq!(removed.removed_records, 100);
     assert_eq!(removed.retained_bytes, 0);
     assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
-    assert_eq!(store.raw_index_fixture()?.range_count(&identity()), 2);
+    assert_eq!(store.event_index_fixture()?.range_count(&identity()), 2);
     fixture.execution.clear();
     let assert_headers = |selected: &AnalysisStore| -> TestResult {
         for (receipt, expected) in [
@@ -75,41 +75,31 @@ fn source_history_keeps_headers() -> TestResult {
     };
     assert_headers(&store)?;
     let view = store.view()?;
-    let markers = records(&view, b"\0data/@retention/expired/")?;
-    assert_eq!(markers.len(), 1);
-    let (key, original) = markers.into_iter().next().ok_or("expired marker")?;
+    let markers = records(&view, b"\0data/evidence/position/")?;
+    assert_eq!(markers.len(), 2);
+    let (key, original) = markers.into_iter().next().ok_or("batch metadata")?;
     let mut changed: Value = rmp_serde::from_slice(&original[1..])?;
-    let Value::Seq(marker) = &mut changed else {
-        return Err("expired marker sequence".into());
+    let Value::Seq(batch) = &mut changed else {
+        return Err("batch metadata sequence".into());
     };
-    assert_eq!(marker.len(), 6);
-    let Value::Seq(entries) = &mut marker[4] else {
-        return Err("expired entries".into());
+    assert_eq!(batch.len(), 4);
+    batch[1] = Value::U64(99);
+    let Value::Seq(commit) = &mut batch[2] else {
+        return Err("batch commit metadata".into());
+    };
+    let Value::Seq(spans) = &mut commit[3] else {
+        return Err("batch spans".into());
     };
     let mut matched = 0;
-    for entry in entries {
-        let Value::Seq(entry) = entry else {
-            return Err("expired entry sequence".into());
+    for span in spans {
+        let Value::Seq(span) = span else {
+            return Err("batch span".into());
         };
-        assert_eq!(entry.len(), 6);
-        let Value::Seq(commit) = &mut entry[1] else {
-            return Err("expired commit sequence".into());
-        };
-        assert_eq!(commit.len(), 4);
-        let Value::Seq(spans) = &mut commit[3] else {
-            return Err("expired spans".into());
-        };
-        for span in spans {
-            let Value::Seq(span) = span else {
-                return Err("expired span sequence".into());
-            };
-            assert_eq!(span.len(), 5);
-            let first: u64 = span[0].clone().deserialize_into()?;
-            let last: u64 = span[1].clone().deserialize_into()?;
-            if first == 100 && last == 100 {
-                span[0] = Value::U64(99);
-                matched += 1;
-            }
+        let first: u64 = span[0].clone().deserialize_into()?;
+        let last: u64 = span[1].clone().deserialize_into()?;
+        if first == 100 && last == 100 {
+            span[0] = Value::U64(99);
+            matched += 1;
         }
     }
     assert_eq!(matched, 1);
@@ -120,12 +110,18 @@ fn source_history_keeps_headers() -> TestResult {
     assert_headers(&store)?;
     assert!(matches!(
         store.recover(),
-        Err(araphor_data::Error::AnalysisState { reason, .. }) if reason == "raw cursor ranges overlap"
+        Err(araphor_data::Error::NativeState {
+            field: "evidence span binding",
+            ..
+        })
     ));
     drop(store);
     assert!(matches!(
         AnalysisStore::open(&root),
-        Err(araphor_data::Error::AnalysisState { reason, .. }) if reason == "raw cursor ranges overlap"
+        Err(araphor_data::Error::NativeState {
+            field: "evidence span binding",
+            ..
+        })
     ));
     repair(&root, &key, &original)?;
     let reopened = AnalysisStore::open(&root)?;
@@ -152,11 +148,8 @@ fn source_pending_blocks_retention() -> TestResult {
     assert_eq!(removed.removed_records, 0);
     let positions = pending_rows(&store)?;
     assert_eq!(positions, [(100, 1, 0)]);
-    let segment = std::fs::read_dir(root.join("segments"))?
-        .next()
-        .ok_or("pending segment")??
-        .path();
-    let bytes = std::fs::read(&segment)?;
+    let payloads = records(store.view()?.as_ref(), b"\0data/evidence/payload/")?;
+    assert_eq!(payloads.len(), 1);
     let page = fixture.read(
         &store,
         ManagedSourceRead::Initial,
@@ -191,7 +184,10 @@ fn source_pending_blocks_retention() -> TestResult {
     assert!(!page.page.tables.contains_key("events"));
     assert_eq!((source.receipt.clone(), source.pending.clone()), metadata);
     assert_eq!(pending_rows(&reopened)?, positions);
-    assert_eq!(std::fs::read(&segment)?, bytes);
+    assert_eq!(
+        records(reopened.view()?.as_ref(), b"\0data/evidence/payload/")?,
+        payloads
+    );
     Ok(())
 }
 

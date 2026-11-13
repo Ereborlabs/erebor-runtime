@@ -357,14 +357,9 @@ fn analysis_extract_range_pages() -> TestResult {
     )?;
     assert_eq!(
         page.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     assert!(page.exhausted);

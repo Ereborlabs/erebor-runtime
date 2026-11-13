@@ -3,7 +3,10 @@
 Investigate each item in order. This file keeps the findings and approval
 boundary for each item. It can accept more numbered items. The current request
 authorizes item 1. The user then explicitly required benchmark development
-and execution. Production replacement and items 2 and 3 are not approved.
+and execution. The user now approves replacement of kernel-evidence segments
+with the existing Fjall database. The approved scope is below. Earlier
+benchmark sections record the approval boundary at their publication time.
+Items 2 and 3 remain unapproved.
 
 ## Intended end state
 
@@ -120,7 +123,96 @@ storage, DataFusion integration, and the general table abstraction do not
 change. Result: **Done** for the requested read investigation. Production
 integration remains **Not done**.
 
-### Current event flow
+### Approved kernel-evidence storage replacement
+
+Replace the Control kernel-evidence intake storage used by the benchmark.
+Data remains the durable owner. Use its existing versioned Fjall database and
+branch. Do not create another database, input archive, collector framework, or
+general table abstraction. Diagnostic output and node retry spools keep their
+current owners.
+
+#### Intended end state
+
+Kernel-evidence payloads have no Data segment files or segment references.
+One native transaction commits original event bytes, source receipt, epoch
+binding, accepted-span indexes, Data position indexes, and the exact Data cut.
+Public source/cursor references and logical Data revision/ordinal positions
+remain stable. DataFusion reads use native indexed state. Input subscriptions
+walk original Fjall journals from their durable saved positions.
+
+```text
+Control submits one validated kernel-evidence batch
+  -> Data checks identity, CPU, epoch, expiry, and overlapping original bytes.
+  -> Data accepts only the new cursor spans.
+  -> Data stores one original RawCommit payload under source and batch-first cursor.
+  -> Data stores one native span pointer for each accepted span.
+  -> Data stores an ordered Data-position index to the same payload.
+  -> Data commits payload, indexes, receipt, and Data cut in one native batch.
+  -> Data publishes the committed view and signals input readers.
+
+An input subscription advances from its saved native cursor
+  -> Data reads the original committed Fjall batch.
+  -> Data routes each original evidence payload once by source and logical position.
+  -> Data ignores supporting span and receipt writes as duplicate event triggers.
+  -> The package reads changes and native indexed state from its captured view.
+  -> Data commits package output, references, and consumed progress atomically.
+
+A retained read selects evidence
+  -> Data finds source/cursor spans or the ordered position index.
+  -> Data checks current expiry authority before it returns historical payloads.
+  -> Data validates the immutable batch against its source and index metadata.
+  -> Data merges evidence and diagnostic ranges in original Data-position order.
+
+Evidence expires after required consumers and witnesses release it
+  -> Data commits expiry, source floor, removal metadata, and payload tombstones together.
+  -> Current and old application views cannot return expired payloads.
+  -> Fjall reclaims physical versions when its history and journal policies permit.
+
+Data reopens or restores a backup
+  -> Data admits native format 12.
+  -> Data rejects older formats and mixed legacy evidence files. It does not convert or delete their payloads.
+  -> Data validates live payloads, indexes, receipts, references, and saved progress.
+  -> Evidence comes from the native checkpoint.
+  -> Only diagnostic payloads use the external segment inventory.
+```
+
+The position index contains metadata and pointers. It is not a second payload
+archive or CDC log. Data revisions in this ordered index represent input
+positions; native engine revisions remain outside payload application keys.
+Arbitrary overlaps can produce several new spans in one accepted payload.
+Do not substitute the benchmark's contiguous-only admission rule.
+
+Evidence pins use native batch references and public source/cursor identity.
+Diagnostic pins retain their segment identity. Do not invent native segment
+IDs. Usage counters distinguish logical referenced payload bytes from database
+allocation. Native expiry does not promise immediate physical erasure:
+unrelated retained package, context, or catalogue roots can retain old evidence
+versions indefinitely. Diagnostic file removal retains its current behavior.
+
+Verification must cover overlap, conflicting retry, CPU/epoch identity,
+out-of-order input, source pagination, complete/changed/metadata reads,
+DataFusion extraction, original-log wake and restart, witness pins, logical
+expiry through old views, maintenance, backup/restore, and diagnostic behavior.
+Use focused checks during iteration. Keep the ignored incident disabled.
+Use the existing finite benchmark inputs for performance evidence; do not
+infer the earlier prototype timings for the production replacement.
+
+The [implementation review](../guides/araphor-kernel-evidence-storage-review.md)
+gives the source route. The focused release run passes 293 Data integration
+tests, 14 native Query tests, and two public Control intake tests. The existing
+owner example passes its partial history test and its native production smoke
+run. The paired production comparison is pending.
+
+The Data library target reports 80 compile errors in old DuckDB and
+`graph_rows` tests. The Control library target reports 36 compile errors in old
+Graph and activation tests. The final shared CI procedure stops at formatting
+in 123 files outside this change. Changed Rust files pass formatting.
+
+Result: **Done** for the collector storage replacement and focused owner
+qualification. **Not done** for the paired production comparison and the
+repository-wide qualification blockers above.
+
+### Event flow before replacement
 
 ```text
 Data receives one validated evidence batch

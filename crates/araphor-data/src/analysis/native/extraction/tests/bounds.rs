@@ -181,14 +181,9 @@ fn analysis_extract_limits() -> TestResult {
     assert!(next.scanned_through > first.scanned_through);
     assert_eq!(
         complete.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     let control = Arc::new(AnalysisReadControl::default());

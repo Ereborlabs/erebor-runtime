@@ -10,13 +10,15 @@ use snafu::ResultExt as _;
 mod pins;
 mod read;
 
-pub(in crate::analysis::native) use pins::RawPin;
+pub(in crate::analysis::native) use pins::{PinTarget, WitnessPin};
 
 pub(in crate::analysis::native) struct References;
 
 impl References {
     pub(in crate::analysis::native) const RAW: &'static [u8] = b"\0data/ref/raw/";
     pub(in crate::analysis::native) const SEGMENT: &'static [u8] = b"\0data/ref/segment/";
+    pub(in crate::analysis::native) const EVIDENCE: &'static [u8] = b"\0data/ref/evidence/";
+    pub(in crate::analysis::native) const BATCH: &'static [u8] = b"\0data/ref/batch/";
     pub(super) const CONTEXT: &'static [u8] = b"\0data/ref/context/";
     pub(in crate::analysis::native) const CONTEXT_OWNER: &'static [u8] =
         b"\0data/ref/context-owner/";
@@ -43,10 +45,10 @@ impl DataWrite<'_> {
         dependencies: &[PackageResultRefV1],
         origins: &[PackageResultRefV1],
         imports: &[AnalysisContextRefV1],
-        evidence: (&[AnalysisWitnessV1], &[u64]),
+        evidence: (&[AnalysisWitnessV1], &[PinTarget]),
         memory: &mut PreparedMemory<'_>,
     ) -> Result<()> {
-        let pins = RawPin::collect(
+        let pins = WitnessPin::collect(
             result,
             witnesses.iter().map(|witness| {
                 let position = evidence
@@ -273,7 +275,7 @@ impl crate::analysis::native::NativeStore {
         expected: &mut std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
         let segments = self.recover_witnesses(witnesses, revision - 1)?;
-        let pins = RawPin::collect(
+        let pins = WitnessPin::collect(
             id,
             witnesses
                 .iter()

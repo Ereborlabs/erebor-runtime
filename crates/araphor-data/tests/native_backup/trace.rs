@@ -68,7 +68,7 @@ fn incomplete_trace_backup_restores() -> TestResult {
     let before = store.read_trace(trace, 1, &AnalysisReadControl::default())?;
     let backup = root.join("backups/saved");
     let manifest = store.backup(&backup)?;
-    assert_eq!(manifest.segments.len(), 2);
+    assert_eq!(manifest.segments.len(), 1);
     let file = manifest
         .segments
         .iter()
@@ -121,5 +121,26 @@ fn incomplete_trace_backup_restores() -> TestResult {
     let page = restored.read_trace(trace, 1, &AnalysisReadControl::default())?;
     assert_eq!(page.frames, vec![frame]);
     assert_eq!(page.terminal, terminal.terminal);
+    Ok(())
+}
+
+pub(super) fn seed(store: &AnalysisStore) -> TestResult {
+    let intent = intent()?;
+    let trace = &intent.bindings[0].identity;
+    store.accept_trace(&intent)?;
+    store.append_trace(
+        trace,
+        &TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![TraceFrameV1 {
+                execution_id: trace.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: b"output".to_vec(),
+            }],
+            terminal: None,
+        },
+        200,
+    )?;
     Ok(())
 }

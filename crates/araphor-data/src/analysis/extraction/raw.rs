@@ -16,8 +16,6 @@ pub(in crate::analysis) struct RawScan<'a, 'c> {
     pub(in crate::analysis) retain: Option<&'a mut super::append::AppendCapture<'c>>,
 }
 
-
-
 impl RawScan<'_, '_> {
     pub(in crate::analysis) fn read(
         &mut self,
@@ -28,7 +26,7 @@ impl RawScan<'_, '_> {
             u64,
             usize,
             &AnalysisReadControl,
-        ) -> Result<Option<(RawIdentity, Option<u32>, SegmentRange)>>,
+        ) -> Result<Option<(RawIdentity, Option<u32>, InputRange)>>,
         budget: &mut ReadBudget<'_>,
         capture: &mut tables::Capture<'_>,
         removals: &mut std::iter::Peekable<std::vec::IntoIter<changes::RemovedRange>>,

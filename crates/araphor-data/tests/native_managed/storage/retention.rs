@@ -13,8 +13,8 @@ use araphor_data::{
 use std::collections::BTreeSet;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
-const RAW: &[u8] = b"\0data/ref/raw/";
-const SEGMENT: &[u8] = b"\0data/ref/segment/";
+const RAW: &[u8] = b"\0data/ref/evidence/";
+const SEGMENT: &[u8] = b"\0data/ref/batch/";
 
 fn retained(
     store: &AnalysisStore,
@@ -332,9 +332,14 @@ fn retained_provenance_survives_expiry() -> TestResult {
             .removed_records,
         0
     );
-    assert!(!std::fs::read_dir(root.join("segments"))?
-        .collect::<Result<Vec<_>, _>>()?
-        .is_empty());
+    assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
+    assert!(store
+        .view()?
+        .snapshot()
+        .prefix(b"\0data/evidence/payload/")
+        .next()
+        .transpose()?
+        .is_some());
     assert_eq!(
         store
             .source_status(&source)?

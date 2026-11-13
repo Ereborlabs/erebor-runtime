@@ -60,6 +60,54 @@ fn selection(source: &EvidenceIntakeIdentityV1) -> AnalysisSelectionV1 {
     AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()])
 }
 
+fn seed_trace(
+    store: &NativeStore,
+    tag: u8,
+    count: u64,
+) -> Result<araphor_data::TraceIdentityV1, Box<dyn std::error::Error>> {
+    let source = araphor_data::TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+    let intent = araphor_data::TraceIntentV1 {
+        tenant_id: [1; 16],
+        request_id: [tag; 16],
+        bindings: vec![araphor_data::TraceBindingV1 {
+            binding_id: [9; 16],
+            identity: araphor_data::TraceIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "node-a".into(),
+                node_boot_id: [2; 16],
+                request_id: [tag; 16],
+                execution_id: [tag; 16],
+                source_sha256: source.sha256,
+            },
+            namespace_uid: "namespace-a".into(),
+        }],
+        source,
+        authority: b"accepted".to_vec(),
+        accepted_unix_ns: 100,
+        deadline_unix_ns: 10_000,
+        host_sensitive: false,
+    };
+    let identity = intent.bindings[0].identity.clone();
+    store.accept_trace(&intent)?;
+    store.append_trace(
+        &identity,
+        &araphor_data::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: (1..=count)
+                .map(|sequence| araphor_data::TraceFrameV1 {
+                    execution_id: identity.execution_id,
+                    sequence,
+                    kind: araphor_data::TraceFrameKindV1::Data,
+                    bytes: b"frame".to_vec(),
+                })
+                .collect(),
+            terminal: None,
+        },
+        100,
+    )?;
+    Ok(identity)
+}
+
 #[test]
 fn raw_metadata_revisions_and_reopen() -> TestResult {
     let dir = tempfile::tempdir()?;
@@ -71,8 +119,8 @@ fn raw_metadata_revisions_and_reopen() -> TestResult {
     store.accept_validated_batch(source.clone(), batch(1))?;
     let first = store.view()?;
     assert_eq!(first.revision(), 1);
-    assert_eq!(first.snapshot().revision(), start.snapshot().revision());
-    assert_eq!(store.database().inner().journal_head()?, cursor);
+    assert!(first.snapshot().revision() > start.snapshot().revision());
+    assert_ne!(store.database().inner().journal_head()?, cursor);
     assert!(start.source_receipt(&source)?.is_none());
     assert_eq!(
         first
@@ -99,12 +147,23 @@ fn raw_metadata_revisions_and_reopen() -> TestResult {
         Some(source.clone())
     );
     let mut feed = store.database().inner().journal_feed(cursor)?;
+    let accepted = feed.next_batch()?.ok_or("evidence native batch")?;
+    assert_eq!(
+        accepted
+            .items
+            .iter()
+            .filter(|item| item.key.starts_with(b"\0data/evidence/payload/"))
+            .count(),
+        1
+    );
+    assert!(!accepted
+        .items
+        .iter()
+        .any(|item| item.key.starts_with(b"\0data/raw/end/")));
     store.accept_validated_coverage(coverage(&source, 7))?;
     let published = feed.next_batch()?.ok_or("coverage native batch")?;
     for prefix in [
         b"\0data/source/".as_slice(),
-        b"\0data/raw/end/",
-        b"\0data/raw/next",
         b"\0data/coverage/report/",
         b"\0data/coverage/change/",
     ] {
@@ -122,8 +181,8 @@ fn raw_metadata_revisions_and_reopen() -> TestResult {
     store.accept_validated_batch(source.clone(), batch(2))?;
     let second = store.view()?;
     assert_eq!(second.revision(), 3);
-    assert_eq!(second.snapshot().revision(), covered.snapshot().revision());
-    assert_eq!(store.database().inner().journal_head()?, cursor);
+    assert!(second.snapshot().revision() > covered.snapshot().revision());
+    assert_ne!(store.database().inner().journal_head()?, cursor);
     for (revision, expected_cursor, expected_coverage) in [(1, 1, 0), (2, 1, 7), (3, 2, 7)] {
         let view = store.read_at(revision)?;
         assert_eq!(view.revision(), revision);
@@ -346,6 +405,7 @@ fn append_and_commit_failure_recover() -> TestResult {
     assert!(store.storage_health()?.write_ready);
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(1))?;
+    let trace = seed_trace(&store, 1, 1)?;
     assert!(!controls.has_changed()?);
     let before = store.view()?;
     let segment = std::fs::read_dir(root.join("segments"))?
@@ -356,7 +416,20 @@ fn append_and_commit_failure_recover() -> TestResult {
     std::fs::rename(&segment, &saved)?;
     std::fs::create_dir(&segment)?;
     assert!(store
-        .accept_validated_batch(source.clone(), batch(2))
+        .append_trace(
+            &trace,
+            &araphor_data::TraceBatchV1 {
+                execution_id: trace.execution_id,
+                frames: vec![araphor_data::TraceFrameV1 {
+                    execution_id: trace.execution_id,
+                    sequence: 2,
+                    kind: araphor_data::TraceFrameKindV1::Data,
+                    bytes: b"frame".to_vec()
+                }],
+                terminal: None,
+            },
+            101
+        )
         .is_err());
     assert!(store.view().is_err());
     assert!(store.write().is_err());
@@ -373,12 +446,13 @@ fn append_and_commit_failure_recover() -> TestResult {
     );
     std::fs::remove_dir(&segment)?;
     std::fs::rename(&saved, &segment)?;
+    let before_revision = before.revision();
     drop(before);
     drop(store);
     let store = NativeStore::open(&root)?;
     let controls = store.subscribe_control();
     assert!(store.storage_health()?.write_ready);
-    assert_eq!(store.view()?.revision(), 1);
+    assert_eq!(store.view()?.revision(), before_revision);
     store.accept_validated_batch(source.clone(), batch(2))?;
     let mut tx = store.write()?;
     tx.coverage(&coverage(&source, 7))?;
@@ -388,7 +462,7 @@ fn append_and_commit_failure_recover() -> TestResult {
     assert!(!store.storage_health()?.write_ready);
     drop(store);
     let store = NativeStore::open(&root)?;
-    assert_eq!(store.view()?.revision(), 2);
+    assert_eq!(store.view()?.revision(), before_revision + 1);
     assert_eq!(
         store
             .view()?
@@ -398,7 +472,7 @@ fn append_and_commit_failure_recover() -> TestResult {
         0
     );
     store.accept_validated_coverage(coverage(&source, 7))?;
-    assert_eq!(store.view()?.revision(), 3);
+    assert_eq!(store.view()?.revision(), before_revision + 2);
     let control = AnalysisReadControl::default();
     control.cancel()?;
     assert!(store.read_page_cancel(&source, 1, &control).is_err());
@@ -413,14 +487,17 @@ fn metadata_protects_raw_tail() -> TestResult {
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(1))?;
     store.accept_validated_coverage(coverage(&source, 7))?;
-    let segment = std::fs::read_dir(root.join("segments"))?
-        .next()
-        .ok_or("segment absent")??
-        .path();
+    let mut damage = store.write()?;
+    damage.native().remove(
+        [
+            b"\0data/evidence/payload/".as_slice(),
+            &source.key(),
+            &1u64.to_be_bytes(),
+        ]
+        .concat(),
+    );
+    damage.commit([])?;
     drop(store);
-    let file = std::fs::OpenOptions::new().write(true).open(segment)?;
-    file.set_len(file.metadata()?.len() - 1)?;
-    file.sync_all()?;
     assert!(NativeStore::open(&root).is_err());
     Ok(())
 }
@@ -583,6 +660,7 @@ fn corrupt_raw_controls_are_rejected() -> TestResult {
         let source = identity();
         store.accept_validated_batch(source.clone(), batch(1))?;
         store.accept_validated_coverage(coverage(&source, 7))?;
+        seed_trace(&store, 1, 1)?;
         let mut corrupt = store.branch().write_tx()?;
         match fault {
             "allocator" => corrupt.insert(b"\0data/raw/next", 0u64.to_be_bytes()),
@@ -602,8 +680,9 @@ fn corrupt_raw_controls_are_rejected() -> TestResult {
                 }
             }
         }
-        corrupt.insert(b"\0data/head", 3u64.to_be_bytes());
-        corrupt.commit_stamped([[b"\0data/cut/".as_slice(), &3u64.to_be_bytes()].concat()])?;
+        let damaged = store.view()?.revision() + 1;
+        corrupt.insert(b"\0data/head", damaged.to_be_bytes());
+        corrupt.commit_stamped([[b"\0data/cut/".as_slice(), &damaged.to_be_bytes()].concat()])?;
         drop(store);
         assert!(
             matches!(

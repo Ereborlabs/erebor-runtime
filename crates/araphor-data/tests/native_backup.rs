@@ -107,7 +107,7 @@ fn backup_preserves_recovery_floor() -> TestResult {
             .iter()
             .sum::<u64>()
     );
-    assert_eq!(manifest.segments.len(), 1);
+    assert!(manifest.segments.is_empty());
     assert!(store.backup(&backup).is_err());
     assert_eq!(
         store.accept_validated_batch(source.clone(), batch(2))?,
@@ -157,7 +157,7 @@ fn backup_preserves_recovery_floor() -> TestResult {
 }
 
 #[test]
-fn large_segment_backup_restores() -> TestResult {
+fn large_native_backup_restores() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("original");
     let store = AnalysisStore::open(&root)?;
@@ -178,8 +178,14 @@ fn large_segment_backup_restores() -> TestResult {
     assert_eq!(store.read_page(&identity(), 1)?, positions);
     let backup = root.join("backups/large");
     let manifest = store.backup(&backup)?;
-    assert_eq!(manifest.segments.len(), 2);
-    assert!(manifest.segments[0].bytes > araphor_data::EVIDENCE_SEGMENT_BYTES as u64);
+    assert!(manifest.segments.is_empty());
+    let payloads = store
+        .view()?
+        .snapshot()
+        .prefix(b"\0data/evidence/payload/")
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(payloads.len(), 2);
+    assert!(payloads[0].1.len() > araphor_data::EVIDENCE_SEGMENT_BYTES);
     let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
     let page = restored.read_page(&identity(), 1)?;
     assert_eq!(page.records, positions.records);

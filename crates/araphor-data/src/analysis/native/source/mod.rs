@@ -1,5 +1,4 @@
 use super::{records::Records, DataView};
-use crate::analysis::raw::RawIdentity;
 use crate::{
     AnalysisSourceReceiptV1, AnalysisSourceStatusV1, CoverageReportRef, EvidenceIntakeIdentityV1,
     NativeStateSnafu, NativeStorageSnafu, Result,
@@ -58,21 +57,19 @@ impl super::NativeStore {
             Some(next) => [b"\0".as_slice(), &next.to_be_bytes()].concat(),
             None => vec![1],
         };
-        view.raw
-            .sources
-            .range((first, Excluded(last)))
+        let first = match first {
+            Included(key) => Included([Sources::RECEIPTS, &key].concat()),
+            Excluded(key) => Excluded([Sources::RECEIPTS, &key].concat()),
+            std::ops::Bound::Unbounded => Included(Sources::RECEIPTS.to_vec()),
+        };
+        view.snapshot
+            .range((first, Excluded([Sources::RECEIPTS, &last].concat())))
             .take(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
-            .map(|(_, source)| {
-                source
-                    .receipt
-                    .evidence()
-                    .map(|receipt| receipt.identity.clone())
-                    .ok_or_else(|| {
-                        NativeStateSnafu {
-                            field: "source page kind",
-                        }
-                        .build()
-                    })
+            .map(|row| {
+                let (key, value) = row.context(NativeStorageSnafu {
+                    operation: "read source page",
+                })?;
+                Ok(Sources::decode_receipt(&key, &value)?.identity)
             })
             .collect()
     }
@@ -84,20 +81,20 @@ impl super::NativeStore {
         let mut tenants = Vec::new();
         while let Some(tenant) = next {
             let first = [b"\0".as_slice(), &tenant.to_be_bytes()].concat();
-            let Some((_, source)) = view
-                .raw
-                .sources
-                .range((Included(first), Excluded(vec![1])))
+            let Some(row) = view
+                .snapshot
+                .range((
+                    Included([Sources::RECEIPTS, &first].concat()),
+                    Excluded([Sources::RECEIPTS, &[1]].concat()),
+                ))
                 .next()
             else {
                 break;
             };
-            let Some(receipt) = source.receipt.evidence() else {
-                return NativeStateSnafu {
-                    field: "source tenant index",
-                }
-                .fail();
-            };
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read source tenant index",
+            })?;
+            let receipt = Sources::decode_receipt(&key, &value)?;
             tenants.push(receipt.identity.tenant_id);
             if tenants.len() == crate::analysis::MAX_ANALYSIS_PAGE_RECORDS {
                 break;
@@ -117,8 +114,30 @@ struct Report {
 }
 
 impl Sources {
+    pub(in crate::analysis::native) fn decode_receipt(
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<AnalysisSourceReceiptV1> {
+        let value = value.strip_prefix(&[0]).ok_or_else(|| {
+            NativeStateSnafu {
+                field: "source receipt value",
+            }
+            .build()
+        })?;
+        let receipt: AnalysisSourceReceiptV1 = Records::decode(value)?;
+        if !receipt.identity.valid()
+            || receipt.retained_floor > receipt.contiguous_cursor
+            || Self::key(Self::RECEIPTS, &receipt.identity.key()) != key
+        {
+            return NativeStateSnafu {
+                field: "source receipt identity",
+            }
+            .fail();
+        }
+        Ok(receipt)
+    }
     pub(in crate::analysis::native) const RECEIPTS: &'static [u8] = b"\0data/source/";
-    const EPOCHS: &'static [u8] = b"\0data/epoch/";
+    pub(in crate::analysis::native) const EPOCHS: &'static [u8] = b"\0data/epoch/";
     pub(in crate::analysis::native) const ENDS: &'static [u8] = b"\0data/raw/end/";
     const NEXT: &'static [u8] = b"\0data/raw/next";
     const REPORTS: &'static [u8] = b"\0data/coverage/report/";
@@ -161,7 +180,7 @@ impl Sources {
         .transpose()
     }
 
-    fn check_epoch(
+    pub(in crate::analysis::native) fn check_epoch(
         identity: &EvidenceIntakeIdentityV1,
         saved: &EvidenceIntakeIdentityV1,
     ) -> Result<()> {
@@ -180,6 +199,18 @@ impl Sources {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn source_receipts(
+        &self,
+        tenant: [u8; 16],
+    ) -> impl Iterator<Item = Result<AnalysisSourceReceiptV1>> + '_ {
+        let prefix = [Sources::RECEIPTS, &[0], &tenant].concat();
+        self.snapshot.prefix(prefix).map(|row| {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read native source receipts",
+            })?;
+            Sources::decode_receipt(&key, &value)
+        })
+    }
     pub fn source_binding(
         &self,
         tenant_id: [u8; 16],
@@ -197,23 +228,20 @@ impl DataView {
             }
             .fail();
         }
-        for receipt in self
-            .raw
-            .sources
-            .values()
-            .filter_map(|source| source.receipt.evidence())
+        let suffix =
+            EvidenceIntakeIdentityV1::source_epoch_key(tenant_id, node_id, source_id, source_epoch);
+        let identity: Option<EvidenceIntakeIdentityV1> =
+            Sources::read(&self.snapshot, &Sources::key(Sources::EPOCHS, &suffix))?;
+        if identity
+            .as_ref()
+            .is_some_and(|identity| !identity.valid() || identity.epoch_key() != suffix)
         {
-            let identity = &receipt.identity;
-            if identity.tenant_id == tenant_id
-                && identity.node_id == node_id
-                && identity.source_id == source_id
-                && identity.source_epoch == source_epoch
-                && self.source_receipt(identity)?.is_some()
-            {
-                return Ok(Some(identity.clone()));
+            return NativeStateSnafu {
+                field: "source epoch binding",
             }
+            .fail();
         }
-        Ok(None)
+        Ok(identity)
     }
 
     pub fn source_receipt(
@@ -237,59 +265,7 @@ impl DataView {
             }
             .fail();
         }
-        let source = self.raw.sources.get(&key);
-        let visible = source.is_some_and(|source| source.written)
-            && (self.raw.revision <= self.revision
-                || self
-                    .raw
-                    .ranges
-                    .range((key.clone(), 0)..=(key.clone(), u64::MAX))
-                    .any(|(_, (revision, _))| *revision <= self.revision));
-        let mut receipt = match baseline {
-            Some(receipt) => receipt,
-            None if visible => AnalysisSourceReceiptV1 {
-                identity: identity.clone(),
-                cpu_id: source
-                    .and_then(|source| source.receipt.cpu())
-                    .ok_or_else(|| {
-                        NativeStateSnafu {
-                            field: "source CPU",
-                        }
-                        .build()
-                    })?,
-                contiguous_cursor: 0,
-                coverage_revision: 0,
-                retained_floor: 0,
-            },
-            None => return Ok(None),
-        };
-        if let Some(source) = source {
-            if !source
-                .receipt
-                .matches(&RawIdentity::Evidence(identity.clone()))
-                || source.receipt.cpu() != Some(receipt.cpu_id)
-            {
-                return NativeStateSnafu {
-                    field: "raw source binding",
-                }
-                .fail();
-            }
-            if self.raw.revision <= self.revision {
-                receipt.contiguous_cursor = receipt.contiguous_cursor.max(source.receipt.cursor());
-                return Ok(Some(receipt));
-            }
-        }
-        for (_, &(revision, slot)) in self.raw.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
-            if revision > self.revision {
-                continue;
-            }
-            let span = &self.raw.entries[&revision].commit.spans[slot];
-            if span.first > receipt.contiguous_cursor.saturating_add(1) {
-                break;
-            }
-            receipt.contiguous_cursor = receipt.contiguous_cursor.max(span.last);
-        }
-        Ok(Some(receipt))
+        Ok(baseline)
     }
 
     pub fn source_status(
@@ -299,24 +275,30 @@ impl DataView {
         let Some(receipt) = self.source_receipt(identity)? else {
             return Ok(None);
         };
-        let key = identity.key();
-        let retained_event_count = self
-            .raw
-            .ranges
-            .range((key.clone(), 0)..=(key, u64::MAX))
-            .filter(|(_, (revision, _))| {
-                *revision <= self.revision
-                    && self
-                        .raw
-                        .expired
-                        .get(&self.raw.entries[revision].reference.id)
-                        .is_none_or(|expired| expired.revision > self.revision)
-            })
-            .map(|(_, &(revision, slot))| {
-                let span = &self.raw.entries[&revision].commit.spans[slot];
-                span.last - span.first + 1
-            })
-            .sum();
+        let events = super::events::Events::new(self);
+        let mut retained_event_count = 0_u64;
+        for row in events.spans(identity, 1, u64::MAX)? {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read source event spans",
+            })?;
+            let (first, span) = super::events::Events::decode_span(identity, &key, &value)?;
+            let (batch, _) = events.lookup(identity, first)?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "source event span",
+                }
+                .build()
+            })?;
+            if events.expiry(batch.meta.revision)?.is_none() {
+                retained_event_count = retained_event_count
+                    .checked_add(span.last - first + 1)
+                    .ok_or_else(|| {
+                        NativeStateSnafu {
+                            field: "source event count",
+                        }
+                        .build()
+                    })?;
+            }
+        }
         let latest_coverage_report = if receipt.coverage_revision == 0 {
             None
         } else {
@@ -365,13 +347,15 @@ impl DataView {
             }
             .build()
         })?;
-        let key = identity.key();
         let mut revision = 0;
-        for (_, &(id, _)) in self.raw.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
+        let events = super::events::Events::new(self);
+        for row in events.spans(identity, 1, u64::MAX)? {
             control.check()?;
-            if id <= self.revision {
-                revision = revision.max(id);
-            }
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read source input revisions",
+            })?;
+            let (_, span) = super::events::Events::decode_span(identity, &key, &value)?;
+            revision = revision.max(span.revision);
         }
         let coverage_report = if receipt.coverage_revision == 0 {
             None
@@ -413,12 +397,9 @@ impl DataView {
         for gap in &expired {
             revision = revision.max(gap.commit_revision);
         }
-        let state = self.raw.source_state(
+        let state = events.source_state(
             root,
             &receipt,
-            self.revision,
-            &expired,
-            &[],
             control,
             (output.input_bytes, output.limits.input_bytes),
         )?;

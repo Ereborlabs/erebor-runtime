@@ -18,7 +18,7 @@ fn coverage_first_binding_survives_raw_tail_recovery() -> TestResult {
         let native = store.database().inner().journal_head()?;
         store.accept_validated_batch(source.clone(), batch(1))?;
         let event = store.view()?.revision();
-        assert_eq!(store.database().inner().journal_head()?, native);
+        assert_ne!(store.database().inner().journal_head()?, native);
         if metadata {
             let mut tx = store.write()?;
             tx.native().insert(b"ordinary", [1u8]);

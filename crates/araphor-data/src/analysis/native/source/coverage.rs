@@ -1,6 +1,5 @@
 use super::super::{DataView, DataWrite, NativeStore};
 use super::{Records, Report, Sources};
-use crate::analysis::raw::RawReceipt;
 use crate::{AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result};
 use crate::{
     AnalysisSelectionV1, AnalysisSourceReceiptV1, CoverageRecord, CoverageReportRef,
@@ -243,18 +242,24 @@ impl DataWrite<'_> {
             );
         }
         let key = identity.key();
-        let previous = self
-            .raw
-            .sources
-            .get(&key)
-            .and_then(|source| source.receipt.evidence());
-        if previous.is_some_and(|receipt| receipt.cpu_id != input.cpu_id) {
+        let previous: Option<AnalysisSourceReceiptV1> =
+            Records::payload(&Sources::key(Sources::RECEIPTS, &key), |key| {
+                Records::staged(key, &self.transaction)
+            })?
+            .map(|bytes| Records::decode(&bytes))
+            .transpose()?;
+        if previous
+            .as_ref()
+            .is_some_and(|receipt| receipt.cpu_id != input.cpu_id)
+        {
             return crate::Error::reject_path(
                 &self.store.root,
                 "coverage changed the bound evidence CPU identity",
             );
         }
-        let current = previous.map_or(0, |receipt| receipt.coverage_revision);
+        let current = previous
+            .as_ref()
+            .map_or(0, |receipt| receipt.coverage_revision);
         if input.revision <= current {
             if input.revision == current {
                 let existing = Records::payload(&Sources::report(identity, current), |key| {
@@ -281,27 +286,14 @@ impl DataWrite<'_> {
             })
         })? {
             Sources::check_epoch(identity, &Records::decode(&bytes)?)?;
-        } else {
-            for source in self
-                .raw
-                .sources
-                .values()
-                .filter_map(|source| source.receipt.evidence())
-            {
-                if source.identity.epoch_key() == identity.epoch_key() {
-                    Sources::check_epoch(identity, &source.identity)?;
-                }
-            }
         }
-        let mut receipt = previous
-            .cloned()
-            .unwrap_or_else(|| AnalysisSourceReceiptV1 {
-                identity: identity.clone(),
-                cpu_id: input.cpu_id,
-                contiguous_cursor: 0,
-                coverage_revision: 0,
-                retained_floor: 0,
-            });
+        let mut receipt = previous.clone().unwrap_or_else(|| AnalysisSourceReceiptV1 {
+            identity: identity.clone(),
+            cpu_id: input.cpu_id,
+            contiguous_cursor: 0,
+            coverage_revision: 0,
+            retained_floor: 0,
+        });
         receipt.coverage_revision = input.revision;
         let new_binding = previous.is_none();
         let reference = CoverageReportRef {
@@ -333,13 +325,6 @@ impl DataWrite<'_> {
         self.note_relation("source_receipts", self.revision)?;
         if new_binding {
             self.note_relation("source_bindings", self.revision)?;
-            self.raw.binding_revision = self.revision;
-            self.raw.relations.insert_mut((b'B', self.revision), ());
-        }
-        if let Some(source) = self.raw.sources.get_mut(&key) {
-            source.receipt = RawReceipt::Evidence(receipt);
-        } else {
-            self.raw.sources.insert_mut(key, receipt.into());
         }
         self.dirty = true;
         Ok(())

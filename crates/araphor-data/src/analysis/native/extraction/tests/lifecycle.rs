@@ -20,7 +20,7 @@ fn analysis_extract_rotation() -> TestResult {
     let selection = AnalysisSelectionV1::new(first.tenant_id, vec![first, rotating.clone()]);
     let (start, started) = mpsc::channel();
     let (rotate, rotation) = mpsc::channel();
-    store.set_commit_hook(crate::AnalysisCommitStage::BeforeRotation, move || {
+    store.set_commit_hook(crate::AnalysisCommitStage::BeforeAppend, move || {
         rotate
             .send(())
             .map_err(|_| crate::AnalysisReadCancelledSnafu.build())
@@ -98,7 +98,15 @@ fn analysis_extract_rotation() -> TestResult {
             .chain(std::iter::repeat_n(2, 128))
             .collect::<Vec<_>>()
     );
-    assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 3);
+    assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 0);
+    assert_eq!(
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/evidence/payload/")
+            .count(),
+        5
+    );
     assert!(store.maintenance.try_write().is_ok());
     Ok(())
 }
@@ -114,6 +122,26 @@ fn analysis_extract_lock_waits() -> TestResult {
     let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
     let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
     let fields = [("events", &["source_cursor"][..])];
+    let intent = crate::analysis::trace::tests::intent(3)?;
+    let trace = &intent.bindings[0].identity;
+    store.accept_trace(&intent)?;
+    store.append_trace(
+        trace,
+        &TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![TraceFrameV1 {
+                execution_id: trace.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: vec![1],
+            }],
+            terminal: None,
+        },
+        100,
+    )?;
+    let mut diagnostic = AnalysisSelectionV1::new(identity.tenant_id, Vec::new());
+    diagnostic.traces = Selection::Exact(vec![trace.clone()]);
+    let diagnostic = &diagnostic;
     for access in 0..3 {
         for cancelled in [false, true] {
             let (ready, held) = mpsc::channel();
@@ -169,6 +197,18 @@ fn analysis_extract_lock_waits() -> TestResult {
                             &AnalysisReadControl::with_timeout(Duration::from_millis(50))?,
                         )?;
                         assert_eq!(metadata.extraction.sources[0].receipt, *receipt);
+                        let complete = read(
+                            store,
+                            selection,
+                            &fields,
+                            AnalysisReadModeV1::Complete,
+                            Default::default(),
+                            &AnalysisReadControl::with_timeout(Duration::from_millis(50))?,
+                        )?;
+                        assert_eq!(
+                            unsigned(&complete, "events", "source_cursor").unwrap(),
+                            vec![1]
+                        );
                     }
                     ready
                         .send(())
@@ -189,8 +229,8 @@ fn analysis_extract_lock_waits() -> TestResult {
                     0 => store.raw.until(control).map(|_| ()),
                     1 => read(
                         store,
-                        selection,
-                        &fields,
+                        diagnostic,
+                        &[("trace_output", &["sequence"][..])],
                         AnalysisReadModeV1::Complete,
                         Default::default(),
                         control,
@@ -216,63 +256,56 @@ fn analysis_extract_lock_waits() -> TestResult {
 }
 
 #[test]
-fn analysis_extract_file_faults() -> TestResult {
-    use std::os::unix::fs::FileExt as _;
-
+fn analysis_extract_payload_faults() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("analysis"))?;
     let identity = identity(1);
     store.accept_validated_batch(identity.clone(), batch(1, 1, 1)?)?;
-    let (path, offset) = {
-        let view = store.view()?;
-        let entry = view.raw.entries.values().next().ok_or("batch absent")?;
-        let span = entry.commit.spans.first().ok_or("span absent")?;
-        (
-            SegmentRange::path(&store.root, entry.reference.id),
-            entry.body_start + u64::from(span.start),
-        )
-    };
+    let key = crate::analysis::native::events::Events::key(
+        crate::analysis::native::events::Events::PAYLOAD,
+        &identity,
+        1,
+    );
+    let bytes = store.view()?.snapshot().get(&key)?.ok_or("payload")?;
     let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
     let fields = [("events", &["source_cursor"][..])];
-    let hidden = directory.path().join("hidden.seg");
-    std::fs::rename(&path, &hidden)?;
-    assert!(matches!(
-        read(
+    for fault in ["missing", "crc"] {
+        let mut damage = store.write()?;
+        if fault == "missing" {
+            damage.native().remove(&key);
+        } else {
+            let mut changed = bytes.to_vec();
+            *changed.last_mut().ok_or("payload bytes")? ^= 0xff;
+            damage.native().insert(&key, changed);
+        }
+        damage.commit([])?;
+        let failed = read(
             &store,
             &selection,
             &fields,
             AnalysisReadModeV1::Complete,
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default()
-        ),
-        Err(crate::Error::Io { .. })
-    ));
-    std::fs::rename(&hidden, &path)?;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)?;
-    let mut original = [0];
-    file.read_exact_at(&mut original, offset)?;
-    file.write_all_at(&[original[0] ^ 0xff], offset)?;
-    assert!(matches!(
-        read(
-            &store,
-            &selection,
-            &fields,
-            AnalysisReadModeV1::Complete,
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default()
-        ),
-        Err(crate::Error::AnalysisState { .. })
-    ));
-    file.write_all_at(&original, offset)?;
+            Default::default(),
+            &AnalysisReadControl::default(),
+        );
+        assert!(match failed {
+            Err(crate::Error::NativeState {
+                field: "native evidence payload",
+                ..
+            }) => fault == "missing",
+            Err(crate::Error::AnalysisState { .. }) => fault == "crc",
+            _ => false,
+        });
+        let mut repair = store.write()?;
+        repair.native().insert(&key, bytes.clone());
+        repair.commit([])?;
+        assert_eq!(store.view()?.snapshot().get(&key)?.as_ref(), Some(&bytes));
+    }
     let page = read(
         &store,
         &selection,
         &fields,
         AnalysisReadModeV1::Complete,
-        AnalysisExtractLimits::default(),
+        Default::default(),
         &AnalysisReadControl::default(),
     )?;
     assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![1]);
@@ -310,15 +343,10 @@ fn analysis_extract_gaps() -> TestResult {
     assert_eq!(unsigned(&page, "events", "source_cursor")?, vec![2]);
     assert_eq!(
         page.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .filter(|entry| entry.commit.intake == 20 || entry.commit.intake == 100)
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .filter(|entry| entry.meta.intake == 20 || entry.meta.intake == 100)
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     assert_eq!(page.extraction.sources[0].expired.len(), 1);
@@ -336,8 +364,16 @@ fn analysis_extract_gaps() -> TestResult {
         ),
         (3, 4)
     );
-    let mut damaged = store.view()?.as_ref().clone();
-    damaged.raw.ranges.remove_mut(&(identity.key(), 2));
+    let mut damage = store.write()?;
+    damage
+        .native()
+        .remove(crate::analysis::native::events::Events::key(
+            crate::analysis::native::events::Events::SPANS,
+            &identity,
+            2,
+        ));
+    damage.commit([])?;
+    let damaged = store.view()?;
     let requests = AnalysisTableRequests::from([(
         "events".into(),
         Some(BTreeSet::from([
@@ -398,15 +434,10 @@ fn analysis_extract_history() -> TestResult {
     )?;
     assert_eq!(
         recent.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .filter(|entry| entry.commit.intake == 20)
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .filter(|entry| entry.meta.intake == 20)
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     assert_eq!(row_count(&recent, "events"), 32);
@@ -422,14 +453,9 @@ fn analysis_extract_history() -> TestResult {
     )?;
     assert_eq!(
         sparse.extraction.scanned_bytes,
-        store
-            .raw
-            .lock()
-            .map_err(|_| "raw lock poisoned")?
-            .index
-            .entries
-            .values()
-            .map(|entry| entry.frame_bytes)
+        stored_batches(&store)?
+            .iter()
+            .map(|entry| entry.bytes)
             .sum::<usize>()
     );
     let cursors = unsigned(&sparse, "events", "source_cursor")?;
@@ -486,18 +512,15 @@ fn analysis_extract_history() -> TestResult {
         ..crate::analysis::tests::result(scope, "sparse-history".into())
     })?;
     let usage = store.witness_usage(identity.tenant_id, 22)?;
-    let header_bytes = crate::analysis::SegmentFile::encode_identity(&identity)?.len() as u64;
-    assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 6);
-    assert_eq!(
-        usage.segment_bytes,
-        sparse.extraction.scanned_bytes as u64 + 6 * header_bytes
-    );
+    assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 0);
+    assert_eq!(usage.segment_bytes, 0);
+    assert_eq!(usage.evidence_bytes, sparse.extraction.scanned_bytes as u64);
     assert_eq!(usage.referenced_bytes, 18 * frame_bytes as u64);
     assert_eq!(
-        usage.extra_segment_bytes,
-        usage.segment_bytes - usage.referenced_bytes
+        usage.extra_evidence_bytes,
+        usage.evidence_bytes - usage.referenced_bytes
     );
-    assert_eq!(usage.charged_bytes, usage.segment_bytes);
+    assert_eq!(usage.charged_bytes, usage.evidence_bytes);
     assert_eq!(
         EvidenceRetentionOwner::new(&store)
             .retain(&identity, 50)?

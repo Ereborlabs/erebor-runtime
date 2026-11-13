@@ -111,16 +111,24 @@ impl EvidenceIntakeIdentityV1 {
     }
 
     pub fn epoch_key(&self) -> Vec<u8> {
-        let mut key = Vec::with_capacity(42 + self.node_id.len());
-        key.extend_from_slice(&self.tenant_id);
-        key.extend_from_slice(&(self.node_id.len() as u16).to_be_bytes());
-        key.extend_from_slice(self.node_id.as_bytes());
-        key.extend_from_slice(&self.source_id);
-        key.extend_from_slice(&self.source_epoch.to_be_bytes());
+        Self::source_epoch_key(
+            self.tenant_id,
+            &self.node_id,
+            self.source_id,
+            self.source_epoch,
+        )
+    }
+
+    pub fn source_epoch_key(tenant: [u8; 16], node: &str, source: [u8; 16], epoch: u64) -> Vec<u8> {
+        let mut key = Vec::with_capacity(42 + node.len());
+        key.extend_from_slice(&tenant);
+        key.extend_from_slice(&(node.len() as u16).to_be_bytes());
+        key.extend_from_slice(node.as_bytes());
+        key.extend_from_slice(&source);
+        key.extend_from_slice(&epoch.to_be_bytes());
         key
     }
 }
-
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -129,7 +137,6 @@ pub struct DiscoveryRecordIdV1 {
     pub cpu_id: u32,
     pub durable_cursor: u64,
 }
-
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
@@ -141,7 +148,6 @@ pub enum DiscoveryCoverageStateV1 {
     Unknown,
     Closed,
 }
-
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -159,7 +165,6 @@ pub struct DiscoveryCoverageV1 {
     pub gap_reasons: Vec<String>,
 }
 
-
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryFileObjectV1 {
@@ -170,7 +175,6 @@ pub struct DiscoveryFileObjectV1 {
     pub mount_namespace_inode: u32,
     pub filesystem_device: u32,
 }
-
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -201,7 +205,6 @@ pub struct DiscoveryEffectKeyV1 {
     pub exact_file_object: Option<DiscoveryFileObjectV1>,
 }
 
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorScopeV1 {
@@ -215,7 +218,6 @@ impl ProcessorScopeV1 {
         !self.processor_id.is_empty() && self.method_version > 0 && self.identity.valid()
     }
 }
-
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub struct StorePositionV1 {

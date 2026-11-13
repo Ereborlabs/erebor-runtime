@@ -114,10 +114,10 @@ impl DataWrite<'_> {
             .fail();
         }
         let accepted = self
-            .raw
-            .sources
-            .get(&identity.key())
-            .map_or(0, |source| source.receipt.cursor());
+            .store
+            .view()?
+            .source_receipt(identity)?
+            .map_or(0, |receipt| receipt.contiguous_cursor);
         if node_floor <= accepted {
             return Ok(AnalysisRecoveryStatusV1::Complete);
         }

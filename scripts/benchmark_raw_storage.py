@@ -13,10 +13,11 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--owner", action="store_true")
+    parser.add_argument("--owner-backend", choices=["production", "hybrid"], default="production")
     args = parser.parse_args()
     example = "raw_owner_bench" if args.owner else "raw_storage_bench"
     binary = (args.binary or Path("target/release/examples") / example).resolve()
-    baseline = "hybrid" if args.owner else "segments"
+    baseline = args.owner_backend if args.owner else "segments"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     provenance = {
@@ -47,7 +48,7 @@ def main():
         "dataset_records": [16384, 262144], "batch_records": 256,
         "orders_per_dataset": [[baseline, "fjall"], ["fjall", baseline],
                                [baseline, "fjall"], ["fjall", baseline]],
-        "comparison": "production hybrid versus all-Fjall" if args.owner else "raw segment versus Fjall pilot",
+        "comparison": f"{baseline} owner versus all-Fjall candidate" if args.owner else "raw segment versus Fjall pilot",
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []

@@ -178,14 +178,22 @@ impl InputChanges {
     }
 
     pub(in crate::analysis) fn raw(&self, entry: &super::raw::RawEntry) {
+        self.raw_batch(&entry.identity, &entry.commit);
+    }
+
+    pub(in crate::analysis) fn raw_batch(
+        &self,
+        identity: &AnalysisStreamIdentityV1,
+        meta: &super::raw::RawMeta,
+    ) {
         let readers = self
             .readers
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some(readers) = readers.get(&entry.identity.tenant()) {
+        if let Some(readers) = readers.get(&identity.tenant()) {
             for reader in readers.values() {
-                for span in &entry.commit.spans {
-                    if let Some(position) = reader.interest.raw_position(entry, span) {
+                for span in &meta.spans {
+                    if let Some(position) = reader.interest.raw_span(identity, meta, span) {
                         reader.advance(position);
                     }
                 }

@@ -32,6 +32,35 @@ pub(super) struct RawAppend {
 }
 
 impl RawCommit {
+    pub(super) fn frame(&self, root: &Path) -> Result<Vec<u8>> {
+        self.validate(root)?;
+        let length = u32::try_from(self.encoded_len()).map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the raw commit is too large",
+            }
+            .build()
+        })?;
+        let capacity = (length as usize).checked_add(8).ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the raw commit size is not representable",
+            }
+            .build()
+        })?;
+        let mut frame = Vec::with_capacity(capacity);
+        frame.extend_from_slice(&length.to_be_bytes());
+        self.encode(&mut frame).map_err(|source| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: format!("the raw commit failed encoding: {source}"),
+            }
+            .build()
+        })?;
+        frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+        Ok(frame)
+    }
+
     pub(super) fn from_frame(bytes: &[u8], path: &Path) -> Result<Self> {
         if bytes.len() < 8 {
             return crate::Error::reject_path(path, "the raw commit frame size is invalid");
@@ -168,18 +197,7 @@ impl RawJournal {
         identity: &RawIdentity,
         commit: RawCommit,
     ) -> Result<RawAppend> {
-        commit.validate(&self.root)?;
-        let length = u32::try_from(commit.encoded_len())
-            .map_err(|_| self.invalid("the raw commit is too large"))?;
-        let capacity = (length as usize)
-            .checked_add(8)
-            .ok_or_else(|| self.invalid("the raw commit size is not representable"))?;
-        let mut frame = Vec::with_capacity(capacity);
-        frame.extend_from_slice(&length.to_be_bytes());
-        commit
-            .encode(&mut frame)
-            .map_err(|_| self.invalid("the raw commit encoding failed"))?;
-        frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+        let frame = commit.frame(&self.root)?;
         let terminal = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1 && commit.spans[0].first == progress.last_sequence + 1);
         if let Some((id, segment)) = self
@@ -227,13 +245,14 @@ impl RawJournal {
     }
 
     pub(super) fn read_sealed(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
-        Self::read_segments(root, committed, true)
+        Self::read_segments(root, committed, true, true)
     }
 
     fn read_segments(
         root: &Path,
         committed: &BTreeMap<u64, u64>,
         sealed_only: bool,
+        evidence: bool,
     ) -> Result<Self> {
         let mut journal = Self {
             root: root.to_path_buf(),
@@ -266,6 +285,11 @@ impl RawJournal {
                 }
                 _ => return Err(journal.invalid("the evidence segment name is invalid")),
             };
+            if kind == "r" && !evidence {
+                return Err(
+                    journal.invalid("legacy evidence segment requires an older Data format")
+                );
+            }
             let value = u64::from_str_radix(id, 16)
                 .map_err(|_| journal.invalid("the evidence segment name is invalid"))?;
             if value == 0 || id != format!("{value:016x}") || (sealed_only && sealed.is_none()) {
@@ -508,9 +532,17 @@ impl RawJournal {
 }
 
 impl RawJournal {
+    pub(in crate::analysis) fn diagnostics(
+        root: &Path,
+        committed: &BTreeMap<u64, u64>,
+    ) -> Result<Self> {
+        RawJournal::directory(root)?;
+        Self::read_segments(root, committed, false, false)
+    }
+
     pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
         RawJournal::directory(root)?;
-        Self::read_segments(root, committed, false)
+        Self::read_segments(root, committed, false, true)
     }
 }
 

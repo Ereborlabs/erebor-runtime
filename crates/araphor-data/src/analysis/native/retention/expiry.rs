@@ -9,9 +9,7 @@ use snafu::ResultExt as _;
 
 use super::super::{records::Records, DataView, NativeStore};
 use crate::analysis::raw::{RawEntry, RawIdentity, RawIndex, RawJournal, RawKind, RawReceipt};
-use crate::{
-    AnalysisSourceReceiptV1, NativeStateSnafu, NativeStorageSnafu, Result, TraceOutputReceiptV1,
-};
+use crate::{NativeStateSnafu, NativeStorageSnafu, Result, TraceOutputReceiptV1};
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct ExpiredSegment {
@@ -26,7 +24,7 @@ pub(in crate::analysis::native) struct ExpiredSegment {
 impl ExpiredSegment {
     pub(in crate::analysis::native) const PREFIX: &'static [u8] = b"\0data/@retention/expired/";
     pub(in crate::analysis::native) const DELETING: &'static [u8] = b"\0data/@retention/deleting/";
-    pub(super) const FLOOR: &'static [u8] = b"\0data/@retention/floor/";
+    pub(in crate::analysis::native) const FLOOR: &'static [u8] = b"\0data/@retention/floor/";
 
     pub(in crate::analysis::native) fn key(prefix: &[u8], id: u64) -> Vec<u8> {
         [prefix, &id.to_be_bytes()].concat()
@@ -74,7 +72,8 @@ impl ExpiredSegment {
         let mut end = crate::analysis::SegmentFile::encode_raw(&first.identity)?.len() as u64;
         let mut revision = 0;
         for entry in &self.entries {
-            if entry.identity != first.identity
+            if entry.identity.evidence().is_some()
+                || entry.identity != first.identity
                 || !entry.identity.valid()
                 || entry.reference.id != id
                 || entry.commit.revision <= revision
@@ -139,11 +138,7 @@ impl ExpiredSegment {
 
     fn file(&self, root: &Path) -> Result<Option<PathBuf>> {
         self.check(self.id)?;
-        let kind = if self.entries[0].identity.evidence().is_some() {
-            "r"
-        } else {
-            "d"
-        };
+        let kind = "d";
         let path = root
             .join("segments")
             .join(format!("{:016x}.{kind}.{:016x}.seg", self.id, self.end));
@@ -285,7 +280,12 @@ impl ExpiredSegment {
                 RawKind::Diagnostic(progress) if progress.terminal => {
                     match &raw.index.sources[&entry.identity.key()].receipt {
                         RawReceipt::Diagnostic(receipt) => receipt.terminal.clone(),
-                        RawReceipt::Evidence(_) => None,
+                        RawReceipt::Evidence(_) => {
+                            return NativeStateSnafu {
+                                field: "expired source kind",
+                            }
+                            .fail();
+                        }
                     }
                 }
                 _ => None,
@@ -340,15 +340,6 @@ impl ExpiredSegment {
         let mut index = RawIndex::default();
         for (_, (entry, terminal)) in entries {
             let receipt = match (&entry.identity, &entry.commit.kind) {
-                (RawIdentity::Evidence(identity), RawKind::Evidence(cpu)) => {
-                    RawReceipt::Evidence(AnalysisSourceReceiptV1 {
-                        identity: identity.clone(),
-                        cpu_id: *cpu,
-                        contiguous_cursor: 0,
-                        coverage_revision: 0,
-                        retained_floor: 0,
-                    })
-                }
                 (RawIdentity::Diagnostic(identity), RawKind::Diagnostic(progress)) => {
                     if progress.terminal != terminal.is_some() {
                         return NativeStateSnafu {
@@ -415,20 +406,20 @@ impl DataView {
         output: &mut crate::AnalysisExtractionV1,
         control: &crate::AnalysisReadControl,
     ) -> Result<Vec<crate::AnalysisGapV1>> {
-        let key = identity.key();
+        let events = super::super::events::Events::new(self);
         let mut gaps = Vec::new();
-        for (_, &(revision, slot)) in self.raw.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
+        for row in events.spans(identity, 0, u64::MAX)? {
             control.check()?;
-            let entry = &self.raw.entries[&revision];
-            let Some(expired) = self
-                .raw
-                .expired
-                .get(&entry.reference.id)
-                .filter(|expired| expired.revision <= self.metadata_revision)
-            else {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read expired source spans",
+            })?;
+            let (first, index) = super::super::events::Events::decode_span(identity, &key, &value)?;
+            let entry = events.batch(index.revision)?;
+            entry.check_span(identity, first, &index)?;
+            let Some(expired) = events.expiry(index.revision)? else {
                 continue;
             };
-            let span = &entry.commit.spans[slot];
+            let span = &entry.meta.spans[index.slot];
             let added = crate::AnalysisExtractionV1::grow(
                 &mut gaps,
                 output.input_bytes,
@@ -457,6 +448,8 @@ impl NativeStore {
 impl DataView {
     pub(in crate::analysis::native) fn input_expiry_key(key: &[u8]) -> bool {
         key.starts_with(ExpiredSegment::PREFIX) && key.len() == ExpiredSegment::PREFIX.len() + 8
+            || key.starts_with(super::super::events::Events::EXPIRED)
+                && key.len() == super::super::events::Events::EXPIRED.len() + 8
     }
 
     pub(in crate::analysis::native) fn input_expiry(
@@ -465,6 +458,36 @@ impl DataView {
         readers: &crate::analysis::inputs::InputChanges,
         position: crate::StorePositionV1,
     ) -> Result<()> {
+        if let Some(suffix) = key.strip_prefix(super::super::events::Events::EXPIRED) {
+            let id = NativeStore::number(suffix)?;
+            let events = super::super::events::Events::new(self);
+            let expiry = events.expiry(id)?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "input evidence expiry",
+                }
+                .build()
+            })?;
+            if expiry.revision != position.commit_revision
+                || expiry.revision != self.metadata_revision
+            {
+                return NativeStateSnafu {
+                    field: "input evidence expiry revision",
+                }
+                .fail();
+            }
+            let batch = events.batch(id)?;
+            let identity = batch.source.into();
+            for span in &batch.meta.spans {
+                readers.publish(
+                    position,
+                    crate::analysis::inputs::InputChange::Removal {
+                        identity: &identity,
+                        range: Some((span.first, span.last, Some(batch.meta.intake))),
+                    },
+                );
+            }
+            return Ok(());
+        }
         let id = NativeStore::number(&key[ExpiredSegment::PREFIX.len()..])?;
         let record = ExpiredSegment::read(&self.snapshot, id)?;
         if record.revision != position.commit_revision || record.revision != self.metadata_revision

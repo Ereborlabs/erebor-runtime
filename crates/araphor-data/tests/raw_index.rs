@@ -31,6 +31,52 @@ fn batch(cursor: u64) -> ValidatedEvidenceBatchV1 {
     }
 }
 
+fn diagnostic(
+    store: &AnalysisStore,
+) -> Result<araphor_data::TraceIdentityV1, Box<dyn std::error::Error>> {
+    let source = araphor_data::TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+    let identity = araphor_data::TraceIdentityV1 {
+        tenant_id: [1; 16],
+        node_id: "node-a".into(),
+        node_boot_id: [2; 16],
+        request_id: [4; 16],
+        execution_id: [5; 16],
+        source_sha256: source.sha256,
+    };
+    store.accept_trace(&araphor_data::TraceIntentV1 {
+        tenant_id: identity.tenant_id,
+        request_id: identity.request_id,
+        bindings: vec![araphor_data::TraceBindingV1 {
+            binding_id: [6; 16],
+            identity: identity.clone(),
+            namespace_uid: "namespace-a".into(),
+        }],
+        source,
+        authority: b"accepted".to_vec(),
+        accepted_unix_ns: 100,
+        deadline_unix_ns: 1000,
+        host_sensitive: false,
+    })?;
+    store.append_trace(&identity, &trace_batch(&identity, 1), 100)?;
+    Ok(identity)
+}
+
+fn trace_batch(
+    identity: &araphor_data::TraceIdentityV1,
+    sequence: u64,
+) -> araphor_data::TraceBatchV1 {
+    araphor_data::TraceBatchV1 {
+        execution_id: identity.execution_id,
+        frames: vec![araphor_data::TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence,
+            kind: araphor_data::TraceFrameKindV1::Data,
+            bytes: b"frame".to_vec(),
+        }],
+        terminal: None,
+    }
+}
+
 #[test]
 fn captured_roots_survive_retention() -> TestResult {
     let directory = tempfile::tempdir()?;
@@ -41,13 +87,13 @@ fn captured_roots_survive_retention() -> TestResult {
     };
     let store = AnalysisStore::open_with_retention(&root, limits)?;
     let source = identity();
-    let empty = store.raw_index_fixture()?;
+    let empty = store.event_index_fixture()?;
     assert_eq!(empty.counts(), (0, 0, 0));
     assert_eq!(
         store.accept_validated_batch(source.clone(), batch(2))?,
         EvidenceStoreOutcomeV1::Pending
     );
-    let pending = store.raw_index_fixture()?;
+    let pending = store.event_index_fixture()?;
     assert_eq!(pending.counts(), (1, 1, 1));
     assert_eq!(
         pending
@@ -60,7 +106,7 @@ fn captured_roots_survive_retention() -> TestResult {
         store.accept_validated_batch(source.clone(), batch(1))?,
         EvidenceStoreOutcomeV1::Accepted
     );
-    let accepted = store.raw_index_fixture()?;
+    let accepted = store.event_index_fixture()?;
     assert_eq!(accepted.counts(), (2, 2, 2));
     assert_eq!(
         accepted
@@ -78,19 +124,16 @@ fn captured_roots_survive_retention() -> TestResult {
         .accept_validated_batch(source.clone(), conflict)
         .is_err());
     assert_eq!(store.meta()?.commit_revision, revision);
-    assert_eq!(store.raw_index_fixture()?.counts(), accepted.counts());
+    assert_eq!(store.event_index_fixture()?.counts(), accepted.counts());
     store.accept_validated_coverage(ValidatedCoverageV1 {
         identity: source.clone(),
         cpu_id: 0,
         revision: 7,
         encoded_report: vec![7],
     })?;
-    let covered = store.raw_index_fixture()?;
+    let covered = store.event_index_fixture()?;
     let covered_view = store.view()?;
-    let segment = std::fs::read_dir(root.join("segments"))?
-        .next()
-        .ok_or("segment absent")??
-        .path();
+    assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
     assert_eq!(
         covered
             .receipt(&source)
@@ -110,8 +153,15 @@ fn captured_roots_survive_retention() -> TestResult {
     assert_eq!(removed.removed_records, 2);
     assert_eq!(removed.retained_floor, 2);
     assert_eq!(removed.retained_bytes, 0);
-    assert!(!segment.exists());
-    assert_eq!(store.raw_index_fixture()?.counts(), (2, 2, 2));
+    assert_eq!(
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/evidence/payload/")
+            .count(),
+        0
+    );
+    assert_eq!(store.event_index_fixture()?.counts(), (2, 2, 2));
     let current = store
         .source_receipt(&source)?
         .ok_or("retained receipt absent")?;
@@ -233,7 +283,7 @@ fn captured_roots_survive_retention() -> TestResult {
     drop(store);
     let reopened = AnalysisStore::open_with_retention(&root, limits)?;
     assert_eq!(reopened.source_receipt(&source)?, Some(current));
-    assert_eq!(reopened.raw_index_fixture()?.counts(), (2, 2, 2));
+    assert_eq!(reopened.event_index_fixture()?.counts(), (2, 2, 2));
     assert_eq!(covered.counts(), (2, 2, 2));
     assert_eq!(
         covered
@@ -306,8 +356,7 @@ fn metadata_position_resume() -> TestResult {
     );
     let before = store.meta()?;
     store.checkpoint()?;
-    let mut anchored = before.clone();
-    anchored.commit_revision += 1;
+    let anchored = before.clone();
     assert_eq!(store.meta()?, anchored);
     assert_eq!(store.read_page(&source, 1)?.records, first.records);
     store.accept_validated_batch(source.clone(), batch(3))?;
@@ -342,7 +391,8 @@ fn append_failure_keeps_root() -> TestResult {
     let store = AnalysisStore::open(&root)?;
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(1))?;
-    let captured = store.raw_index_fixture()?;
+    let trace = diagnostic(&store)?;
+    let captured = store.event_index_fixture()?;
     let receipt = captured.receipt(&source);
     let segment = std::fs::read_dir(root.join("segments"))?
         .next()
@@ -363,7 +413,7 @@ fn append_failure_keeps_root() -> TestResult {
         })?;
         Ok(())
     })?;
-    let failed = store.accept_validated_batch(source.clone(), batch(2));
+    let failed = store.append_trace(&trace, &trace_batch(&trace, 2), 101);
     std::fs::remove_dir(&segment)?;
     std::fs::rename(saved, segment)?;
     assert!(failed.is_err());
@@ -371,10 +421,10 @@ fn append_failure_keeps_root() -> TestResult {
     assert_eq!(captured.receipt(&source), receipt);
     assert!(store.view().is_err());
     assert!(store.write().is_err());
-    assert!(store.raw_index_fixture().is_err());
+    assert!(store.event_index_fixture().is_err());
     store.recover()?;
-    assert_eq!(store.raw_index_fixture()?.counts(), captured.counts());
-    assert_eq!(store.raw_index_fixture()?.receipt(&source), receipt);
+    assert_eq!(store.event_index_fixture()?.counts(), captured.counts());
+    assert_eq!(store.event_index_fixture()?.receipt(&source), receipt);
     assert_eq!(captured.receipt(&source), receipt);
     drop(store);
     let store = AnalysisStore::open(&root)?;

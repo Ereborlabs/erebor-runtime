@@ -101,7 +101,7 @@ fn analysis_store_batch_receipt() -> std::result::Result<(), Box<dyn std::error:
         2
     );
     assert_eq!(store.meta()?.commit_revision, 2);
-    assert_eq!(store.raw_index_fixture()?.counts(), (2, 2, 2));
+    assert_eq!(store.event_index_fixture()?.counts(), (2, 2, 2));
     assert_eq!(
         store
             .source_status(&identity)?
@@ -207,7 +207,7 @@ fn analysis_store_batch_receipt() -> std::result::Result<(), Box<dyn std::error:
             .retained_event_count,
         7
     );
-    assert_eq!(reopened.raw_index_fixture()?.range_count(&identity), 5);
+    assert_eq!(reopened.event_index_fixture()?.range_count(&identity), 5);
 
     let revision = reopened.meta()?.commit_revision;
     reopened.accept_validated_coverage(coverage(&identity, 1, b"coverage"))?;
@@ -349,17 +349,29 @@ fn analysis_store_bounded_read() -> std::result::Result<(), Box<dyn std::error::
     anchor.native().insert(b"core-page-anchor", b"published");
     anchor.commit([])?;
     let view = reopened.view()?;
-    let ends = view
-        .snapshot()
-        .prefix(b"\0data/raw/end/")
-        .map(|row| row.map(|(key, _)| key.to_vec()))
-        .collect::<fjall::Result<Vec<_>>>()?;
-    assert_eq!(ends.len(), 2);
-    drop(view);
+    let span = [
+        b"\0data/evidence/span/".as_slice(),
+        &identity.key(),
+        &1u64.to_be_bytes(),
+    ]
+    .concat();
+    assert!(view.snapshot().get(&span)?.is_some());
     let mut transaction = reopened.write()?;
-    transaction.native().remove(ends[0].clone());
+    transaction.native().remove(span);
     transaction.commit([])?;
-    let page = reopened.read_page(&identity, 1)?;
+    assert!(matches!(
+        reopened.read_page(&identity, 1),
+        Err(araphor_data::Error::NativeState {
+            field: "accepted evidence span",
+            ..
+        })
+    ));
+    let page = reopened.read_page_at(
+        &view,
+        &identity,
+        1,
+        &araphor_data::AnalysisReadControl::default(),
+    )?;
     assert_eq!(page.records.len(), MAX_ANALYSIS_PAGE_RECORDS);
     assert_eq!(page.records, cached.records);
     assert_eq!(page.encoded_bytes, cached.encoded_bytes);
@@ -367,15 +379,16 @@ fn analysis_store_bounded_read() -> std::result::Result<(), Box<dyn std::error::
     assert!(matches!(
         reopened.recover(),
         Err(araphor_data::Error::NativeState {
-            field: "raw segment baseline",
+            field: "missing native evidence index or payload",
             ..
         })
     ));
+    drop(view);
     drop(reopened);
     assert!(matches!(
         AnalysisStore::open(&root),
         Err(araphor_data::Error::NativeState {
-            field: "raw segment baseline",
+            field: "missing native evidence index or payload",
             ..
         })
     ));

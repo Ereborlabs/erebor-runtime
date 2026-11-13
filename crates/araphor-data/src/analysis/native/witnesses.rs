@@ -4,31 +4,38 @@ use snafu::ResultExt as _;
 
 use super::{
     context::ContextRecord,
-    managed::{RawPin, References},
+    managed::{PinTarget, References, WitnessPin},
     records::Records,
-    NativeStore,
+    DataView, NativeStore,
 };
 use crate::analysis::raw::{RawIdentity, RawJournal};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, WitnessUsageV1};
 
 struct Witnesses {
     usage: WitnessUsageV1,
-    records: BTreeSet<(u64, u64)>,
+    records: BTreeSet<(PinTarget, u64)>,
 }
 
 impl Witnesses {
     fn read(
         raw: &RawJournal,
+        view: &DataView,
         tenant: [u8; 16],
         now: u64,
         revision: u64,
         exact: bool,
-        references: (fjall::BranchIterator, fjall::BranchIterator),
+        references: (
+            fjall::BranchIterator,
+            fjall::BranchIterator,
+            fjall::BranchIterator,
+        ),
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Self> {
         let mut usage = WitnessUsageV1 {
             read_revision: revision,
             referenced_bytes: 0,
+            evidence_bytes: 0,
+            extra_evidence_bytes: 0,
             segment_bytes: 0,
             extra_segment_bytes: 0,
             context_bytes: 0,
@@ -36,15 +43,71 @@ impl Witnesses {
         };
         let mut segments = BTreeSet::new();
         let mut records = BTreeSet::new();
-        for entry in references.0 {
+        for entry in references.0.chain(references.1) {
             let (key, value) = entry.context(NativeStorageSnafu {
                 operation: "read witness references",
             })?;
-            let pin = RawPin::decode(&key, &value)?;
+            let pin = WitnessPin::decode(&key, &value)?;
             if pin.expires <= now {
                 continue;
             }
-            let id = pin.segment;
+            if let PinTarget::Evidence(id) = pin.target {
+                let events = super::events::Events::new(view);
+                let batch = events.batch(id)?;
+                if batch.source.tenant_id != tenant {
+                    continue;
+                }
+                if events.expiry(id)?.is_some() {
+                    return NativeStateSnafu {
+                        field: "live evidence witness payload",
+                    }
+                    .fail();
+                }
+                if segments.insert(pin.target) {
+                    usage.evidence_bytes = usage
+                        .evidence_bytes
+                        .checked_add(batch.bytes as u64)
+                        .ok_or_else(|| {
+                            NativeStateSnafu {
+                                field: "witness evidence total",
+                            }
+                            .build()
+                        })?;
+                }
+                for (first, last) in pin.ranges {
+                    let mut cursor = first;
+                    loop {
+                        let (found, slot) =
+                            events.lookup(&batch.source, cursor)?.ok_or_else(|| {
+                                NativeStateSnafu {
+                                    field: "evidence witness range",
+                                }
+                                .build()
+                            })?;
+                        if found.meta.revision != id {
+                            return NativeStateSnafu {
+                                field: "evidence witness batch",
+                            }
+                            .fail();
+                        }
+                        let end = found.meta.spans[slot].last;
+                        if end >= last {
+                            break;
+                        }
+                        cursor = end.checked_add(1).ok_or_else(|| {
+                            NativeStateSnafu {
+                                field: "evidence witness range",
+                            }
+                            .build()
+                        })?;
+                    }
+                    if exact {
+                        records.extend((first..=last).map(|cursor| (pin.target, cursor)));
+                    }
+                }
+                continue;
+            }
+            let id = pin.target.id();
             let segment = raw.segments.get(&id).ok_or_else(|| {
                 NativeStateSnafu {
                     field: "live witness segment",
@@ -60,7 +123,7 @@ impl Witnesses {
             if segment.source[1..17] != tenant {
                 continue;
             }
-            if segments.insert(id) {
+            if segments.insert(pin.target) {
                 usage.segment_bytes =
                     usage
                         .segment_bytes
@@ -94,12 +157,12 @@ impl Witnesses {
                     })?;
                 }
                 if exact {
-                    records.extend((first..=last).map(|cursor| (id, cursor)));
+                    records.extend((first..=last).map(|cursor| (pin.target, cursor)));
                 }
             }
         }
         let mut contexts = BTreeSet::new();
-        for entry in references.1 {
+        for entry in references.2 {
             let (key, _) = entry.context(NativeStorageSnafu {
                 operation: "read referenced contexts",
             })?;
@@ -136,7 +199,8 @@ impl Witnesses {
         }
         usage.charged_bytes = usage
             .segment_bytes
-            .checked_add(usage.context_bytes)
+            .checked_add(usage.evidence_bytes)
+            .and_then(|bytes| bytes.checked_add(usage.context_bytes))
             .ok_or_else(|| {
                 NativeStateSnafu {
                     field: "witness byte total",
@@ -146,22 +210,50 @@ impl Witnesses {
         Ok(Self { usage, records })
     }
 
-    fn exact(mut self, raw: &RawJournal) -> Result<WitnessUsageV1> {
+    fn exact(mut self, raw: &RawJournal, view: &DataView) -> Result<WitnessUsageV1> {
         let mut cached = None;
-        for (id, cursor) in self.records {
-            let source = &raw.segments[&id].source;
-            let (entry, slot) = raw.locate(source, cursor, self.usage.read_revision)?;
-            if entry.reference.id != id {
-                return NativeStateSnafu {
-                    field: "witness segment identity",
+        let mut evidence_records = 0_u64;
+        let mut segment_records = 0_u64;
+        for (target, cursor) in self.records {
+            let (revision, slot, native) = match target {
+                PinTarget::Evidence(id) => {
+                    let events = super::events::Events::new(view);
+                    let batch = events.batch(id)?;
+                    let (found, slot) = events.lookup(&batch.source, cursor)?.ok_or_else(|| {
+                        NativeStateSnafu {
+                            field: "witness evidence record",
+                        }
+                        .build()
+                    })?;
+                    if found.meta.revision != id {
+                        return NativeStateSnafu {
+                            field: "witness evidence batch",
+                        }
+                        .fail();
+                    }
+                    (id, slot, Some(found))
                 }
-                .fail();
-            }
-            if cached
-                .as_ref()
-                .is_none_or(|(revision, _)| *revision != entry.commit.revision)
-            {
-                cached = Some((entry.commit.revision, raw.read_entry(entry)?));
+                PinTarget::Segment(id) => {
+                    let source = &raw.segments[&id].source;
+                    let (entry, slot) = raw.locate(source, cursor, self.usage.read_revision)?;
+                    if entry.reference.id != id {
+                        return NativeStateSnafu {
+                            field: "witness segment identity",
+                        }
+                        .fail();
+                    }
+                    (entry.commit.revision, slot, None)
+                }
+            };
+            if cached.as_ref().is_none_or(|(saved, _)| *saved != revision) {
+                let commit = if let Some(batch) = native {
+                    super::events::Events::new(view)
+                        .payload(&batch, &raw.root)?
+                        .1
+                } else {
+                    raw.read_entry(&raw.index.entries[&revision])?
+                };
+                cached = Some((revision, commit));
             }
             let span = &cached
                 .as_ref()
@@ -175,24 +267,44 @@ impl Witnesses {
                 .spans[slot];
             let index = (cursor - span.first) as usize;
             let start = index.checked_sub(1).map_or(0, |prior| span.ends[prior]);
-            self.usage.referenced_bytes = self
-                .usage
-                .referenced_bytes
-                .checked_add(u64::from(span.ends[index] - start))
+            let bytes = u64::from(span.ends[index] - start);
+            let total = match target {
+                PinTarget::Evidence(_) => &mut evidence_records,
+                PinTarget::Segment(_) => &mut segment_records,
+            };
+            *total = total.checked_add(bytes).ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "witness record total",
+                }
+                .build()
+            })?;
+        }
+        self.usage.referenced_bytes =
+            evidence_records
+                .checked_add(segment_records)
                 .ok_or_else(|| {
                     NativeStateSnafu {
-                        field: "witness record total",
+                        field: "witness referenced total",
                     }
                     .build()
                 })?;
-        }
+        self.usage.extra_evidence_bytes = self
+            .usage
+            .evidence_bytes
+            .checked_sub(evidence_records)
+            .ok_or_else(|| {
+            NativeStateSnafu {
+                field: "witness evidence frame total",
+            }
+            .build()
+        })?;
         self.usage.extra_segment_bytes = self
             .usage
             .segment_bytes
-            .checked_sub(self.usage.referenced_bytes)
+            .checked_sub(segment_records)
             .ok_or_else(|| {
                 NativeStateSnafu {
-                    field: "witness frame total",
+                    field: "witness segment frame total",
                 }
                 .build()
             })?;
@@ -223,17 +335,19 @@ impl NativeStore {
         })?;
         Witnesses::read(
             &raw,
+            &view,
             tenant,
             now,
             view.revision,
             true,
             (
                 view.snapshot.prefix(References::RAW),
+                view.snapshot.prefix(References::EVIDENCE),
                 view.snapshot.prefix(References::CONTEXT_OWNER),
             ),
             |key| Records::read(key, &view.snapshot),
         )?
-        .exact(&raw)
+        .exact(&raw, &view)
     }
 }
 

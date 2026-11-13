@@ -1,6 +1,7 @@
 use super::*;
 use crate::analysis::native::retention::ExpiredSegment;
 use crate::analysis::{extraction::changes::RemovedRange, raw::RawIdentity};
+use snafu::ResultExt as _;
 
 impl DataView {
     pub(super) fn raw_removals(
@@ -85,6 +86,50 @@ impl DataView {
             }
             output.input_bytes =
                 saved + (removals.capacity() - capacity) * size_of::<RemovedRange>() + names;
+        }
+        let events = super::super::events::Events::new(self);
+        for source in selection.sources.as_slice() {
+            for row in events.spans(source, 0, u64::MAX)? {
+                control.check()?;
+                let (key, value) = row.context(crate::NativeStorageSnafu {
+                    operation: "read removed evidence spans",
+                })?;
+                let (start, index) =
+                    super::super::events::Events::decode_span(source, &key, &value)?;
+                let Some(expiry) = events.expiry(index.revision)? else {
+                    continue;
+                };
+                if expiry.revision <= after.commit_revision {
+                    continue;
+                }
+                let batch = events.batch(index.revision)?;
+                batch.check_span(source, start, &index)?;
+                if !selection.time_range().is_some_and(|(from, until)| {
+                    from <= batch.meta.intake && batch.meta.intake <= until
+                }) {
+                    continue;
+                }
+                let Some((first, last)) = selection.cursor_range() else {
+                    continue;
+                };
+                let span = &batch.meta.spans[index.slot];
+                let (first, last) = (span.first.max(first), span.last.min(last));
+                if first > last {
+                    continue;
+                }
+                output.charge(AnalysisExtractionV1::grow(
+                    &mut removals,
+                    output.input_bytes,
+                    output.limits.input_bytes,
+                )?)?;
+                output.charge(source.node_id.len())?;
+                removals.push(RemovedRange {
+                    identity: source.clone().into(),
+                    first,
+                    last,
+                    revision: expiry.revision,
+                });
+            }
         }
         removals.sort_by(|left, right| {
             (left.revision, &left.identity, left.first).cmp(&(

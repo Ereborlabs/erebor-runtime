@@ -33,13 +33,14 @@ mod backup;
 pub mod benchmark;
 mod capacity;
 mod context;
+pub(in crate::analysis) mod events;
 mod extraction;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixtures;
 mod health;
 mod history;
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use fixtures::{RawIndexFixture, StorageFault};
+pub use fixtures::{EventIndexFixture, StorageFault};
 pub(in crate::analysis) mod inputs;
 mod managed;
 pub(in crate::analysis) use managed::FindingRead;
@@ -108,10 +109,11 @@ pub struct DataWrite<'a> {
     metadata_revision: u64,
     dirty: bool,
     trace_budget: Option<(u64, usize)>,
-    processors: std::collections::BTreeMap<u64, (crate::EvidenceIntakeIdentityV1, Option<u64>)>,
     expiry: Vec<(u64, Vec<u8>, u64, u64)>,
     deletions: Vec<u64>,
     verified: super::context::VerifiedPackages,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    evidence: bool,
     _writer: MutexGuard<'a, ()>,
 }
 
@@ -241,7 +243,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 11u64.to_be_bytes());
+            tx.insert(FORMAT, 12u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -268,10 +270,10 @@ impl NativeStore {
             .fail();
         }
         let mut counts = capacity::RevisionCounts::default();
-        let mut raw = Self::recover_raw(root, &view.snapshot, &mut counts, None)?;
-        Self::restore_backlog(&mut raw, &view.snapshot, retention)?;
+        let raw = Self::recover_raw(root, &view.snapshot, &mut counts, None)?;
         view.revision = view.revision.max(raw.index.revision);
         view.raw = raw.index.clone();
+        view.validate_events(root)?;
         view.validate_recovery_ranges()?;
         view.validate_catalogue()?;
         view.validate_contexts(&mut counts)?;
@@ -323,7 +325,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 11 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 12 {
             return NativeStateSnafu {
                 field: "format version",
             }
@@ -558,10 +560,11 @@ impl NativeStore {
             metadata_revision: view.metadata_revision,
             dirty: false,
             trace_budget: None,
-            processors: Default::default(),
             expiry: Vec::new(),
             deletions: Vec::new(),
             verified: super::context::VerifiedPackages::default(),
+            #[cfg(any(test, feature = "test-fixtures"))]
+            evidence: false,
             _writer: writer,
         })
     }
@@ -630,6 +633,11 @@ impl<'a> DataWrite<'a> {
         self.stage_raw()?;
         self.transaction.insert(HEAD, self.revision.to_be_bytes());
         let stamps = stamps.into_iter().chain([NativeStore::cut(self.revision)]);
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if self.evidence {
+            self.store
+                .run_commit_hook(super::AnalysisCommitStage::BeforeAppend)?;
+        }
         let committed = self.transaction.commit_stamped(stamps);
         let receipt = match committed {
             Ok(Some(receipt)) => receipt,
@@ -647,6 +655,11 @@ impl<'a> DataWrite<'a> {
             }
         };
         let visible = (|| {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            if self.evidence {
+                self.store
+                    .run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
+            }
             #[cfg(any(test, feature = "test-fixtures"))]
             self.store
                 .run_commit_hook(super::AnalysisCommitStage::AfterMetadataSync)?;
@@ -674,10 +687,6 @@ impl<'a> DataWrite<'a> {
                 .build()
             })?;
             raw.index = view.raw.clone();
-            for (owner, (identity, floor)) in self.processors {
-                raw.budget
-                    .set_required(owner, identity.key(), identity.tenant_id, floor);
-            }
             for id in self.deletions {
                 raw.budget.deletions.remove(&id);
             }

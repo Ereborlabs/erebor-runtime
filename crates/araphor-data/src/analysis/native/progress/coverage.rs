@@ -48,32 +48,27 @@ impl DataView {
         }
         let first = input.expected_cursor + 1;
         let last = input.consumed_cursor;
-        let key = input.scope.identity.key();
-        let start = self
-            .raw
-            .ranges
-            .range((key.clone(), 0)..=(key.clone(), first))
-            .next_back()
-            .filter(|(_, (id, slot))| self.raw.entries[id].commit.spans[*slot].last >= first)
-            .map_or(first, |((_, start), _)| *start);
+        let events = super::super::events::Events::new(self);
         let mut available = 0_u64;
         let mut pending: Option<AnalysisGapV1> = None;
         let mut group = None;
         let mut next = 0;
-        for (_, &(revision, slot)) in self.raw.ranges.range((key.clone(), start)..=(key, last)) {
+        for row in events.spans(&input.scope.identity, first, last)? {
             check()?;
-            if revision > self.revision {
+            let (key, value) = row.context(crate::NativeStorageSnafu {
+                operation: "read processor input spans",
+            })?;
+            let (span_first, index) =
+                super::super::events::Events::decode_span(&input.scope.identity, &key, &value)?;
+            let entry = events.batch(index.revision)?;
+            entry.check_span(&input.scope.identity, span_first, &index)?;
+            let span = &entry.meta.spans[index.slot];
+            if span.last < first {
                 continue;
             }
-            let entry = &self.raw.entries[&revision];
-            let span = &entry.commit.spans[slot];
             let from = span.first.max(first);
             let until = span.last.min(last);
-            let expired = self
-                .raw
-                .expired
-                .get(&entry.reference.id)
-                .filter(|expired| expired.revision <= self.metadata_revision);
+            let expired = events.expiry(entry.meta.revision)?;
             if let Some(expired) = expired {
                 if profile.is_none() {
                     return crate::Error::reject_path(
@@ -81,7 +76,7 @@ impl DataView {
                         "the processor result skips unavailable raw input",
                     );
                 }
-                let current = (entry.commit.revision, entry.commit.intake, expired.revision);
+                let current = (entry.meta.revision, entry.meta.intake, expired.revision);
                 if group == Some(current)
                     && pending
                         .as_ref()

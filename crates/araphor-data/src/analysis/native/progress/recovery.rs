@@ -49,46 +49,6 @@ impl NativeStore {
         Ok(bound)
     }
 
-    pub(in crate::analysis::native) fn restore_backlog(
-        raw: &mut crate::analysis::raw::RawJournal,
-        snapshot: &fjall::BranchSnapshot,
-        limits: crate::RetentionLimitsV1,
-    ) -> Result<()> {
-        if limits.raw_max_age_ns.is_none() && limits.raw_max_bytes.is_none() {
-            return Ok(());
-        }
-        let mut tenants = BTreeSet::new();
-        for entry in snapshot.prefix(Processor::PREFIX) {
-            let (key, _) = entry.context(crate::NativeStorageSnafu {
-                operation: "restore Required input owners",
-            })?;
-            if key.len() != Processor::PREFIX.len() + 8 {
-                continue;
-            }
-            let bytes = Records::payload(&key, |key| Records::read(key, snapshot))?
-                .ok_or_else(|| Code::Missing.error("processor state"))?;
-            let state: Processor = Records::decode(&bytes)?;
-            if state.class != ProcessorClassV1::Required || state.retirement.is_some() {
-                continue;
-            }
-            if !state.scope.valid() {
-                return Err(Code::Invalid.error("processor scope"));
-            }
-            let owner = Self::number(&key[Processor::PREFIX.len()..])?;
-            raw.budget.set_required(
-                owner,
-                state.scope.identity.key(),
-                state.scope.identity.tenant_id,
-                Some(state.consumed),
-            );
-            tenants.insert(state.scope.identity.tenant_id);
-        }
-        for tenant in tenants {
-            raw.reconcile_backlog(tenant, limits)?;
-        }
-        Ok(())
-    }
-
     pub(in crate::analysis::native) fn validate_progress_recovery(
         &self,
         counts: &mut super::super::capacity::RevisionCounts,

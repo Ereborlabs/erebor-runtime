@@ -11,11 +11,9 @@ impl NativeStore {
     ) -> Result<()> {
         if selection.sources.is_all() {
             let mut sources = Vec::new();
-            for source in view.raw.sources.values() {
+            for receipt in view.source_receipts(selection.tenant_id) {
                 control.check()?;
-                let Some(receipt) = source.receipt.evidence() else {
-                    continue;
-                };
+                let receipt = receipt?;
                 let identity = &receipt.identity;
                 if identity.tenant_id != selection.tenant_id
                     || !selection.nodes.is_empty() && !selection.nodes.contains(&identity.node_id)

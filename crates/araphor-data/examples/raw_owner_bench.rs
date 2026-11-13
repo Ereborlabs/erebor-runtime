@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if !(3..=4).contains(&args.len()) {
         return Err(
-            "usage: raw_owner_bench hybrid|fjall RECORDS REPORT.json [pages|stream]".into(),
+            "usage: raw_owner_bench production|fjall RECORDS REPORT.json [pages|stream]".into(),
         );
     }
     let mode = args.get(3).map_or("pages", String::as_str);
@@ -186,8 +186,8 @@ fn main() -> Result<()> {
         |field: fn(&Sample) -> u64| distribution(&samples.iter().map(field).collect::<Vec<_>>());
     let report = json!({"backend":args[0],"records":total,"batch_records":256,
         "input_bytes":frames.iter().take(total as usize).map(|frame| frame.len() as u64).sum::<u64>(),
-        "scope":"production NativeStore segment append plus real DataWrite metadata commit versus all-Fjall candidate; two durable stages; identical benchmark result/reference/progress records",
-        "durability":{"hybrid":"raw syncfs ACK, then DataWrite SyncAll metadata commit including stage_raw",
+        "scope":"production NativeStore native Evidence versus all-Fjall candidate; two durable stages; identical benchmark result/reference/progress records",
+        "durability":{"production":"SyncAll payload+indexes+receipt ACK, then DataWrite SyncAll result/reference/progress commit",
             "fjall":"SyncAll payload+receipt ACK, then SyncAll result/reference/progress commit"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
         "candidate_layout":"source+first_cursor batch key; source/cursor result reference; no segment files, offsets, RawEntry, or RAM range index",
@@ -204,7 +204,7 @@ fn main() -> Result<()> {
         "checks":{"exact_bytes":true,"logical_positions":true,"retained_cut":true,"reopen":true,
             "durable_result_reference":true,"saved_log_resume":true,"continued_log_resume":true,
             "unaligned_page":true,"partial_tail":true,"unaligned_history":true,"historical_stream":true},
-        "limits":["not a production replacement or notification benchmark","no overlapping retries, gaps, expiry, branches, or witness reclamation",
+        "limits":["not a notification benchmark","no overlapping retries, gaps, expiry, branches, or witness reclamation",
             "same-process reopen, not killed-process or power-loss recovery","forced flush/major compaction, not sustained natural compaction",
             "point-read latency and Arrow conversion are not measured"]});
     fs::write(&args[2], serde_json::to_vec_pretty(&report)?)?;
@@ -220,7 +220,7 @@ fn main() -> Result<()> {
 
 #[test]
 fn stream_partial_history() -> Result<()> {
-    for backend in ["hybrid", "fjall"] {
+    for backend in ["production", "fjall"] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
         let mut rest = first.clone();

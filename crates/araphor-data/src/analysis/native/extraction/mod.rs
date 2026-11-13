@@ -316,8 +316,8 @@ impl NativeStore {
         let (through, exhausted) = scan.read(
             &self.root,
             |selection, after, revision, limit, control| {
-                self.raw.until(control)?.select_position_at(
-                    &view.raw,
+                self.select_input(
+                    view,
                     selection,
                     after,
                     revision,
@@ -413,8 +413,8 @@ impl NativeStore {
         let (through, exhausted) = scan.read(
             &self.root,
             |selection, after, revision, limit, control| {
-                self.raw.until(control)?.select_position_at(
-                    &view.raw,
+                self.select_input(
+                    &view,
                     selection,
                     after,
                     revision,

@@ -379,7 +379,7 @@ fn prepared_notifications_defer_basis_and_state_errors_separately() -> TestResul
     let view = store.view()?;
     let mut transaction = store.write()?;
     let mut removed = 0;
-    for entry in view.snapshot().prefix(b"\0data/ref/raw/") {
+    for entry in view.snapshot().prefix(b"\0data/ref/evidence/") {
         transaction.native().remove(entry?.0);
         removed += 1;
     }

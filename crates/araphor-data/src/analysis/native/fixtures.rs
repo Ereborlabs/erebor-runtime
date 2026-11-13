@@ -5,36 +5,25 @@ use snafu::ResultExt as _;
 use super::{records::Records, source::Sources, NativeStore, HEAD, SCHEMA};
 use crate::{EvidenceIntakeIdentityV1, NativeStateSnafu, NativeStorageSnafu, Result};
 
-pub struct RawIndexFixture {
-    index: crate::analysis::raw::RawIndex,
+pub struct EventIndexFixture {
+    revision: u64,
+    batches: usize,
+    spans: std::collections::BTreeMap<Vec<u8>, usize>,
+    receipts: std::collections::BTreeMap<Vec<u8>, crate::AnalysisSourceReceiptV1>,
 }
 
-impl RawIndexFixture {
+impl EventIndexFixture {
     pub fn counts(&self) -> (u64, usize, usize) {
-        (
-            self.index.revision,
-            self.index.entries.size(),
-            self.index.ranges.size(),
-        )
+        (self.revision, self.batches, self.spans.values().sum())
     }
-
     pub fn receipt(
         &self,
         identity: &EvidenceIntakeIdentityV1,
-    ) -> Option<super::super::AnalysisSourceReceiptV1> {
-        self.index
-            .sources
-            .get(&identity.key())
-            .and_then(|source| source.receipt.evidence())
-            .cloned()
+    ) -> Option<crate::AnalysisSourceReceiptV1> {
+        self.receipts.get(&identity.key()).cloned()
     }
-
     pub fn range_count(&self, identity: &EvidenceIntakeIdentityV1) -> usize {
-        let key = identity.key();
-        self.index
-            .ranges
-            .range((key.clone(), 0)..=(key, u64::MAX))
-            .count()
+        self.spans.get(&identity.key()).copied().unwrap_or(0)
     }
 }
 
@@ -42,13 +31,36 @@ pub enum StorageFault {
     Receipt(EvidenceIntakeIdentityV1, u64),
     Schema(u32),
     RawEnd(u64),
+    EvidencePayload(EvidenceIntakeIdentityV1, u64),
 }
 
 impl NativeStore {
-    pub fn raw_index_fixture(&self) -> Result<RawIndexFixture> {
-        Ok(RawIndexFixture {
-            index: self.view()?.raw.clone(),
-        })
+    pub fn event_index_fixture(&self) -> Result<EventIndexFixture> {
+        let view = self.view()?;
+        let events = super::events::Events::new(&view);
+        let mut fixture = EventIndexFixture {
+            revision: 0,
+            batches: 0,
+            spans: Default::default(),
+            receipts: Default::default(),
+        };
+        for row in events.batches(0) {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read event index fixture",
+            })?;
+            let batch = events.decode_batch(&key, &value)?;
+            fixture.revision = fixture.revision.max(batch.meta.revision);
+            fixture.batches += 1;
+            *fixture.spans.entry(batch.source.key()).or_default() += batch.meta.spans.len();
+        }
+        for row in view.snapshot.prefix(Sources::RECEIPTS) {
+            let (key, value) = row.context(NativeStorageSnafu {
+                operation: "read event receipt fixture",
+            })?;
+            let receipt = Sources::decode_receipt(&key, &value)?;
+            fixture.receipts.insert(receipt.identity.key(), receipt);
+        }
+        Ok(fixture)
     }
 
     pub fn set_commit_hook(
@@ -151,6 +163,13 @@ impl NativeStore {
             }
             StorageFault::Schema(version) => {
                 tx.insert(SCHEMA, u64::from(*version).to_be_bytes());
+            }
+            StorageFault::EvidencePayload(identity, first) => {
+                tx.remove(super::events::Events::key(
+                    super::events::Events::PAYLOAD,
+                    identity,
+                    *first,
+                ));
             }
             StorageFault::RawEnd(id) => {
                 let key = Sources::key(Sources::ENDS, &id.to_be_bytes());

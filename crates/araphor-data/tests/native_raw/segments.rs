@@ -71,20 +71,7 @@ fn segment_batch_requires_full_expiry() -> SegmentResult {
         },
     )?;
     for epoch in 1..=2 {
-        store.accept_validated_batch(
-            EvidenceIntakeIdentityV1 {
-                source_epoch: epoch,
-                ..source()
-            },
-            ValidatedEvidenceBatchV1 {
-                cpu_id: 0,
-                first_cursor: 1,
-                last_cursor: epoch,
-                intake_utc_ns: 100,
-                framed_records: vec![7; epoch as usize].into(),
-                frame_ends: (1..=epoch as usize).collect(),
-            },
-        )?;
+        super::seed_trace(&store, epoch as u8, epoch)?;
     }
     store.set_commit_hook(AnalysisCommitStage::AfterMetadataSync, || {
         Err(Code::Denied.error("staged deletion"))
@@ -177,20 +164,7 @@ fn segment_batch_checks_files() -> SegmentResult {
         },
     )?;
     for epoch in 1..=2 {
-        store.accept_validated_batch(
-            EvidenceIntakeIdentityV1 {
-                source_epoch: epoch,
-                ..source()
-            },
-            ValidatedEvidenceBatchV1 {
-                cpu_id: 0,
-                first_cursor: 1,
-                last_cursor: epoch,
-                intake_utc_ns: 100,
-                framed_records: vec![7; epoch as usize].into(),
-                frame_ends: (1..=epoch as usize).collect(),
-            },
-        )?;
+        super::seed_trace(&store, epoch as u8, epoch)?;
     }
     let (sender, receiver) = std::sync::mpsc::channel();
     let owned = root.clone();
@@ -312,19 +286,8 @@ fn segment_recovery_checks_ownership() -> std::result::Result<(), Box<dyn std::e
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");
     let store = AnalysisStore::open(&root)?;
-    let identity = source();
     assert_eq!(store.meta()?.commit_revision, 0);
-    store.accept_validated_batch(
-        identity.clone(),
-        ValidatedEvidenceBatchV1 {
-            cpu_id: 0,
-            first_cursor: 1,
-            last_cursor: 1,
-            intake_utc_ns: 100,
-            framed_records: b"frame".to_vec().into(),
-            frame_ends: vec![5],
-        },
-    )?;
+    let trace = super::seed_trace(&store, 1, 1)?;
     let live = segment(&root, 1)?;
     let length = fs::metadata(&live)?.len();
     let mut tail = fs::OpenOptions::new().append(true).open(&live)?;
@@ -335,7 +298,10 @@ fn segment_recovery_checks_ownership() -> std::result::Result<(), Box<dyn std::e
     let store = AnalysisStore::open(&root)?;
     assert_eq!(fs::metadata(&live)?.len(), length);
     assert_eq!(
-        store.read_page(&identity, 1)?.records[0].framed_record,
+        store
+            .read_trace(&trace, 1, &AnalysisReadControl::default())?
+            .frames[0]
+            .bytes,
         b"frame"
     );
     drop(store);
@@ -353,17 +319,7 @@ fn segment_recovery_rejects_corruption() -> std::result::Result<(), Box<dyn std:
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        store.accept_validated_batch(
-            source(),
-            ValidatedEvidenceBatchV1 {
-                cpu_id: 0,
-                first_cursor: 1,
-                last_cursor: 1,
-                intake_utc_ns: 100,
-                framed_records: b"frame".to_vec().into(),
-                frame_ends: vec![5],
-            },
-        )?;
+        super::seed_trace(&store, 1, 1)?;
         store.checkpoint()?;
         drop(store);
         let file = segment(&root, 1)?;
@@ -398,7 +354,7 @@ fn segment_recovery_rejects_corruption() -> std::result::Result<(), Box<dyn std:
 }
 
 #[test]
-fn segment_retention_keeps_witnesses() -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn batch_retention_keeps_witnesses() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");
     let limits = RetentionLimitsV1 {
@@ -444,7 +400,7 @@ fn segment_retention_keeps_witnesses() -> std::result::Result<(), Box<dyn std::e
     })?;
     let retention = EvidenceRetentionOwner::new(&store);
     let removed = retention.retain(&identity, 201)?;
-    assert_eq!(removed.removed_records, 1024);
+    assert_eq!(removed.removed_records, 3072);
     assert_eq!(removed.retained_floor, 0);
     assert_eq!(
         store.read_page(&identity, 1)?.records[0].framed_record,
@@ -454,11 +410,19 @@ fn segment_retention_keeps_witnesses() -> std::result::Result<(), Box<dyn std::e
         store.read_page(&identity, 3073),
         Err(araphor_data::Error::RetainedRangeExpired { .. })
     ));
-    assert_eq!(fs::read_dir(root.join("segments"))?.count(), 1);
+    assert_eq!(fs::read_dir(root.join("segments"))?.count(), 0);
+    assert_eq!(
+        store
+            .view()?
+            .snapshot()
+            .prefix(b"\0data/evidence/payload/")
+            .count(),
+        1
+    );
     drop(store);
     let store = AnalysisStore::open_with_retention(&root, limits)?;
     let removed = EvidenceRetentionOwner::new(&store).retain(&identity, 301)?;
-    assert_eq!(removed.removed_records, 3072);
+    assert_eq!(removed.removed_records, 1024);
     assert_eq!(removed.retained_floor, 4096);
     assert_eq!(removed.retained_bytes, 0);
     assert_eq!(fs::read_dir(root.join("segments"))?.count(), 0);

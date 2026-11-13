@@ -5,9 +5,7 @@ use crate::analysis::raw::{RawBatch, RawIdentity, RawJournal, RawKind};
 use crate::{
     AnalysisReadControl, EvidenceIntakeIdentityV1, NativeStateSnafu, NativeStorageSnafu, Result,
 };
-use crate::{
-    AnalysisReadPageV1, AnalysisSourceReceiptV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1,
-};
+use crate::{AnalysisReadPageV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1};
 use fjall::BranchSnapshot;
 use snafu::ResultExt as _;
 use std::{
@@ -43,7 +41,7 @@ impl NativeStore {
             }
         }
         let deletions = super::super::retention::ExpiredSegment::finish_files(root, snapshot)?;
-        let mut raw = RawJournal::open(root, &ends)?;
+        let mut raw = RawJournal::diagnostics(root, &ends)?;
         raw.budget.deletions.extend(deletions);
         super::super::retention::ExpiredSegment::restore(&mut raw, snapshot)?;
         for (id, end) in &recorded {
@@ -71,81 +69,24 @@ impl NativeStore {
             raw.next_segment = raw.next_segment.max(next);
         }
         let metadata = Self::number(&Self::required(snapshot, super::super::HEAD)?)?;
-        for row in snapshot.prefix(Sources::RECEIPTS) {
-            let (key, _) = row.context(NativeStorageSnafu {
-                operation: "read raw receipt keys",
-            })?;
-            let receipt: AnalysisSourceReceiptV1 =
-                Sources::read(snapshot, &key)?.ok_or_else(|| {
-                    NativeStateSnafu {
-                        field: "raw receipt baseline",
-                    }
-                    .build()
-                })?;
-            if !receipt.identity.valid()
-                || receipt.retained_floor > receipt.contiguous_cursor
-                || Sources::key(Sources::RECEIPTS, &receipt.identity.key()) != key.as_ref()
-            {
-                return NativeStateSnafu {
-                    field: "raw receipt baseline identity",
-                }
-                .fail();
+        if raw
+            .segments
+            .values()
+            .any(|segment| segment.source.first() == Some(&0))
+            || raw
+                .index
+                .entries
+                .values()
+                .any(|entry| entry.identity.evidence().is_some())
+        {
+            return NativeStateSnafu {
+                field: "legacy evidence segments in native store",
             }
-            let key = receipt.identity.key();
-            let mut contiguous = 0u64;
-            for (_, &(revision, slot)) in raw.index.ranges.range((key.clone(), 0)..=(key, u64::MAX))
-            {
-                if revision > metadata {
-                    continue;
-                }
-                let span = &raw.index.entries[&revision].commit.spans[slot];
-                if span.first > contiguous.saturating_add(1) {
-                    break;
-                }
-                contiguous = contiguous.max(span.last);
-            }
-            if contiguous != receipt.contiguous_cursor {
-                return NativeStateSnafu {
-                    field: "raw receipt original prefix",
-                }
-                .fail();
-            }
-            let source = raw.index.sources.get_mut(&receipt.identity.key());
-            match source {
-                Some(source) => {
-                    let RawReceipt::Evidence(saved) = &mut source.receipt else {
-                        return NativeStateSnafu {
-                            field: "raw receipt kind",
-                        }
-                        .fail();
-                    };
-                    if saved.identity != receipt.identity || saved.cpu_id != receipt.cpu_id {
-                        return NativeStateSnafu {
-                            field: "raw receipt binding",
-                        }
-                        .fail();
-                    }
-                    saved.contiguous_cursor =
-                        saved.contiguous_cursor.max(receipt.contiguous_cursor);
-                    saved.coverage_revision = receipt.coverage_revision;
-                    saved.retained_floor = receipt.retained_floor;
-                }
-                None => {
-                    raw.index
-                        .sources
-                        .insert_mut(receipt.identity.key(), receipt.into());
-                }
-            }
+            .fail();
         }
         super::super::trace::Traces::recover(&mut raw, snapshot)?;
         raw.index.refresh_receipts()?;
 
-        let mut births = BTreeMap::<Vec<u8>, u64>::new();
-        for (revision, entry) in raw.index.entries.iter() {
-            if entry.identity.evidence().is_some() {
-                births.entry(entry.identity.key()).or_insert(*revision);
-            }
-        }
         for row in snapshot.prefix(Sources::CHANGES) {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "recover source binding history",
@@ -171,24 +112,6 @@ impl NativeStore {
                 .fail();
             }
             counts.add(reference.source.tenant_id, 0)?;
-            births
-                .entry(reference.source.key())
-                .and_modify(|first| *first = (*first).min(revision))
-                .or_insert(revision);
-        }
-        let bindings = raw
-            .index
-            .relations
-            .range((b'B', 0)..=(b'B', u64::MAX))
-            .map(|(key, ())| *key)
-            .collect::<Vec<_>>();
-        for key in bindings {
-            raw.index.relations.remove_mut(&key);
-        }
-        raw.index.binding_revision = 0;
-        for revision in births.into_values() {
-            raw.index.relations.insert_mut((b'B', revision), ());
-            raw.index.binding_revision = raw.index.binding_revision.max(revision);
         }
         let mut expected = BTreeMap::<u64, u64>::new();
         for (revision, entry) in raw.index.entries.iter() {
@@ -225,12 +148,7 @@ impl NativeStore {
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
-        batch.validate_identity(&identity, &self.root)?;
-        if batch.intake_utc_ns == 0 {
-            return crate::Error::reject_path(&self.root, "live evidence has no intake time");
-        }
-        self.commit_raw(RawIdentity::Evidence(identity), batch.into())
-            .map(|(outcome, _)| outcome)
+        self.accept_events(identity, batch)
     }
 
     pub(in crate::analysis::native) fn commit_raw(
@@ -238,6 +156,12 @@ impl NativeStore {
         identity: RawIdentity,
         batch: RawBatch,
     ) -> Result<(EvidenceStoreOutcomeV1, RawReceipt)> {
+        if identity.evidence().is_some() {
+            return NativeStateSnafu {
+                field: "evidence cannot use diagnostic segments",
+            }
+            .fail();
+        }
         let _writer = self.writer.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "writer lock",
@@ -253,8 +177,7 @@ impl NativeStore {
         })?;
         let last = batch.last_cursor;
         let key = identity.key();
-        let diagnostic = identity.evidence().is_none();
-        if diagnostic && !raw.index.sources.contains_key(&key) {
+        if !raw.index.sources.contains_key(&key) {
             return crate::TraceInvalidSnafu {
                 reason: "the diagnostic execution is not admitted",
             }
@@ -291,17 +214,11 @@ impl NativeStore {
                     raw.index.sources[&key].receipt.clone(),
                 ));
             }
-            if diagnostic {
-                return crate::RetainedRangeExpiredSnafu {
-                    first_cursor: batch.first_cursor.max(*first),
-                    last_cursor: *last,
-                }
-                .fail();
+            return crate::RetainedRangeExpiredSnafu {
+                first_cursor: batch.first_cursor.max(*first),
+                last_cursor: *last,
             }
-            return crate::Error::reject_path(
-                &self.root,
-                "an evidence retry crosses an expired range boundary",
-            );
+            .fail();
         }
         let revision = view.revision.checked_add(1).ok_or_else(|| {
             NativeStateSnafu {
@@ -317,42 +234,10 @@ impl NativeStore {
             ));
         }
         self.require_retention()?;
-        if !diagnostic
-            && (self.retention.raw_max_age_ns.is_some() || self.retention.raw_max_bytes.is_some())
-        {
-            raw.reconcile_backlog(identity.tenant(), self.retention)?;
-            if raw.budget.required.contains_key(&key) {
-                if self.retention.raw_max_age_ns.is_some_and(|limit| {
-                    raw.budget
-                        .oldest
-                        .get(&key)
-                        .is_some_and(|intake| commit.intake.saturating_sub(*intake) >= limit)
-                }) {
-                    return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
-                }
-                if self.retention.raw_max_bytes.is_some_and(|limit| {
-                    raw.budget
-                        .protected
-                        .get(&identity.tenant())
-                        .copied()
-                        .unwrap_or(0)
-                        .checked_add(commit.body.len() as u64)
-                        .is_none_or(|bytes| bytes > limit)
-                }) {
-                    return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
-                }
-            }
-        }
-        let body_bytes = commit.body.len() as u64;
-        let prior_cursor = raw
-            .index
-            .sources
-            .get(&key)
-            .map_or(0, |source| source.receipt.cursor());
         let append = raw.prepare_append(&identity, commit)?;
         let terminal =
             matches!(&append.commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal);
-        let initial = diagnostic && !raw.segments.values().any(|segment| segment.source == key);
+        let initial = !raw.segments.values().any(|segment| segment.source == key);
         let released_slots = if terminal {
             if initial {
                 2
@@ -428,16 +313,6 @@ impl NativeStore {
         }
         raw.budget.trace_slots = slots;
         raw.budget.trace_reserve = reserve;
-        if let Err(error) = raw.extend_backlog(
-            &key,
-            identity.tenant(),
-            prior_cursor,
-            body_bytes,
-            self.retention,
-        ) {
-            self.poison();
-            return Err(error);
-        }
         let next = DataView {
             revision,
             store_uuid: view.store_uuid,
@@ -498,37 +373,12 @@ impl NativeStore {
             }
             .fail();
         }
-        let receipt = view.source_receipt(identity)?.ok_or_else(|| {
-            crate::AnalysisStateSnafu {
-                path: &self.root,
-                reason: "the raw source is absent",
-            }
-            .build()
-        })?;
-        let raw = self.raw.until(control)?;
-        self.check()?;
-        let page = raw.freeze_page(
-            &view.raw,
-            &RawReceipt::Evidence(receipt),
-            first_cursor,
-            view.revision,
-            control,
-            crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
-        )?;
-        drop(raw);
-        page.read(
-            &self.root,
-            control,
-            crate::analysis::MAX_ANALYSIS_PAGE_BYTES,
-        )
+        self.event_page(view, identity, first_cursor, control)
     }
 }
 
 impl DataWrite<'_> {
     pub(in crate::analysis::native) fn stage_raw(&mut self) -> Result<()> {
-        self.note_relation("events", self.raw.evidence_revision)?;
-        self.note_relation("source_receipts", self.raw.evidence_revision)?;
-        self.note_relation("source_bindings", self.raw.binding_revision)?;
         if self.raw.revision <= self.metadata_revision {
             return Ok(());
         }
@@ -550,17 +400,11 @@ impl DataWrite<'_> {
                 .build()
             })?;
             match &source.receipt {
-                RawReceipt::Evidence(receipt) => {
-                    let encoded = Records::encode(receipt)?;
-                    Records::stage(
-                        &mut self.transaction,
-                        Sources::key(Sources::RECEIPTS, &key),
-                        encoded,
-                    );
-                    self.transaction.insert(
-                        Sources::key(Sources::EPOCHS, &receipt.identity.epoch_key()),
-                        Records::encode(&receipt.identity)?,
-                    );
+                RawReceipt::Evidence(_) => {
+                    return NativeStateSnafu {
+                        field: "evidence in diagnostic raw index",
+                    }
+                    .fail();
                 }
                 RawReceipt::Diagnostic(receipt) => {
                     Records::stage(

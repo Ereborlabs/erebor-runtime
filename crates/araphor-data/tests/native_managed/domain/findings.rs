@@ -317,13 +317,13 @@ fn finding_basis_rejects_missing_witnesses_coverage_and_context_pins() -> TestRe
             tx.native().insert(key, u64::MAX.to_be_bytes());
             changed = 1;
         } else if matches!(fault, "raw-pin" | "missing-pin" | "expired-pin") {
-            for entry in view.snapshot().prefix(b"\0data/ref/raw/") {
+            for entry in view.snapshot().prefix(b"\0data/ref/evidence/") {
                 let (key, value) = entry?;
                 if fault != "raw-pin" {
                     tx.native().remove(key);
                 } else {
                     let mut changed = key.to_vec();
-                    let offset = b"\0data/ref/raw/".len() + 8;
+                    let offset = b"\0data/ref/evidence/".len() + 8;
                     changed[offset..offset + 8].copy_from_slice(&u64::MAX.to_be_bytes());
                     tx.native().remove(key);
                     tx.native().insert(changed, value);

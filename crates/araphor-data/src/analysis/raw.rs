@@ -834,7 +834,7 @@ impl RawJournal {
         revision: u64,
         limit: usize,
         control: &super::AnalysisReadControl,
-    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
+    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::InputRange)>> {
         self.select_position_at(
             &self.index,
             selection,
@@ -856,7 +856,7 @@ impl RawJournal {
         limit: usize,
         event_ranges: Option<&[(u64, u64)]>,
         control: &super::AnalysisReadControl,
-    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
+    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::InputRange)>> {
         if (selection.sources.as_slice().is_empty() && selection.traces.as_slice().is_empty())
             || limit == 0
         {
@@ -929,15 +929,13 @@ impl RawJournal {
                 return Ok(Some((
                     entry.identity.clone(),
                     entry.commit.kind.cpu(),
-                    super::segments::SegmentRange {
-                        segment_id: entry.reference.id,
-                        byte_start: entry.body_start + u64::from(span.start),
-                        byte_end: entry.body_start + u64::from(span.start) + u64::from(span.bytes),
-                        first_cursor: first,
-                        scan_bytes: entry.frame_bytes,
-                        intake: entry.commit.intake,
+                    super::segments::InputRange::diagnostic(
                         reader,
-                    },
+                        entry.body_start + u64::from(span.start),
+                        entry.body_start + u64::from(span.start) + u64::from(span.bytes),
+                        entry.frame_bytes,
+                        entry.commit.intake,
+                    ),
                 )));
             }
         }
@@ -1092,7 +1090,7 @@ impl RawJournal {
         revision: u64,
         time: Option<(u64, u64)>,
         limit: usize,
-    ) -> Result<Vec<super::segments::SegmentRange>> {
+    ) -> Result<Vec<super::segments::InputRange>> {
         if first > last || limit == 0 {
             return Ok(Vec::new());
         }
@@ -1116,15 +1114,13 @@ impl RawJournal {
                 continue;
             }
             let span = &entry.commit.spans[index];
-            ranges.push(super::segments::SegmentRange {
-                segment_id: entry.reference.id,
-                byte_start: entry.body_start + u64::from(span.start),
-                byte_end: entry.body_start + u64::from(span.start) + u64::from(span.bytes),
-                first_cursor: span.first,
-                scan_bytes: entry.frame_bytes,
-                intake: entry.commit.intake,
-                reader: self.freeze(entry, index, span.first, span.last)?,
-            });
+            ranges.push(super::segments::InputRange::diagnostic(
+                self.freeze(entry, index, span.first, span.last)?,
+                entry.body_start + u64::from(span.start),
+                entry.body_start + u64::from(span.start) + u64::from(span.bytes),
+                entry.frame_bytes,
+                entry.commit.intake,
+            ));
             if ranges.len() == limit {
                 break;
             }
