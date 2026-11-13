@@ -232,6 +232,44 @@ intake, read, retention, recovery, history, pin, and original-log paths.
 Result: **Done** for this correction and review. Full CI and performance
 measurements are not repeated.
 
+### Per-record storage comparison, 2026-11-13
+
+The user requests a measured comparison of one payload per record against the
+batch layout. A Fjall keyspace is an Araphor table. The required production
+branch name is `main`. The current production reference still uses `data`;
+this benchmark does not migrate that branch or diagnostic output.
+
+Compare three conditions: current production, a batch PoC, and a per-record
+PoC. Both PoC conditions use real named keyspaces and the same native atomic
+transaction API. They create no branches. Row keys contain source identity
+and cursor. Table names are not part of those keys. Both PoC conditions omit
+the span and global position indexes. Values retain original Data positions,
+intake time, CPU identity, and original framed bytes. Each source has one
+receipt. Each subscription's consumed progress remains separate from intake
+progress.
+
+Use the existing 16,384 and 262,144 records and 256-record transactions.
+Four balanced repetitions of all three conditions produce 24 finite process
+runs. Stop each run after its declared input and lifecycle checks. The run
+duration is measured, not estimated. Timings have no pass/fail threshold.
+Exact bytes, positions, receipts, saved references, native journal resume,
+continued input, partial pages, and append-only saved cuts are correctness
+gates. Use identical value integrity checks in both PoC conditions.
+
+Measure durable acceptance, the later result/reference/progress commit,
+paged reads, original-log replay, reopen, forced flush/compaction, and storage
+allocation. Use the existing raw pilot's one selected cursor per prepared batch
+for point reads in both PoC conditions. The production reference does not have
+a measured point read. Report live logical key/value bytes and retained journal
+bytes separately from filesystem allocation. Keep the production reference separate from the isolated layout
+comparison. PoC cuts filter immutable rows by their saved logical position;
+they do not qualify native historical receipt reads, updates, deletion,
+branches, expiry, overlapping retry, or witness retention. Do not infer
+production migration or notification latency from these results.
+
+Result: **Not done**. The implementer and reviewer agree on this benchmark
+scope before code changes. The general table abstraction remains deferred.
+
 ### Event flow before replacement
 
 ```text

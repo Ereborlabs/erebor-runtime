@@ -10,7 +10,9 @@ use crate::{
 };
 
 mod candidate;
+mod tables;
 use candidate::Candidate;
+use tables::Tables;
 
 const PROGRESS: &[u8] = b"benchmark/consumed";
 const RESULTS: &[u8] = b"benchmark/result/";
@@ -72,6 +74,7 @@ impl Progress {
 enum Backend {
     Production(Box<NativeStore>),
     Fjall(Candidate),
+    Tables(Tables),
 }
 
 pub struct Store {
@@ -84,22 +87,21 @@ impl Store {
         let backend = match backend {
             "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
-            _ => return Err("expected production or fjall".into()),
+            "table-batch" | "table-record" => Backend::Tables(Tables::open(
+                root,
+                source.clone(),
+                backend == "table-record",
+            )?),
+            _ => return Err("expected production, fjall, table-batch, or table-record".into()),
         };
         Ok(Self { backend, source })
-    }
-
-    fn branch(&self) -> &fjall::Branch {
-        match &self.backend {
-            Backend::Production(store) => store.branch(),
-            Backend::Fjall(store) => &store.branch,
-        }
     }
 
     fn database(&self) -> &fjall::SingleWriterTxDatabase {
         match &self.backend {
             Backend::Production(store) => store.database(),
             Backend::Fjall(store) => &store.database,
+            Backend::Tables(store) => &store.database,
         }
     }
 
@@ -114,6 +116,7 @@ impl Store {
                 Ok(())
             }
             Backend::Fjall(store) => store.append(batch),
+            Backend::Tables(store) => store.append(batch),
         }
     }
 
@@ -127,6 +130,7 @@ impl Store {
                 (view.revision(), accepted, view.snapshot().clone())
             }
             Backend::Fjall(store) => store.cut()?,
+            Backend::Tables(store) => return store.cut(),
         };
         Ok(Cut {
             revision,
@@ -150,7 +154,47 @@ impl Store {
                     .records)
             }
             Backend::Fjall(store) => store.read(first, cut),
+            Backend::Tables(store) => store.read(first, cut),
         }
+    }
+
+    pub fn point(&self, cursor: u64) -> Result<Vec<AnalysisRecordV1>> {
+        match &self.backend {
+            Backend::Tables(store) => store.point(cursor),
+            _ => Err("point comparison requires the table PoC".into()),
+        }
+    }
+
+    pub fn statistics(&self) -> Result<serde_json::Value> {
+        let counts = match &self.backend {
+            Backend::Tables(store) => store.statistics()?,
+            Backend::Production(store) => {
+                let mut counts = std::collections::BTreeMap::<String, [u64; 3]>::new();
+                for row in store.view()?.snapshot().iter() {
+                    let (key, value) = row?;
+                    let name = [
+                        (super::events::Events::PAYLOAD, "payload"),
+                        (super::events::Events::SPANS, "span"),
+                        (super::events::Events::POSITION, "position"),
+                        (super::events::Events::EXPIRED, "expiry"),
+                        (super::source::Sources::RECEIPTS, "source_receipts"),
+                        (super::source::Sources::EPOCHS, "source_epochs"),
+                    ]
+                    .into_iter()
+                    .find(|(prefix, _)| key.starts_with(prefix))
+                    .map_or("other_metadata", |(_, name)| name);
+                    let entry = counts.entry(name.into()).or_default();
+                    entry[0] += 1;
+                    entry[1] += key.len() as u64;
+                    entry[2] += value.len() as u64;
+                }
+                counts
+            }
+            Backend::Fjall(_) => return Err("statistics require production or table PoC".into()),
+        };
+        Ok(serde_json::json!({"logical_counts":counts,
+            "count_fields":["entries","key_bytes","value_bytes"],
+            "journal_bytes":self.database().inner().journal_disk_space()?}))
     }
 
     pub fn scan(
@@ -179,6 +223,7 @@ impl Store {
                 Ok(())
             }
             Backend::Fjall(store) => store.scan(cut, visit),
+            Backend::Tables(store) => store.scan(cut, visit),
         }
     }
 
@@ -207,12 +252,17 @@ impl Store {
                 tx.insert(super::HEAD, (cut.revision + 1).to_be_bytes());
                 tx.commit()?.ok_or("missing native progress commit")?;
             }
+            Backend::Tables(store) => store.consume(&progress)?,
         }
         Ok(())
     }
 
     pub fn saved(&self, last: Option<u64>) -> Result<Cut> {
-        let snapshot = self.branch().snapshot()?;
+        let snapshot = match &self.backend {
+            Backend::Production(store) => store.branch().snapshot()?,
+            Backend::Fjall(store) => store.branch.snapshot()?,
+            Backend::Tables(store) => return store.saved(last),
+        };
         let last = match last {
             Some(last) => last,
             None => u64::from_be_bytes(
@@ -332,6 +382,7 @@ impl Store {
                     }
                 }
             }
+            Backend::Tables(store) => return store.replay(cut, visit),
         }
         Ok(count)
     }

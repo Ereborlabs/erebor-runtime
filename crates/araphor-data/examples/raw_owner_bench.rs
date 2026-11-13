@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::{fs, time::Instant};
 
 use araphor_data::{
@@ -76,6 +78,19 @@ fn replay(store: &Store, cut: &Cut, frames: &[Vec<u8>], last: u64) -> Result<f64
     Ok(started.elapsed().as_secs_f64())
 }
 
+fn points(store: &Store, frames: &[Vec<u8>], total: u64) -> Result<serde_json::Value> {
+    let mut samples = Vec::new();
+    for index in 0..total / 256 {
+        let cursor = index * 256 + (index * 37) % 256 + 1;
+        let started = Instant::now();
+        let rows = store.point(cursor)?;
+        samples.push(started.elapsed().as_nanos() as u64);
+        assert_eq!(rows.len(), 1);
+        verify(&rows, frames, cursor);
+    }
+    Ok(json!({"read":distribution(&samples),"samples_ns":samples}))
+}
+
 fn main() -> Result<()> {
     if cfg!(debug_assertions) {
         return Err("use a release build".into());
@@ -83,7 +98,7 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if !(3..=4).contains(&args.len()) {
         return Err(
-            "usage: raw_owner_bench production|fjall RECORDS REPORT.json [pages|stream]".into(),
+            "usage: raw_owner_bench production|fjall|table-batch|table-record RECORDS REPORT.json [pages|stream]".into(),
         );
     }
     let mode = args.get(3).map_or("pages", String::as_str);
@@ -134,6 +149,10 @@ fn main() -> Result<()> {
     assert_eq!(store.saved(None)?.accepted, total);
     let written = size(&root)?;
     let warm_scan = scan(&store, &frames, total, mode)?;
+    let point_scope = args[0].starts_with("table-");
+    let warm_points = point_scope
+        .then(|| points(&store, &frames, total))
+        .transpose()?;
     let historical = store.read(total / 2 - 255, Some(&middle))?;
     assert_eq!(historical.len(), 256);
     verify(&historical, &frames, total / 2 - 255);
@@ -143,12 +162,23 @@ fn main() -> Result<()> {
     let maintenance = store.maintain()?;
     let maintained = size(&root)?;
     let table_scan = scan(&store, &frames, total, mode)?;
+    let table_points = point_scope
+        .then(|| points(&store, &frames, total))
+        .transpose()?;
+    let statistics = if args[0] == "fjall" {
+        None
+    } else {
+        Some(store.statistics()?)
+    };
     drop(store);
     let started = Instant::now();
     let mut store = Store::open(&root, &args[0], source())?;
     let reopen_s = started.elapsed().as_secs_f64();
     assert_eq!(store.cut()?.accepted, total);
     let reopened_scan = scan(&store, &frames, total, mode)?;
+    let reopened_points = point_scope
+        .then(|| points(&store, &frames, total))
+        .transpose()?;
     let middle = store.saved(Some(total / 2))?;
     let retained = store.read(1, Some(&middle))?;
     assert_eq!(retained.len(), 256);
@@ -186,11 +216,18 @@ fn main() -> Result<()> {
         |field: fn(&Sample) -> u64| distribution(&samples.iter().map(field).collect::<Vec<_>>());
     let report = json!({"backend":args[0],"records":total,"batch_records":256,
         "input_bytes":frames.iter().take(total as usize).map(|frame| frame.len() as u64).sum::<u64>(),
-        "scope":"production NativeStore native Evidence versus all-Fjall candidate; two durable stages; identical benchmark result/reference/progress records",
+        "scope":"production NativeStore reference and Fjall layout candidates; two durable stages; identical input, output, positions, and reference checks",
         "durability":{"production":"SyncAll payload+indexes+receipt ACK, then DataWrite SyncAll result/reference/progress commit",
-            "fjall":"SyncAll payload+receipt ACK, then SyncAll result/reference/progress commit"},
+            "fjall":"SyncAll payload+receipt ACK, then SyncAll result/reference/progress commit",
+            "table-batch":"SyncAll across native tables, then SyncAll result/reference/progress commit",
+            "table-record":"SyncAll across native tables, then SyncAll result/reference/progress commit"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
-        "candidate_layout":"source+first_cursor batch key; source/cursor result reference; no segment files, offsets, RawEntry, or RAM range index",
+        "candidate_layout":match args[0].as_str() {
+            "table-record" => "real keyspaces; source+cursor record key; original position/intake/CPU in value; no span or global position index",
+            "table-batch" => "real keyspaces; source+first_cursor batch key; original position/intake/CPU in value; no span or global position index",
+            _ => "source+first_cursor batch key; source/cursor result reference; production retains its current indexes",
+        },
+        "history_scope":if args[0].starts_with("table-") { "immutable append-only rows filtered by saved logical cut; no historical receipt/update/delete qualification; no branch integration" } else { "existing native retained branch cuts" },
         "progress_scope":"common benchmark-owned result and consumed-cut record; no ManagedCommit/commit_result/processor or witness-pin qualification",
         "read_scope":"256-record pages; pages mode captures each read separately; stream mode uses one fixed view and native forward scan; includes frame validation and exact-byte verification; no Arrow conversion",
         "scan_mode":mode,
@@ -199,6 +236,8 @@ fn main() -> Result<()> {
         "capture":distribution_for(|sample|sample.capture_ns),"progress":distribution_for(|sample|sample.progress_ns),
         "append_samples":samples,"written_bytes":written,"maintained_bytes":maintained,
         "warm_scan":warm_scan,"after_maintenance_scan":table_scan,"reopened_scan":reopened_scan,
+        "warm_points":warm_points,"after_maintenance_points":table_points,"reopened_points":reopened_points,
+        "statistics":statistics,
         "maintenance":maintenance,"reopen_s":reopen_s,"replay_s":replay_s,
         "resume_s":resume_s,"continue_s":continue_s,
         "checks":{"exact_bytes":true,"logical_positions":true,"retained_cut":true,"reopen":true,
@@ -206,7 +245,7 @@ fn main() -> Result<()> {
             "unaligned_page":true,"partial_tail":true,"unaligned_history":true,"historical_stream":true},
         "limits":["not a notification benchmark","no overlapping retries, gaps, expiry, branches, or witness reclamation",
             "same-process reopen, not killed-process or power-loss recovery","forced flush/major compaction, not sustained natural compaction",
-            "point-read latency and Arrow conversion are not measured"]});
+            "point reads compare the two table PoCs only; Arrow conversion is not measured"]});
     fs::write(&args[2], serde_json::to_vec_pretty(&report)?)?;
     println!(
         "{} records={} cycle_records_s={:.1} reopen_ms={:.3}",
@@ -220,7 +259,7 @@ fn main() -> Result<()> {
 
 #[test]
 fn stream_partial_history() -> Result<()> {
-    for backend in ["production", "fjall"] {
+    for backend in ["production", "fjall", "table-batch", "table-record"] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
         let mut rest = first.clone();
@@ -247,6 +286,33 @@ fn stream_partial_history() -> Result<()> {
             if phase == 2 {
                 drop(store);
                 store = Store::open(&root, backend, source())?;
+            }
+            if backend.starts_with("table-") {
+                for cursor in [1, 17, 18, 128, 256] {
+                    let rows = store.point(cursor)?;
+                    assert_eq!(rows.len(), 1);
+                    assert_eq!(rows[0].cursor, cursor);
+                    assert_eq!(rows[0].framed_record, frames[cursor as usize - 1]);
+                    assert_eq!(
+                        rows[0].position.commit_revision,
+                        if cursor <= 17 { 1 } else { 2 }
+                    );
+                    assert_eq!(
+                        rows[0].position.ordinal,
+                        if cursor <= 17 {
+                            cursor - 1
+                        } else {
+                            cursor - 18
+                        } as u32
+                    );
+                }
+                let stats = store.statistics()?;
+                assert_eq!(
+                    stats["logical_counts"]["events"][0],
+                    if backend == "table-record" { 256 } else { 2 }
+                );
+                assert_eq!(stats["logical_counts"]["source_receipts"][0], 1);
+                assert_eq!(stats["logical_counts"]["source_epochs"][0], 1);
             }
             for (at, total) in [(None, 256), (Some(&cut), 17)] {
                 let mut count = 0;
