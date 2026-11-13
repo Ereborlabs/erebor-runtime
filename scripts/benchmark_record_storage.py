@@ -15,7 +15,12 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--binary", type=Path, default=Path("target/release/examples/raw_owner_bench"))
     parser.add_argument("--compact", action="store_true")
+    parser.add_argument("--compression", action="store_true")
+    parser.add_argument("--experimental-binary", type=Path)
+    parser.add_argument("--build-manifest", type=Path)
     args = parser.parse_args()
+    if args.compression and (not args.experimental_binary or not args.build_manifest):
+        parser.error("--compression requires --experimental-binary and --build-manifest")
     binary = args.binary.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -27,6 +32,11 @@ def main():
         backends = ["table-batch", "table-record", "compact-batch", "compact-record"]
         orders = [[backends[index] for index in order] for order in
                   [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
+    if args.compression:
+        backends = ["compact-batch", "compact-record", "compact-lz4-batch", "compact-lz4-record"]
+        orders = [[backends[index] for index in order] for order in
+                  [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
+    binaries = {name: (args.experimental_binary.resolve() if "-lz4-" in name else binary) for name in backends}
     sources = [Path("crates/araphor-data/examples/raw_owner_bench.rs"),
                Path("crates/araphor-data/examples/raw_storage/common.rs"),
                Path("crates/araphor-analysis-types/src/source.rs"),
@@ -56,7 +66,14 @@ def main():
                    "forced maintenance, not sustained natural compaction or power-loss recovery",
                    "CPU and RSS include all scans, points, replay, and integrity checks"],
     }
-    if args.compact:
+    if args.compression:
+        manifest = json.loads(args.build_manifest.read_text())
+        assert hashlib.sha256(binary.read_bytes()).hexdigest() == manifest["default"]["binary_sha256"]
+        assert hashlib.sha256(args.experimental_binary.read_bytes()).hexdigest() == manifest["experimental"]["binary_sha256"]
+        provenance["build_manifest"] = manifest
+        provenance["scope"] = "compact batch/record; default versus combined all-level SST/index LZ4 and WAL threshold1; post-consumption journal collection"
+    provenance["binaries"] = {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in binaries.items()}
+    if args.compact or args.compression:
         provenance["limits"] = [item for item in provenance["limits"] if not item.startswith("production")]
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
@@ -69,7 +86,7 @@ def main():
                 started = time.perf_counter()
                 with (output / f"{stem}.log").open("w") as log:
                     subprocess.run(["/usr/bin/time", "-v", "-o", str(output / f"{stem}.time"),
-                                    str(binary), backend, str(count), str(report)],
+                                    str(binaries[backend]), backend, str(count), str(report), *( ["pages", "gc"] if args.compression else [])],
                                    stdout=log, stderr=subprocess.STDOUT, check=True)
                 run = json.loads(report.read_text())
                 assert run["backend"] == backend and run["records"] == count
@@ -88,6 +105,10 @@ def main():
                 else:
                     assert counts["payload"][0] == counts["span"][0] == counts["position"][0] == count // 256
                     assert run["reopened_points"] is None
+                if args.compression:
+                    gc = run["post_gc"]
+                    assert all(gc["checks"].values()) and gc["records"] == count + 512
+                    assert gc["journals_after"][0] < gc["journals_before"][0]
                 run["pair"] = pair
                 run["process_wall_s"] = time.perf_counter() - started
                 run["process_usage"] = (output / f"{stem}.time").read_text()
@@ -99,7 +120,7 @@ def main():
     for count in provenance["dataset_records"]:
         peers = [run for run in runs if run["records"] == count]
         assert len({run["input_bytes"] for run in peers}) == 1
-        if args.compact:
+        if args.compact or args.compression:
             for granularity in ["batch", "record"]:
                 assert len({run["statistics"]["logical_counts"]["events"][2] for run in peers
                             if run["backend"].endswith(granularity)}) == 1
@@ -124,6 +145,18 @@ def main():
                 row[phase] = statistics.median(run[phase] for run in selected)
             row["maintenance"] = {field: statistics.median(run["maintenance"][field] for run in selected)
                                   for field in selected[0]["maintenance"]}
+            if args.compression:
+                row["post_gc"] = {
+                    "records": count + 512,
+                    "allocated_mib": statistics.median(run["post_gc"]["after_bytes"][1] / 1048576 for run in selected),
+                    "before_allocated_mib": statistics.median(run["post_gc"]["before_bytes"][1] / 1048576 for run in selected),
+                    "journal_allocated_mib": statistics.median(run["post_gc"]["journals_after"][2] / 1048576 for run in selected),
+                    "before_journal_allocated_mib": statistics.median(run["post_gc"]["journals_before"][2] / 1048576 for run in selected),
+                    "journal_files_removed": [run["post_gc"]["journals_before"][0] - run["post_gc"]["journals_after"][0] for run in selected],
+                    "reopen_s": statistics.median(run["post_gc"]["reopen_s"] for run in selected),
+                    "scan_events_s": statistics.median((count+512) / run["post_gc"]["scan"]["elapsed_s"] for run in selected),
+                    "points": distribution([value for run in selected for value in run["post_gc"]["points"]["samples_ns"]]),
+                }
             row["logical_groups"] = {name: [statistics.median(run["statistics"]["logical_counts"][name][index]
                                                               for run in selected) for index in range(3)]
                                      for name in selected[0]["statistics"]["logical_counts"]}
@@ -132,13 +165,13 @@ def main():
     for count in provenance["dataset_records"]:
         for pair in range(1, 5):
             selected = {run["backend"]: run for run in runs if run["records"] == count and run["pair"] == pair}
-            batch, record = selected["table-batch"], selected["table-record"]
+            batch, record = (selected["compact-batch"], selected["compact-record"]) if args.compression else (selected["table-batch"], selected["table-record"])
             pairs.append({"records": count, "pair": pair,
                           "record_cycle_rate_over_batch": record["write_records_s"] / batch["write_records_s"],
                           "record_space_over_batch": record["maintained_bytes"][1] / batch["maintained_bytes"][1],
                           "record_reopened_rate_over_batch": batch["reopened_scan"]["elapsed_s"] / record["reopened_scan"]["elapsed_s"],
                           "batch_point_median_over_record": batch["reopened_points"]["read"]["median_ms"] / record["reopened_points"]["read"]["median_ms"]})
-    if args.compact:
+    if args.compact and not args.compression:
         for row in pairs:
             selected = {run["backend"]: run for run in runs if run["records"] == row["records"] and run["pair"] == row["pair"]}
             compact_batch, compact_record = selected["compact-batch"], selected["compact-record"]
@@ -149,6 +182,12 @@ def main():
                 "compact_record_space_over_batch": compact_record["maintained_bytes"][1] / compact_batch["maintained_bytes"][1],
                 "compact_batch_point_median_over_record": compact_batch["reopened_points"]["read"]["median_ms"] / compact_record["reopened_points"]["read"]["median_ms"],
             })
+    if args.compression:
+        for row in pairs:
+            selected = {run["backend"]: run for run in runs if run["records"] == row["records"] and run["pair"] == row["pair"]}
+            cb, cr = selected["compact-lz4-batch"], selected["compact-lz4-record"]
+            row.update({"compressed_record_cycle_over_batch": cr["write_records_s"] / cb["write_records_s"],
+                        "compressed_record_post_gc_space_over_batch": cr["post_gc"]["after_bytes"][1] / cb["post_gc"]["after_bytes"][1]})
     result = {"provenance": provenance, "summary": summary, "paired_ratios": pairs,
               "process_runs": len(runs), "process_wall_s": sum(run["process_wall_s"] for run in runs)}
     (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n")

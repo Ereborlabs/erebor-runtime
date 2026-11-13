@@ -330,6 +330,36 @@ the release build, changed-file formatting, the runner, and the independent
 measurement review pass. Full CI is not run. Production storage and both
 engine forks remain unchanged.
 
+### Native compression and consumed-journal comparison, 2026-11-13
+
+The user requests benchmark-only tests of native compression and journal
+reclamation. Production continues to store event payloads in batches. Keep
+production settings, the storage format, and committed engine source unchanged.
+
+Compare compact batch and record layouts under the default policy and under
+all-level native data/index LZ4 plus a journal value threshold of one byte.
+The journal threshold has no public setter. Build a separate experimental
+binary with the reviewed one-line patch, then restore the engine checkout
+and verify it is clean. Retain the unapplied patch, build logs, original and
+experimental source hashes, and both binary hashes. No other build runs while
+the temporary patch is applied. The treatment measures the combined policy;
+do not attribute its result to one compression setting.
+
+Keep the existing dataset sizes, 256-record transactions, original assertions,
+and four balanced orders. Four conditions produce 32 finite process runs.
+All older replay, history, reopen, and continuation checks run before GC.
+Then rotate the journal, append and consume one additional 256-record batch,
+and reload its durable saved cursor. Flush and acknowledge only that cursor.
+Collect journals through the native API. Measure actual file removal and
+allocated blocks before and after collection. Reopen, verify older logical
+event cuts, resume the saved cursor, and verify one further appended batch.
+These extra batches form a separate untimed GC scenario. The timed core input
+and its measurement boundary do not change.
+
+Result: **Not done**. The implementer and reviewer agree on this experiment
+before code changes. The test does not qualify production table history,
+multiple durable consumers, power-loss recovery, or notification latency.
+
 ### Event flow before replacement
 
 ```text

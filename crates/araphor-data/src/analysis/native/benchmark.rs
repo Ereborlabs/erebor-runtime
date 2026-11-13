@@ -87,13 +87,15 @@ impl Store {
         let backend = match backend {
             "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
-            "table-batch" | "table-record" | "compact-batch" | "compact-record" => Backend::Tables(Tables::open(
+            "table-batch" | "table-record" | "compact-batch" | "compact-record"
+            | "compact-lz4-batch" | "compact-lz4-record" => Backend::Tables(Tables::open(
                 root,
                 source.clone(),
                 backend.ends_with("-record"),
                 backend.starts_with("compact-"),
+                backend.contains("-lz4-"),
             )?),
-            _ => return Err("expected production, fjall, table-batch, table-record, compact-batch, or compact-record".into()),
+            _ => return Err("unknown benchmark backend".into()),
         };
         Ok(Self { backend, source })
     }
@@ -386,6 +388,34 @@ impl Store {
             Backend::Tables(store) => return store.replay(cut, visit),
         }
         Ok(count)
+    }
+
+    pub fn rotate(&self) -> Result<()> {
+        self.database().inner().rotate_journal()?;
+        Ok(())
+    }
+
+    pub fn flush(&self) -> Result<()> {
+        self.database().inner().flush_memtables()?;
+        Ok(())
+    }
+
+    pub fn collect(&self, cut: &Cut) -> Result<()> {
+        if self.saved(None)? != *cut {
+            return Err("journal floor is not the durable consumer cut".into());
+        }
+        self.database()
+            .inner()
+            .retain_after(cut.journal().ok_or("missing durable journal cursor")?)?;
+        self.database().inner().collect_journals()?;
+        Ok(())
+    }
+
+    pub fn journal_usage(&self) -> Result<[u64; 3]> {
+        match &self.backend {
+            Backend::Tables(store) => store.journal_usage(),
+            _ => Err("journal measurement requires the table PoC".into()),
+        }
     }
 
     pub fn maintain(&self) -> Result<serde_json::Value> {

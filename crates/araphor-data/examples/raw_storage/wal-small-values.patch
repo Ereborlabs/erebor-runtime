@@ -1,0 +1,12 @@
+diff --git a/src/db_config.rs b/src/db_config.rs
+--- a/src/db_config.rs
++++ b/src/db_config.rs
+@@ -96,7 +96,7 @@
+             #[cfg(feature = "lz4")]
+             journal_compression_type: CompressionType::Lz4,
+ 
+-            journal_compression_threshold: 4_096,
++            journal_compression_threshold: 1,
+ 
+             cache: Arc::new(Cache::with_capacity_bytes(/* 32 MiB */ 32 * 1_024 * 1_024)),
+ 

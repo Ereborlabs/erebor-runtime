@@ -96,20 +96,25 @@ fn main() -> Result<()> {
         return Err("use a release build".into());
     }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if !(3..=4).contains(&args.len()) {
+    if !(3..=5).contains(&args.len()) {
         return Err(
-            "usage: raw_owner_bench production|fjall|table-batch|table-record|compact-batch|compact-record RECORDS REPORT.json [pages|stream]".into(),
+            "usage: raw_owner_bench BACKEND RECORDS REPORT.json [pages|stream] [gc]".into(),
         );
     }
     let mode = args.get(3).map_or("pages", String::as_str);
     if !["pages", "stream"].contains(&mode) {
         return Err("expected pages or stream".into());
     }
+    let gc_scope = match args.get(4).map(String::as_str) {
+        None => false,
+        Some("gc") if args[0].starts_with("compact-") => true,
+        _ => return Err("gc comparison requires compact table storage".into()),
+    };
     let total: u64 = args[1].parse()?;
     if total < 512 || total % 512 != 0 {
         return Err("records must be a multiple of 512 and at least 512".into());
     }
-    let (batches, frames) = inputs(total + 256)?;
+    let (batches, frames) = inputs(total + if gc_scope { 768 } else { 256 })?;
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let started = Instant::now();
@@ -212,6 +217,55 @@ fn main() -> Result<()> {
         Ok(())
     })?;
     assert_eq!(historical_rows, total / 2);
+    let post_gc = if gc_scope {
+        store.rotate()?;
+        store.append(batches[(total / 256 + 1) as usize].clone())?;
+        let input = store.cut()?;
+        store.consume(total + 257, &input)?;
+        let saved = store.saved(None)?;
+        assert_eq!(saved.accepted, total + 512);
+        store.flush()?;
+        let before = size(&root)?;
+        let journals_before = store.journal_usage()?;
+        let started = Instant::now();
+        store.collect(&saved)?;
+        let collect_s = started.elapsed().as_secs_f64();
+        let after = size(&root)?;
+        let journals_after = store.journal_usage()?;
+        assert!(journals_after[0] < journals_before[0]);
+        let retained = store.read(1, Some(&middle))?;
+        verify(&retained, &frames, 1);
+        assert_eq!(retained.len(), 256);
+        drop(store);
+        let started = Instant::now();
+        store = Store::open(&root, &args[0], source())?;
+        let reopen_s = started.elapsed().as_secs_f64();
+        assert_eq!(store.saved(None)?, saved);
+        let scan = scan(&store, &frames, total + 512, mode)?;
+        let points = points(&store, &frames, total + 512)?;
+        let retained = store.read(1, Some(&middle))?;
+        verify(&retained, &frames, 1);
+        assert_eq!(retained.len(), 256);
+        replay(&store, &saved, &frames, total + 512)?;
+        store.append(batches[(total / 256 + 2) as usize].clone())?;
+        replay(&store, &saved, &frames, total + 768)?;
+        let input = store.cut()?;
+        store.consume(total + 513, &input)?;
+        assert_eq!(store.saved(None)?.accepted, total + 768);
+        let continued = store.read(total + 513, None)?;
+        assert_eq!(continued.len(), 256);
+        verify(&continued, &frames, total + 513);
+        Some(
+            json!({"records":total+512,"before_bytes":before,"after_bytes":after,
+            "journals_before":journals_before,"journals_after":journals_after,
+            "journal_fields":["files","logical_bytes","allocated_bytes"],
+            "collect_s":collect_s,"reopen_s":reopen_s,"scan":scan,"points":points,
+            "checks":{"journal_reclaimed":true,"historical_rows":true,"reopen":true,
+                "saved_resume":true,"append_after_gc":true}}),
+        )
+    } else {
+        None
+    };
     let distribution_for =
         |field: fn(&Sample) -> u64| distribution(&samples.iter().map(field).collect::<Vec<_>>());
     let report = json!({"backend":args[0],"records":total,"batch_records":256,
@@ -222,11 +276,13 @@ fn main() -> Result<()> {
             "table-batch":"SyncAll across native tables, then SyncAll result/reference/progress commit",
             "table-record":"SyncAll across native tables, then SyncAll result/reference/progress commit",
             "compact-batch":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit",
-            "compact-record":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit"},
+            "compact-record":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit",
+            "compact-lz4-batch":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest",
+            "compact-lz4-record":"same durable boundaries, all-level native SST/index LZ4, WAL threshold from experimental build manifest"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
         "candidate_layout":match args[0].as_str() {
-            "compact-record" => "real keyspaces; durable source ID8+cursor8 record key; original position/intake/CPU in value; no span or global position index",
-            "compact-batch" => "real keyspaces; durable source ID8+first_cursor8 batch key; original position/intake/CPU in value; no span or global position index",
+            "compact-record" | "compact-lz4-record" => "real keyspaces; durable source ID8+cursor8 record key; original position/intake/CPU in value; no span or global position index",
+            "compact-batch" | "compact-lz4-batch" => "real keyspaces; durable source ID8+first_cursor8 batch key; original position/intake/CPU in value; no span or global position index",
             "table-record" => "real keyspaces; source+cursor record key; original position/intake/CPU in value; no span or global position index",
             "table-batch" => "real keyspaces; source+first_cursor batch key; original position/intake/CPU in value; no span or global position index",
             _ => "source+first_cursor batch key; source/cursor result reference; production retains its current indexes",
@@ -242,6 +298,7 @@ fn main() -> Result<()> {
         "warm_scan":warm_scan,"after_maintenance_scan":table_scan,"reopened_scan":reopened_scan,
         "warm_points":warm_points,"after_maintenance_points":table_points,"reopened_points":reopened_points,
         "statistics":statistics,
+        "post_gc":post_gc,
         "maintenance":maintenance,"reopen_s":reopen_s,"replay_s":replay_s,
         "resume_s":resume_s,"continue_s":continue_s,
         "checks":{"exact_bytes":true,"logical_positions":true,"retained_cut":true,"reopen":true,
@@ -270,6 +327,8 @@ fn stream_partial_history() -> Result<()> {
         "table-record",
         "compact-batch",
         "compact-record",
+        "compact-lz4-batch",
+        "compact-lz4-record",
     ] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
@@ -353,7 +412,12 @@ fn stream_partial_history() -> Result<()> {
 
 #[test]
 fn compact_sources_reopen() -> Result<()> {
-    for backend in ["compact-batch", "compact-record"] {
+    for backend in [
+        "compact-batch",
+        "compact-record",
+        "compact-lz4-batch",
+        "compact-lz4-record",
+    ] {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join("store");
         let (batches, frames) = inputs(256)?;
@@ -414,6 +478,64 @@ fn compact_sources_reopen() -> Result<()> {
             assert_eq!(stats["logical_counts"]["sources"][0], 2);
             assert_eq!(stats["logical_counts"]["source_ids"][0], 2);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn consumed_journals_reopen() -> Result<()> {
+    for backend in [
+        "compact-batch",
+        "compact-record",
+        "compact-lz4-batch",
+        "compact-lz4-record",
+    ] {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("store");
+        let (batches, frames) = inputs(1024)?;
+        let mut store = Store::open(&root, backend, source())?;
+        for batch in &batches[..2] {
+            store.append(batch.clone())?;
+            store.consume(batch.first_cursor, &store.cut()?)?;
+        }
+        let old = store.saved(Some(256))?;
+        assert_eq!(store.replay(&old, |_, _, _| Ok(()))?, 256);
+        store.rotate()?;
+        store.append(batches[2].clone())?;
+        store.consume(513, &store.cut()?)?;
+        let saved = store.saved(None)?;
+        store.flush()?;
+        let before = store.journal_usage()?;
+        store.collect(&saved)?;
+        assert!(store.journal_usage()?[0] < before[0]);
+        drop(store);
+        let mut store = Store::open(&root, backend, source())?;
+        assert_eq!(store.saved(None)?, saved);
+        let historical = store.read(1, Some(&old))?;
+        assert_eq!(historical.len(), 256);
+        verify(&historical, &frames, 1);
+        assert_eq!(
+            store.replay(&saved, |_, _, _| Err(
+                "consumed input repeated after GC".into()
+            ))?,
+            0
+        );
+        store.append(batches[3].clone())?;
+        let mut expected = 769;
+        assert_eq!(
+            store.replay(&saved, |cursor, bytes, position| {
+                assert_eq!(cursor, expected);
+                assert_eq!(bytes, frames[cursor as usize - 1]);
+                assert_eq!(position.commit_revision, 7);
+                assert_eq!(position.ordinal, (cursor - 769) as u32);
+                expected += 1;
+                Ok(())
+            })?,
+            256
+        );
+        assert_eq!(expected, 1025);
+        store.consume(769, &store.cut()?)?;
+        assert_eq!(store.saved(None)?.accepted, 1024);
     }
     Ok(())
 }

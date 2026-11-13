@@ -45,13 +45,28 @@ impl Tables {
         source: EvidenceIntakeIdentityV1,
         records: bool,
         compact: bool,
+        compressed: bool,
     ) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
             .journal_cdc()
             .open()?;
-        let source_ids = database.keyspace("source_ids", Default::default)?;
-        let sources = database.keyspace("sources", Default::default)?;
+        let create = || {
+            let options = fjall::KeyspaceCreateOptions::default();
+            if compressed {
+                options
+                    .data_block_compression_policy(fjall::config::CompressionPolicy::all(
+                        fjall::CompressionType::Lz4,
+                    ))
+                    .index_block_compression_policy(fjall::config::CompressionPolicy::all(
+                        fjall::CompressionType::Lz4,
+                    ))
+            } else {
+                options
+            }
+        };
+        let source_ids = database.keyspace("source_ids", create)?;
+        let sources = database.keyspace("sources", create)?;
         let prefix = if compact {
             let snapshot = database.read_tx();
             match snapshot.get(&source_ids, source.key())? {
@@ -73,11 +88,11 @@ impl Tables {
             Some(source.key())
         };
         Ok(Self {
-            events: database.keyspace("events", Default::default)?,
-            receipts: database.keyspace("source_receipts", Default::default)?,
-            epochs: database.keyspace("source_epochs", Default::default)?,
-            state: database.keyspace("benchmark_state", Default::default)?,
-            results: database.keyspace("benchmark_results", Default::default)?,
+            events: database.keyspace("events", create)?,
+            receipts: database.keyspace("source_receipts", create)?,
+            epochs: database.keyspace("source_epochs", create)?,
+            state: database.keyspace("benchmark_state", create)?,
+            results: database.keyspace("benchmark_results", create)?,
             database,
             source_ids,
             sources,
@@ -515,6 +530,25 @@ impl Tables {
             }
         }
         Ok(count)
+    }
+
+    pub fn journal_usage(&self) -> Result<[u64; 3]> {
+        use std::os::unix::fs::MetadataExt as _;
+        let mut usage = [0; 3];
+        for entry in std::fs::read_dir(self.root.join("fjall"))? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jnl")
+            {
+                let metadata = entry.metadata()?;
+                usage[0] += 1;
+                usage[1] += metadata.len();
+                usage[2] += metadata.blocks() * 512;
+            }
+        }
+        Ok(usage)
     }
 
     pub fn statistics(&self) -> Result<std::collections::BTreeMap<String, [u64; 3]>> {
