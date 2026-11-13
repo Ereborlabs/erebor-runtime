@@ -303,5 +303,14 @@ to write than one packed value. Keep the simpler packed layout if selective
 reads do not justify that cost on the approved workload. No new latency or
 throughput number is claimed here.
 
-Result: **Done for the proposed design and source review. Not done for
-implementation, benchmark approval, or performance qualification.**
+The [approved benchmark results](../research/results/araphor-column-storage-2026-11-13.md)
+record 36 passing measured processes, three focused tests, and three smoke
+processes. At 262,144 records, separate columns give a paired median 1.904-fold
+gain for two numeric columns and 1.310-fold for the CPU-filtered numeric read.
+They use 72.992 MiB versus 63.590 MiB for packed Arrow and give no complete-cycle
+gain. Full and original-record reads are slower than packed Arrow. Keep packed
+batches as the general default on this evidence. Read the result for cache,
+codec, retained-WAL, and production qualification limits.
+
+Result: **Done for the proposed design, source review, and approved benchmark.
+Production implementation and qualification remain Not done.**

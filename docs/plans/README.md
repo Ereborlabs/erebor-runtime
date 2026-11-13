@@ -31,7 +31,9 @@ master plan invented for them.
   gains, retained-space growth, and slower large reopened reads. The review
   records the old library-test and repository formatting blockers. The user now
   requests the [general table design](../designs/araphor-table-storage.md).
-  Its implementation and collector registration remain unapproved.
+  Its approved [matched benchmark](../research/results/araphor-column-storage-2026-11-13.md)
+  passes 36 processes. Narrow reads improve; full reads and space regress.
+  Production implementation and collector registration remain unapproved.
 - [DuckDB retirement worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
   owns the active production replacement. Commit `abdc4694e` replaces the SQL
   owners and dependencies with one connected native owner. The matched

@@ -11,7 +11,7 @@ import time
 
 def distribution(values):
     values = sorted(values)
-    return {"count": len(values), "median_ms": values[len(values)//2]/1e6,
+    return {"count": len(values), "min_ms": values[0]/1e6, "median_ms": statistics.median(values)/1e6,
             "p95_ms": values[len(values)*95//100]/1e6, "max_ms": values[-1]/1e6}
 
 
@@ -94,6 +94,8 @@ def main():
                 row[stage] = {}
                 for name in selected[0][stage]:
                     measurements = [run[stage][name] for run in selected]
+                    assert len({json.dumps(item["reads"], sort_keys=True) for item in measurements}) == 1
+                    assert len({item["rows"] for item in measurements}) == 1
                     row[stage][name] = {"time": distribution([int(item["elapsed_s"]*1e9) for item in measurements]),
                                         "rows": measurements[0]["rows"], "reads": measurements[0]["reads"]}
             summary.append(row)
