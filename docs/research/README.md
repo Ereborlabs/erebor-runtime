@@ -1,5 +1,10 @@
 # Recovered Research
 
+- [Per-record and batch event storage](results/araphor-record-storage-2026-11-13.md)
+  records 24 matched runs with real Fjall keyspaces. Per-record values improve
+  point reads and cost more throughput, bulk-read time, and allocated space.
+  The current production owner is a separate reference. Native table history
+  and production migration are not qualified by these proofs of concept.
 - [DuckDB replacement with versioned Fjall](araphor-fjall-integration.md)
   maps the completed engine APIs to Data, Graph, native DataFusion providers,
   original-log subscription wakes, and batch notification writes. Production

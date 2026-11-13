@@ -267,8 +267,27 @@ they do not qualify native historical receipt reads, updates, deletion,
 branches, expiry, overlapping retry, or witness retention. Do not infer
 production migration or notification latency from these results.
 
-Result: **Not done**. The implementer and reviewer agree on this benchmark
-scope before code changes. The general table abstraction remains deferred.
+The [measured result and source review](../research/results/araphor-record-storage-2026-11-13.md)
+records all 24 passing process runs at source `8e2b2482f`. At 262,144 events,
+batch and record PoC cycle rates are 201,081 and 141,093 events/s. Reopened
+bulk rates are 5.443 and 1.325 million events/s. Point p50/p95 values are
+28.149/36.740 and 5.238/8.731 microseconds. Point clocks follow a full scan.
+Allocated space is 53.48 and 128.43 MiB. Logical event keys use 81 KiB and
+20.25 MiB. The native journal applies compression per value; this run does
+not isolate compression from the layout. Its file-length statistic includes
+preallocated space and is not allocated disk usage.
+
+The unchanged production reference records 184,590 cycle events/s and
+54.42 MiB of allocation. Its live span and position keys plus values total
+0.251 MiB. The general metadata layout and engine guarantees differ from
+the PoCs. Do not attribute the full production/PoC difference to one index.
+The source review, focused release test, changed-file formatting, runner
+checks, and independent measurement review pass. Full CI is not run.
+
+Result: **Done** for the requested comparison. No production storage or engine
+change is made. A compact-source-ID layout is not measured. The diagnostic
+migration, `main` branch correction, and general table abstraction are not
+implemented by this comparison.
 
 ### Event flow before replacement
 
