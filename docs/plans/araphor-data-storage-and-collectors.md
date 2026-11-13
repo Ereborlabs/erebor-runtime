@@ -8,6 +8,11 @@ with the existing Fjall database. The approved scope is below. Earlier
 benchmark sections record the approval boundary at their publication time.
 Items 2 and 3 remain unapproved.
 
+The latest user decision removes tenant identity from the simpler-storage
+target. The [current design decision](#current-simpler-storage-decision-remove-tenant-identity)
+supersedes tenant-bearing key descriptions for future work. Earlier measured
+schemas and results remain historical evidence.
+
 ## Intended end state
 
 Each item has a source-backed explanation, applicable measurements, a concrete
@@ -531,6 +536,33 @@ and both engine forks remain unchanged. Full CI is not run. This experiment
 has append-only results and one consumer per source. It does not qualify
 result deletion, repeated publication at the same frontier, production
 retry/expiry, or complete collector transactions.
+
+### Current simpler-storage decision: remove tenant identity
+
+The user states that one deployment will not serve separate customers.
+The simpler-storage design must therefore remove `tenant_id`. Node identity
+already has its own `node_id` field. Do not retain a fixed tenant UUID, rename
+tenant as another grouping field, or use tenant as an alias for node identity.
+
+The target source key is `(node_id, source_id, source_epoch)`. Event keys
+append the batch's first cursor. Source metadata uses the source key alone.
+The benchmark result key appends the consumed cursor. The full source binding
+still records node boot, label epoch, and CPU. Preserve the existing identity,
+cursor, atomic commit, saved progress, and original-journal CDC behavior.
+
+When this design is implemented, remove tenant fields consistently from source
+identities, stored keys and values, and storage-facing configuration, intake,
+query, and package data contracts. Check the affected Node, Control, and Data
+callers together. Keep node authentication and source binding checks. This
+decision does not remove unrelated authorization controls.
+
+The latest measured PoC still contains tenant fields. Its 56-byte fixture
+keys and recorded timings describe that measured schema. Keep those records
+unchanged. Do not report them as measurements of the tenant-free design.
+
+Result: **Done** for recording the user decision. Tenant removal from code
+and measurement of the revised schema are **Not done**. This request updates
+the plan only; it does not start implementation or another benchmark run.
 
 ### Event flow before replacement
 
