@@ -87,12 +87,13 @@ impl Store {
         let backend = match backend {
             "production" => Backend::Production(Box::new(NativeStore::open(root)?)),
             "fjall" => Backend::Fjall(Candidate::open(root, source.clone())?),
-            "table-batch" | "table-record" => Backend::Tables(Tables::open(
+            "table-batch" | "table-record" | "compact-batch" | "compact-record" => Backend::Tables(Tables::open(
                 root,
                 source.clone(),
-                backend == "table-record",
+                backend.ends_with("-record"),
+                backend.starts_with("compact-"),
             )?),
-            _ => return Err("expected production, fjall, table-batch, or table-record".into()),
+            _ => return Err("expected production, fjall, table-batch, table-record, compact-batch, or compact-record".into()),
         };
         Ok(Self { backend, source })
     }

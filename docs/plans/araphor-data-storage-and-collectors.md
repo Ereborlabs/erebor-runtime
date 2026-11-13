@@ -289,6 +289,31 @@ change is made. A compact-source-ID layout is not measured. The diagnostic
 migration, `main` branch correction, and general table abstraction are not
 implemented by this comparison.
 
+### Compact-key comparison, 2026-11-13
+
+The user requests measurement of the compact-source-ID layout. Extend the
+same table PoC. Compare long-key batch, long-key record, compact-key batch,
+and compact-key record conditions. Keep the earlier measurements unchanged.
+
+Compact event keys contain an eight-byte source ID and an eight-byte cursor.
+Two real keyspaces store ID-to-identity and identity-to-ID mappings. The first
+accepted input allocates the ID and commits both mappings, the allocator,
+event values, source receipt, and head in the same transaction. Cache the ID
+only after commit. Reopen restores the ID from durable mappings. An unbound
+source has no readable event rows. Receipt, epoch, result, value encoding,
+integrity checks, original positions, and read clocks remain the same.
+
+Use the existing two dataset sizes and 256-record transactions. Four balanced
+orders of four conditions produce 32 finite process runs. Include mapping
+registration in the first measured acceptance. Measure the duration; do not
+set an inferred timing target. Keep correctness as the pass/fail gate.
+Check distinct IDs and source-scoped reads and CDC across two sequential
+source admissions and reopen before measuring the original one-source workload.
+Retain the existing append-only history and production-integration limits.
+
+Result: **Not done**. The implementer and reviewer agree on this scope before
+code changes. No production or engine migration is part of this comparison.
+
 ### Event flow before replacement
 
 ```text

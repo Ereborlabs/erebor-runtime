@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     parser.add_argument("--binary", type=Path, default=Path("target/release/examples/raw_owner_bench"))
+    parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve()
     output = args.output.resolve()
@@ -22,6 +23,10 @@ def main():
     orders = [backends, list(reversed(backends)),
               ["table-batch", "table-record", "production"],
               ["production", "table-record", "table-batch"]]
+    if args.compact:
+        backends = ["table-batch", "table-record", "compact-batch", "compact-record"]
+        orders = [[backends[index] for index in order] for order in
+                  [[0, 1, 3, 2], [1, 2, 0, 3], [2, 3, 1, 0], [3, 0, 2, 1]]]
     sources = [Path("crates/araphor-data/examples/raw_owner_bench.rs"),
                Path("crates/araphor-data/examples/raw_storage/common.rs"),
                Path("crates/araphor-analysis-types/src/source.rs"),
@@ -43,13 +48,16 @@ def main():
         "dataset_records": [16384, 262144], "batch_records": 256,
         "orders": orders,
         "cache": "fresh process/store per run; OS page cache retained; same-process owner reopen",
-        "scope": "isolated native-keyspace batch/record comparison; production is a separate full-owner reference",
+        "scope": ("matched long/compact keys and batch/record payload granularity" if args.compact else
+                  "isolated native-keyspace batch/record comparison; production is a separate full-owner reference"),
         "limits": ["PoC history is append-only saved-cut filtering, not native retained table history",
                    "production retains its existing branch and indexes",
                    "production point reads are unmeasured",
                    "forced maintenance, not sustained natural compaction or power-loss recovery",
                    "CPU and RSS include all scans, points, replay, and integrity checks"],
     }
+    if args.compact:
+        provenance["limits"] = [item for item in provenance["limits"] if not item.startswith("production")]
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     runs = []
     for count in provenance["dataset_records"]:
@@ -68,8 +76,12 @@ def main():
                 assert all(run["checks"].values())
                 assert run["batch_records"] == 256 and run["scan_mode"] == "pages"
                 counts = run["statistics"]["logical_counts"]
-                if backend.startswith("table-"):
-                    assert counts["events"][0] == (count if backend == "table-record" else count // 256)
+                if backend != "production":
+                    assert counts["events"][0] == (count if backend.endswith("-record") else count // 256)
+                    width = 16 if backend.startswith("compact-") else 81
+                    assert counts["events"][1] == width * counts["events"][0]
+                    mappings = 1 if backend.startswith("compact-") else 0
+                    assert counts["sources"][0] == counts["source_ids"][0] == mappings
                     assert counts["source_receipts"][0] == counts["source_epochs"][0] == 1
                     assert all(len(run[phase]["samples_ns"]) == count // 256
                                for phase in ["warm_points", "after_maintenance_points", "reopened_points"])
@@ -87,6 +99,10 @@ def main():
     for count in provenance["dataset_records"]:
         peers = [run for run in runs if run["records"] == count]
         assert len({run["input_bytes"] for run in peers}) == 1
+        if args.compact:
+            for granularity in ["batch", "record"]:
+                assert len({run["statistics"]["logical_counts"]["events"][2] for run in peers
+                            if run["backend"].endswith(granularity)}) == 1
         for backend in backends:
             selected = [run for run in peers if run["backend"] == backend]
             assert len(selected) == 4
@@ -122,6 +138,17 @@ def main():
                           "record_space_over_batch": record["maintained_bytes"][1] / batch["maintained_bytes"][1],
                           "record_reopened_rate_over_batch": batch["reopened_scan"]["elapsed_s"] / record["reopened_scan"]["elapsed_s"],
                           "batch_point_median_over_record": batch["reopened_points"]["read"]["median_ms"] / record["reopened_points"]["read"]["median_ms"]})
+    if args.compact:
+        for row in pairs:
+            selected = {run["backend"]: run for run in runs if run["records"] == row["records"] and run["pair"] == row["pair"]}
+            compact_batch, compact_record = selected["compact-batch"], selected["compact-record"]
+            row.update({
+                "compact_record_cycle_rate_over_batch": compact_record["write_records_s"] / compact_batch["write_records_s"],
+                "compact_record_rate_over_long_record": compact_record["write_records_s"] / selected["table-record"]["write_records_s"],
+                "compact_batch_rate_over_long_batch": compact_batch["write_records_s"] / selected["table-batch"]["write_records_s"],
+                "compact_record_space_over_batch": compact_record["maintained_bytes"][1] / compact_batch["maintained_bytes"][1],
+                "compact_batch_point_median_over_record": compact_batch["reopened_points"]["read"]["median_ms"] / compact_record["reopened_points"]["read"]["median_ms"],
+            })
     result = {"provenance": provenance, "summary": summary, "paired_ratios": pairs,
               "process_runs": len(runs), "process_wall_s": sum(run["process_wall_s"] for run in runs)}
     (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n")

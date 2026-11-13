@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if !(3..=4).contains(&args.len()) {
         return Err(
-            "usage: raw_owner_bench production|fjall|table-batch|table-record RECORDS REPORT.json [pages|stream]".into(),
+            "usage: raw_owner_bench production|fjall|table-batch|table-record|compact-batch|compact-record RECORDS REPORT.json [pages|stream]".into(),
         );
     }
     let mode = args.get(3).map_or("pages", String::as_str);
@@ -149,7 +149,7 @@ fn main() -> Result<()> {
     assert_eq!(store.saved(None)?.accepted, total);
     let written = size(&root)?;
     let warm_scan = scan(&store, &frames, total, mode)?;
-    let point_scope = args[0].starts_with("table-");
+    let point_scope = args[0].starts_with("table-") || args[0].starts_with("compact-");
     let warm_points = point_scope
         .then(|| points(&store, &frames, total))
         .transpose()?;
@@ -220,14 +220,18 @@ fn main() -> Result<()> {
         "durability":{"production":"SyncAll payload+indexes+receipt ACK, then DataWrite SyncAll result/reference/progress commit",
             "fjall":"SyncAll payload+receipt ACK, then SyncAll result/reference/progress commit",
             "table-batch":"SyncAll across native tables, then SyncAll result/reference/progress commit",
-            "table-record":"SyncAll across native tables, then SyncAll result/reference/progress commit"},
+            "table-record":"SyncAll across native tables, then SyncAll result/reference/progress commit",
+            "compact-batch":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit",
+            "compact-record":"SyncAll across native tables including first source ID registration, then SyncAll result/reference/progress commit"},
         "cache":"OS page cache retained; new engine cache on same-process reopen",
         "candidate_layout":match args[0].as_str() {
+            "compact-record" => "real keyspaces; durable source ID8+cursor8 record key; original position/intake/CPU in value; no span or global position index",
+            "compact-batch" => "real keyspaces; durable source ID8+first_cursor8 batch key; original position/intake/CPU in value; no span or global position index",
             "table-record" => "real keyspaces; source+cursor record key; original position/intake/CPU in value; no span or global position index",
             "table-batch" => "real keyspaces; source+first_cursor batch key; original position/intake/CPU in value; no span or global position index",
             _ => "source+first_cursor batch key; source/cursor result reference; production retains its current indexes",
         },
-        "history_scope":if args[0].starts_with("table-") { "immutable append-only rows filtered by saved logical cut; no historical receipt/update/delete qualification; no branch integration" } else { "existing native retained branch cuts" },
+        "history_scope":if point_scope { "immutable append-only rows filtered by saved logical cut; no historical receipt/update/delete qualification; no branch integration" } else { "existing native retained branch cuts" },
         "progress_scope":"common benchmark-owned result and consumed-cut record; no ManagedCommit/commit_result/processor or witness-pin qualification",
         "read_scope":"256-record pages; pages mode captures each read separately; stream mode uses one fixed view and native forward scan; includes frame validation and exact-byte verification; no Arrow conversion",
         "scan_mode":mode,
@@ -259,7 +263,14 @@ fn main() -> Result<()> {
 
 #[test]
 fn stream_partial_history() -> Result<()> {
-    for backend in ["production", "fjall", "table-batch", "table-record"] {
+    for backend in [
+        "production",
+        "fjall",
+        "table-batch",
+        "table-record",
+        "compact-batch",
+        "compact-record",
+    ] {
         let (batches, frames) = inputs(512)?;
         let mut first = batches[0].clone();
         let mut rest = first.clone();
@@ -287,7 +298,7 @@ fn stream_partial_history() -> Result<()> {
                 drop(store);
                 store = Store::open(&root, backend, source())?;
             }
-            if backend.starts_with("table-") {
+            if backend.starts_with("table-") || backend.starts_with("compact-") {
                 for cursor in [1, 17, 18, 128, 256] {
                     let rows = store.point(cursor)?;
                     assert_eq!(rows.len(), 1);
@@ -309,7 +320,7 @@ fn stream_partial_history() -> Result<()> {
                 let stats = store.statistics()?;
                 assert_eq!(
                     stats["logical_counts"]["events"][0],
-                    if backend == "table-record" { 256 } else { 2 }
+                    if backend.ends_with("-record") { 256 } else { 2 }
                 );
                 assert_eq!(stats["logical_counts"]["source_receipts"][0], 1);
                 assert_eq!(stats["logical_counts"]["source_epochs"][0], 1);
@@ -335,6 +346,73 @@ fn stream_partial_history() -> Result<()> {
                 })?;
                 assert_eq!(count, total as u64);
             }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn compact_sources_reopen() -> Result<()> {
+    for backend in ["compact-batch", "compact-record"] {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("store");
+        let (batches, frames) = inputs(256)?;
+        let first = source();
+        let mut second = first.clone();
+        second.source_id = [9; 16];
+        let mut store = Store::open(&root, backend, first.clone())?;
+        store.append(batches[0].clone())?;
+        drop(store);
+        let mut store = Store::open(&root, backend, second.clone())?;
+        let before = store.cut()?;
+        assert_eq!(before.accepted, 0);
+        assert!(store.read(1, None)?.is_empty());
+        assert!(store.point(1)?.is_empty());
+        store.scan(
+            None,
+            |_| Err("unbound source scanned another source".into()),
+        )?;
+        assert_eq!(
+            store.replay(&before, |_, _, _| Err(
+                "unbound source replayed another source".into()
+            ))?,
+            0
+        );
+        store.append(batches[0].clone())?;
+        let mut seen = 0;
+        assert_eq!(
+            store.replay(&before, |cursor, bytes, position| {
+                seen += 1;
+                assert_eq!(cursor, seen);
+                assert_eq!(bytes, frames[cursor as usize - 1]);
+                assert_eq!(position.commit_revision, 2);
+                assert_eq!(position.ordinal, (cursor - 1) as u32);
+                Ok(())
+            })?,
+            256
+        );
+        store.maintain()?;
+        drop(store);
+        for (source, revision) in [(first, 1), (second, 2)] {
+            let store = Store::open(&root, backend, source)?;
+            let page = store.read(1, None)?;
+            assert_eq!(page.len(), 256);
+            for row in page {
+                assert_eq!(row.framed_record, frames[row.cursor as usize - 1]);
+                assert_eq!(row.position.commit_revision, revision);
+            }
+            if revision == 1 {
+                assert_eq!(
+                    store.replay(&before, |_, _, _| Err("source A replayed source B".into()))?,
+                    0
+                );
+            }
+            let stats = store.statistics()?;
+            let count = if backend.ends_with("-record") { 512 } else { 2 };
+            assert_eq!(stats["logical_counts"]["events"][0], count);
+            assert_eq!(stats["logical_counts"]["events"][1], count * 16);
+            assert_eq!(stats["logical_counts"]["sources"][0], 2);
+            assert_eq!(stats["logical_counts"]["source_ids"][0], 2);
         }
     }
     Ok(())

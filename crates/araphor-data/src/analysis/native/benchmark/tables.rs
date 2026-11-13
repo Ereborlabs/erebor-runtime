@@ -31,17 +31,47 @@ pub(super) struct Tables {
     state: SingleWriterTxKeyspace,
     results: SingleWriterTxKeyspace,
     source: EvidenceIntakeIdentityV1,
-    prefix: Vec<u8>,
+    source_ids: SingleWriterTxKeyspace,
+    sources: SingleWriterTxKeyspace,
+    prefix: Option<Vec<u8>>,
     root: PathBuf,
     records: bool,
+    compact: bool,
 }
 
 impl Tables {
-    pub fn open(root: &Path, source: EvidenceIntakeIdentityV1, records: bool) -> Result<Self> {
+    pub fn open(
+        root: &Path,
+        source: EvidenceIntakeIdentityV1,
+        records: bool,
+        compact: bool,
+    ) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         let database = fjall::SingleWriterTxDatabase::builder(root.join("fjall"))
             .journal_cdc()
             .open()?;
+        let source_ids = database.keyspace("source_ids", Default::default)?;
+        let sources = database.keyspace("sources", Default::default)?;
+        let prefix = if compact {
+            let snapshot = database.read_tx();
+            match snapshot.get(&source_ids, source.key())? {
+                Some(id) => {
+                    if Self::number(Some(id.clone()))? == 0 {
+                        return Err("zero compact source ID".into());
+                    }
+                    let value = snapshot
+                        .get(&sources, &id)?
+                        .ok_or("missing compact source identity")?;
+                    if rmp_serde::from_slice::<EvidenceIntakeIdentityV1>(&value)? != source {
+                        return Err("compact source identity conflict".into());
+                    }
+                    Some(id.to_vec())
+                }
+                None => None,
+            }
+        } else {
+            Some(source.key())
+        };
         Ok(Self {
             events: database.keyspace("events", Default::default)?,
             receipts: database.keyspace("source_receipts", Default::default)?,
@@ -49,10 +79,13 @@ impl Tables {
             state: database.keyspace("benchmark_state", Default::default)?,
             results: database.keyspace("benchmark_results", Default::default)?,
             database,
-            prefix: source.key(),
+            source_ids,
+            sources,
+            prefix,
             source,
             root: root.to_path_buf(),
             records,
+            compact,
         })
     }
 
@@ -82,14 +115,13 @@ impl Tables {
         Ok(value)
     }
 
-    fn key(&self, cursor: u64) -> Vec<u8> {
-        [self.prefix.as_slice(), &cursor.to_be_bytes()].concat()
+    fn key(prefix: &[u8], cursor: u64) -> Vec<u8> {
+        [prefix, &cursor.to_be_bytes()].concat()
     }
 
     fn cursor(&self, key: &[u8]) -> Result<u64> {
-        let suffix = key
-            .strip_prefix(self.prefix.as_slice())
-            .ok_or("table source key")?;
+        let prefix = self.prefix.as_deref().ok_or("unbound compact source")?;
+        let suffix = key.strip_prefix(prefix).ok_or("table source key")?;
         let cursor = u64::from_be_bytes(suffix.try_into()?);
         if cursor == 0 {
             return Err("zero table cursor".into());
@@ -113,7 +145,7 @@ impl Tables {
         })
     }
 
-    pub fn append(&self, batch: ValidatedEvidenceBatchV1) -> Result<()> {
+    pub fn append(&mut self, batch: ValidatedEvidenceBatchV1) -> Result<()> {
         batch.validate_identity(&self.source, &self.root)?;
         if batch.intake_utc_ns == 0 {
             return Err("table intake time".into());
@@ -141,6 +173,32 @@ impl Tables {
         } else {
             tx.insert(&self.epochs, epoch, rmp_serde::to_vec(&self.source)?);
         }
+        let prefix = if let Some(prefix) = &self.prefix {
+            prefix.clone()
+        } else {
+            if !self.compact
+                || receipt.is_some()
+                || tx.get(&self.source_ids, self.source.key())?.is_some()
+            {
+                return Err("unbound compact source metadata".into());
+            }
+            let id = match tx.get(&self.state, b"next_source")? {
+                Some(value) => Self::number(Some(value))?,
+                None => 1,
+            };
+            if id == 0 || tx.get(&self.sources, id.to_be_bytes())?.is_some() {
+                return Err("compact source allocator conflict".into());
+            }
+            let next = id.checked_add(1).ok_or("compact source ID exhausted")?;
+            tx.insert(&self.source_ids, self.source.key(), id.to_be_bytes());
+            tx.insert(
+                &self.sources,
+                id.to_be_bytes(),
+                rmp_serde::to_vec(&self.source)?,
+            );
+            tx.insert(&self.state, b"next_source", next.to_be_bytes());
+            id.to_be_bytes().to_vec()
+        };
         let revision = Self::number(tx.get(&self.state, b"head")?)? + 1;
         let header = Header {
             revision,
@@ -160,7 +218,7 @@ impl Tables {
                 );
                 tx.insert(
                     &self.events,
-                    self.key(batch.first_cursor + ordinal as u64),
+                    Self::key(&prefix, batch.first_cursor + ordinal as u64),
                     Self::encode(&value)?,
                 );
                 start = end;
@@ -178,7 +236,7 @@ impl Tables {
             );
             tx.insert(
                 &self.events,
-                self.key(batch.first_cursor),
+                Self::key(&prefix, batch.first_cursor),
                 Self::encode(&value)?,
             );
         }
@@ -200,6 +258,7 @@ impl Tables {
             tx.insert(&self.state, b"source_bindings", revision.to_be_bytes());
         }
         tx.commit_receipt()?.ok_or("missing table input commit")?;
+        self.prefix = Some(prefix);
         Ok(())
     }
 
@@ -269,15 +328,18 @@ impl Tables {
     }
 
     pub fn point(&self, cursor: u64) -> Result<Vec<AnalysisRecordV1>> {
+        let Some(prefix) = self.prefix.as_deref() else {
+            return Ok(Vec::new());
+        };
         let snapshot = self.database.read_tx();
-        let target = self.key(cursor);
+        let target = Self::key(prefix, cursor);
         let row = if self.records {
             snapshot
                 .get(&self.events, &target)?
                 .map(|value| (target, value))
         } else {
             snapshot
-                .range(&self.events, self.key(0)..=target)
+                .range(&self.events, Self::key(prefix, 0)..=target)
                 .next_back()
                 .map(|row| row.into_inner().map(|(key, value)| (key.to_vec(), value)))
                 .transpose()?
@@ -296,13 +358,16 @@ impl Tables {
 
     pub fn read(&self, first: u64, cut: Option<&Cut>) -> Result<Vec<AnalysisRecordV1>> {
         use std::ops::Bound::{Excluded, Included};
+        let Some(prefix) = self.prefix.as_deref() else {
+            return Ok(Vec::new());
+        };
         let snapshot = self.database.read_tx();
-        let target = self.key(first);
+        let target = Self::key(prefix, first);
         let predecessor = if self.records {
             None
         } else {
             snapshot
-                .range(&self.events, self.key(0)..=target.clone())
+                .range(&self.events, Self::key(prefix, 0)..=target.clone())
                 .next_back()
                 .map(|row| row.into_inner())
                 .transpose()?
@@ -311,7 +376,7 @@ impl Tables {
             .as_ref()
             .map_or(Included(target), |(key, _)| Excluded(key.to_vec()));
         let remaining = std::iter::once_with(|| {
-            snapshot.range(&self.events, (lower, Included(self.key(u64::MAX))))
+            snapshot.range(&self.events, (lower, Included(Self::key(prefix, u64::MAX))))
         })
         .flatten();
         let mut output = Vec::new();
@@ -339,9 +404,12 @@ impl Tables {
         cut: Option<&Cut>,
         mut visit: impl FnMut(Vec<AnalysisRecordV1>) -> Result<()>,
     ) -> Result<()> {
+        let Some(prefix) = self.prefix.as_deref() else {
+            return Ok(());
+        };
         let snapshot = self.database.read_tx();
         let mut output = Vec::new();
-        for row in snapshot.prefix(&self.events, &self.prefix) {
+        for row in snapshot.prefix(&self.events, prefix) {
             let (key, bytes) = row.into_inner()?;
             if !self.rows(&key, &bytes, 1, |record| {
                 if cut.is_some_and(|cut| record.position.commit_revision > cut.revision) {
@@ -416,6 +484,9 @@ impl Tables {
         cut: &Cut,
         mut visit: impl FnMut(u64, &[u8], StorePositionV1) -> Result<()>,
     ) -> Result<u64> {
+        let Some(prefix) = self.prefix.as_deref() else {
+            return Ok(0);
+        };
         let mut feed = self.database.inner().journal_feed(cut.journal())?;
         let mut count = 0;
         while let Some(batch) = feed.next_batch()? {
@@ -429,7 +500,7 @@ impl Tables {
                 .map(|bytes| bytes.try_into().map(u64::from_be_bytes))
                 .transpose()?;
             for item in batch.items {
-                if item.keyspace != self.events.inner().id() {
+                if item.keyspace != self.events.inner().id() || !item.key.starts_with(prefix) {
                     continue;
                 }
                 let bytes = item.value.ok_or("unexpected table deletion")?;
@@ -453,6 +524,8 @@ impl Tables {
             ("events", &self.events),
             ("source_receipts", &self.receipts),
             ("source_epochs", &self.epochs),
+            ("source_ids", &self.source_ids),
+            ("sources", &self.sources),
             ("benchmark_state", &self.state),
             ("benchmark_results", &self.results),
         ] {
