@@ -10,6 +10,11 @@ use crate::{
     EvidenceRecord, ValidatedEvidenceBatchV1,
 };
 
+mod wire;
+pub use wire::{Packet, Payload};
+mod owner;
+pub use owner::{Owner, View};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Layout {
     Frames,
@@ -30,6 +35,8 @@ pub struct Counts {
     pub value_bytes: u64,
     pub ipc_columns: u64,
     pub raw_decodes: u64,
+    pub production_scan_bytes: u64,
+    pub production_input_bytes: u64,
 }
 
 impl Counts {
@@ -38,6 +45,8 @@ impl Counts {
         self.value_bytes += other.value_bytes;
         self.ipc_columns += other.ipc_columns;
         self.raw_decodes += other.raw_decodes;
+        self.production_scan_bytes += other.production_scan_bytes;
+        self.production_input_bytes += other.production_input_bytes;
     }
 }
 
@@ -134,6 +143,44 @@ impl Table {
                 Arc::new(UInt64Array::from(cookies)),
                 Arc::new(UInt32Array::from(operations)),
                 Arc::new(Int32Array::from(results)),
+                Arc::new(BinaryArray::from_iter_values(frames)),
+            ],
+        )?)
+    }
+
+    pub fn from_records(
+        batch: &ValidatedEvidenceBatchV1,
+        records: &[EvidenceRecord],
+    ) -> Result<RecordBatch> {
+        if records.len() != batch.frame_ends.len() {
+            return Err("native record count mismatch".into());
+        }
+        let mut start = 0;
+        let frames = batch
+            .frame_ends
+            .iter()
+            .map(|&end| {
+                let bytes = &batch.framed_records[start..end];
+                start = end;
+                bytes
+            })
+            .collect::<Vec<_>>();
+        Ok(RecordBatch::try_new(
+            Self::schema(),
+            vec![
+                Arc::new(UInt32Array::from(vec![batch.cpu_id; records.len()])),
+                Arc::new(UInt64Array::from_iter_values(
+                    (0..records.len()).map(|row| batch.first_cursor + row as u64),
+                )),
+                Arc::new(UInt64Array::from_iter_values(
+                    records.iter().map(|record| record.task_cookie),
+                )),
+                Arc::new(UInt32Array::from_iter_values(
+                    records.iter().map(|record| record.operation),
+                )),
+                Arc::new(Int32Array::from_iter_values(
+                    records.iter().map(|record| record.kernel_result),
+                )),
                 Arc::new(BinaryArray::from_iter_values(frames)),
             ],
         )?)

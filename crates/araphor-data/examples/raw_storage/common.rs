@@ -24,24 +24,7 @@ pub fn inputs(count: u64) -> Result<(Vec<ValidatedEvidenceBatchV1>, Vec<Vec<u8>>
         let mut bytes = Vec::new();
         let mut ends = Vec::new();
         for cursor in first..first + 256 {
-            let record = EvidenceRecord {
-                observed_boottime_ns: cursor,
-                ingested_utc_ns: cursor as i64,
-                coverage_interval_id: vec![4; 16].into(),
-                task_cookie: cursor,
-                process_lineage_id: vec![cursor as u8; 16].into(),
-                authority_domain_id: vec![5; 16].into(),
-                execution_set_id: vec![6; 16].into(),
-                exact_object_id: vec![cursor.rotate_left(11) as u8; 32].into(),
-                reason: 1,
-                decision: 1,
-                effect_family: 1,
-                operation: 1,
-                configured_errno: -13,
-                kernel_result: -13,
-                temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
-                ..Default::default()
-            };
+            let record = record(cursor);
             let frame = Vec::<u8>::try_from(&record)?;
             bytes.extend_from_slice(&frame);
             ends.push(bytes.len());
@@ -57,6 +40,27 @@ pub fn inputs(count: u64) -> Result<(Vec<ValidatedEvidenceBatchV1>, Vec<Vec<u8>>
         });
     }
     Ok((batches, frames))
+}
+
+pub fn record(cursor: u64) -> EvidenceRecord {
+    EvidenceRecord {
+        observed_boottime_ns: cursor,
+        ingested_utc_ns: cursor as i64,
+        coverage_interval_id: vec![4; 16].into(),
+        task_cookie: cursor,
+        process_lineage_id: vec![cursor as u8; 16].into(),
+        authority_domain_id: vec![5; 16].into(),
+        execution_set_id: vec![6; 16].into(),
+        exact_object_id: vec![cursor.rotate_left(11) as u8; 32].into(),
+        reason: 1,
+        decision: 1,
+        effect_family: 1,
+        operation: 1,
+        configured_errno: -13,
+        kernel_result: -13,
+        temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
+        ..Default::default()
+    }
 }
 
 pub fn distribution(samples: &[u64]) -> serde_json::Value {

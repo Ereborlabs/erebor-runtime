@@ -314,3 +314,55 @@ codec, retained-WAL, and production qualification limits.
 
 Result: **Done for the proposed design, source review, and approved benchmark.
 Production implementation and qualification remain Not done.**
+
+## Sender-format experiment, 2026-11-13
+
+The user approves sender-format changes and performance work in the PoC.
+The user requires performance to be better than or similar to current
+production storage. Keep the actual production owner as a control. A codec
+reference alone does not meet this requirement.
+
+The sender constructs the same native fixture records and original framed
+bytes inside its measured interval. Frame-sending controls serialize the
+original batch in a standard MessagePack envelope. Arrow-sending conditions
+build columns from the native fields, then serialize packed IPC or separate
+column IPC values in the same envelope. The receiver validates the packet
+before it starts a transaction. It stores the received IPC values unchanged.
+Measure sender work, receiver validation/storage, their combined intake, wire
+bytes, SQL reads, and the full processing cycle separately.
+
+Run production, receiver-built packed, sender-built packed, receiver-built
+columns, and sender-built columns in five rotated orders at each existing
+size: 50 fresh processes. Keep 16,384 and 262,144 records, 256-record batches,
+the six SQL query shapes, both SyncAll commits, and all existing correctness
+checks. Timings are report-only. Report paired rates and tails without an
+invented similarity threshold. Production adoption is not approved.
+
+All new conditions use four source identities with contiguous source cursors.
+Batch `i` uses CPU `i % 4` and first source cursor `(i / 4) * 256 + 1`.
+Original record bytes and global task cookies remain unchanged. This cursor
+metadata differs from the older column-layout experiment. The new mapping
+permits real production `Accepted` acknowledgements. Do not treat `Pending`
+as an equivalent result. The row oracle checks global fixture IDs, exact bytes,
+CPU, and the actual per-source cursor.
+
+The production condition uses `NativeStore` admission, captured `DataView`
+reads through `read_tables_at`, and `DataWrite` publication. Whole queries
+capture once through the production Complete read. Cycle reads use the real
+Data input position to select the new batch. Consumer progress still stores
+the original native journal input cursor. Do not substitute a custom raw
+decoder for production extraction or qualify the complete production Query
+runtime from this adapter.
+
+The PoC treats sender Arrow fields as authoritative data. It does not perform
+an independent receiver comparison of those fields with preserved protobuf
+fields. Exact fixture rows and original bytes remain required correctness
+checks. Production evidence admission, source authentication, sockets, network
+delay, kernel capture, and production collector changes remain outside this
+experiment. Reject malformed IPC, wrong schema or columns, invalid row/cursor
+metadata, and an unbound CPU constant before any write. Verify received and
+stored IPC byte equality.
+
+Further performance changes require implementer/reviewer agreement and a
+matched comparison. Do not apply compression, indexes, or storage changes
+without a separate measured result. Full CI remains excluded during iteration.

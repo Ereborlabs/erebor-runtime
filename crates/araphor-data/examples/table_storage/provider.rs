@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use araphor_data::analysis::native::benchmark::columnar::{Counts, Header, Page, Table};
+use araphor_data::analysis::native::benchmark::columnar::{Counts, Header, Owner, Page, View};
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
@@ -30,8 +30,8 @@ use datafusion::{
 use futures_util::{stream, StreamExt};
 
 pub struct Binding {
-    pub table: Arc<Table>,
-    pub view: fjall::Snapshot,
+    pub table: Arc<Owner>,
+    pub view: View,
     pub only: Option<Vec<u8>>,
 }
 
@@ -158,13 +158,92 @@ impl DataSource for Source {
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
         let binding = self.binding.read().unwrap();
-        let table = Arc::clone(&binding.table);
+        let owner = Arc::clone(&binding.table);
         let view = binding.view.clone();
+        let only = binding.only.clone();
+        drop(binding);
+        if matches!(owner.as_ref(), Owner::Production(_)) {
+            let requested = self
+                .indices
+                .iter()
+                .chain(&self.columns)
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let mut counts = Counts::default();
+            let batches = owner
+                .capture(&view, only.as_deref(), &requested, &mut counts)
+                .map_err(DataFusionError::External)?;
+            self.counts.lock().unwrap().add(counts);
+            let predicate = self.predicate.clone();
+            let indices = self.indices.clone();
+            let schema = Arc::clone(&self.schema);
+            let full = owner.schema();
+            let stream = stream::iter(batches).map(
+                move |batch| -> Result<datafusion::arrow::record_batch::RecordBatch> {
+                    let columns = (0..full.fields().len())
+                        .map(|index| {
+                            requested
+                                .iter()
+                                .position(|&selected| selected == index)
+                                .map(|slot| Arc::clone(batch.column(slot)))
+                                .unwrap_or_else(|| {
+                                    datafusion::arrow::array::new_null_array(
+                                        full.field(index).data_type(),
+                                        batch.num_rows(),
+                                    )
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    let batch = datafusion::arrow::record_batch::RecordBatch::try_new(
+                        Arc::new(datafusion::arrow::datatypes::Schema::new(
+                            full.fields()
+                                .iter()
+                                .map(|field| field.as_ref().clone().with_nullable(true))
+                                .collect::<Vec<_>>(),
+                        )),
+                        columns,
+                    )?;
+                    let mask = predicate
+                        .as_ref()
+                        .map(|predicate| predicate.evaluate(&batch)?.into_array(batch.num_rows()))
+                        .transpose()?;
+                    let output = datafusion::arrow::record_batch::RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        indices
+                            .iter()
+                            .map(|&index| Arc::clone(batch.column(index)))
+                            .collect(),
+                    )?;
+                    if let Some(mask) = mask {
+                        let mask =
+                            mask.as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(
+                                        "nonboolean production predicate".into(),
+                                    )
+                                })?;
+                        Ok(filter_record_batch(&output, mask)?)
+                    } else {
+                        Ok(output)
+                    }
+                },
+            );
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                stream,
+            )));
+        }
+        let (Owner::Candidate(table), View::Candidate(view)) = (owner.as_ref(), view) else {
+            return Err(DataFusionError::Execution("source view mismatch".into()));
+        };
+        let table = Arc::clone(table);
         let mut counts = Counts::default();
         let headers = table
-            .headers(&view, binding.only.as_deref(), &mut counts)
+            .headers(&view, only.as_deref(), &mut counts)
             .map_err(DataFusionError::External)?;
-        drop(binding);
         self.counts.lock().unwrap().add(counts);
         let predicate = self.predicate.clone();
         let pruning = self.pruning.clone();
